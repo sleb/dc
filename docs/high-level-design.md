@@ -152,7 +152,7 @@ stateDiagram-v2
 *Cards and decks*
 - E5. **Conservation.** Every card is in exactly one place: a pool, a hand, a discard, a score pile (green only), or the current round's submissions. No command creates or destroys a card except `writeIn` (creates) and `removeCard` (destroys, host/moderation).
 - E6. Hands hold at most 7 cards; after a round resolves, every player who played is topped up to 7 (reshuffling the red discard into the deck if the deck is exhausted).
-- E7. The green deck cannot run out before the game ends (`green count >= players × target`); late joiners add their green cards before they're active, preserving this. `WRITING -> PLAYING` is refused unless the pools meet the playability minimum for the player count (Q9), which is also what determines how many cards each player must write (Q7).
+- E7. The green deck cannot run out before the game ends (`green count >= players × target`); late joiners add their green cards before they're active, preserving this. `WRITING -> PLAYING` is refused unless the pools meet the playability minimums below, which also determine how many cards each player must write (Q7, Q9).
 
 *Anonymity*
 - E8. **No authorship in the pool.** A card's author is known only while it is in a private draft. When a player marks writing "finished", their cards move into the anonymous pools and the author link is dropped. Nothing after that point, including host tools and logs, can say who wrote a card.
@@ -170,6 +170,23 @@ stateDiagram-v2
 *Membership*
 - E17. Removing or losing a player returns their hand to the red pool, drops any unrevealed submission of theirs back into that hand-return, and recomputes "who the round is waiting on". If the judge is removed, judging passes to the next active player.
 - E18. Late joiners are `WRITING` until finished, enter play at the next round boundary with 7 cards and 0 points, and never receive cards mid-round.
+
+**Playability minimums.** For `N` active players and score target `T`, counting every card in the game's red or green pools, hands and (for red) the discard:
+
+```
+G_min = N × T                       // green
+R_min = 7N + max(2N, 7)             // red: the initial deal plus a draw pile of at least 2N, and never fewer than 7
+```
+
+- *Green.* The most rounds a game can last before someone reaches `T` is `N(T-1) + 1`, so `N × T` is a safe, simple bound. It is also what a new deck supplies when every player writes `T` green cards.
+- *Red.* Each round draws at most `N-1` cards, so a draw pile of `2N` gives about two rounds before the first reshuffle, and the floor of 7 guarantees a Redraw (7 cards) is always possible. `R_min` never exceeds the new-deck total of `10N` (`N = 3`: 28 vs 30; `N = 4`: 36 vs 40; `N = 10`: 90 vs 100), so a brand-new game with everyone writing the standard counts always qualifies.
+- *Per-player write counts (Q7).* `existing_red` / `existing_green` are cards already supplied by a reused deck.
+  - New deck: each player writes 10 red and `T` green.
+  - Reused deck: each player writes `ceil(max(0, R_min - existing_red) / N)` red and `ceil(max(0, G_min - existing_green) / N)` green. Both are at most the new-deck counts.
+  - If a reused deck already meets both minimums, the host may choose any red count from 0 to 10 and green count from 0 to `T`, as long as the totals still meet the minimums.
+- *Late joiners.* `N` grows by one, so both minimums grow. A late joiner writes the game's configured counts, or more if that is what it takes to restore `R_min` and `G_min` at the new `N`.
+- *Removals.* A removed or departed player's hand returns to the red pool (E17), so red totals are unchanged while `N` shrinks, and the minimums can only get easier to meet.
+- *Enforcement.* `finishWriting` and `join` recompute the minimums; the host cannot start play (and a late joiner cannot be activated) while they're unmet. The UI shows each player how many cards they still need to write.
 
 **Interface (provides).** Pure core plus a thin application service:
 
@@ -455,8 +472,5 @@ Resolved in PR review (these are now requirements; gameplay.md is updated to mat
 | Q6 | Retention | Games persist until the host explicitly deletes them. |
 | Q7 | Cards written per player | Derived from what the game needs for its player count. For a new deck, players write the standard counts (up to 10 red, target-many green). With a reused deck, players write only enough to make the game playable; if the deck already suffices, the host may choose how many each player writes, up to the new-deck maximum. |
 | Q8 | Profanity filter changes mid-game | Fine: applies to future writes only (M2). |
-
-Still open:
-
-- **Q9. Playability minimum.** Exactly how many red and green cards make a game "playable" for N players (green is `N × target`; red needs at least the initial deal plus a buffer for redraws and write-ins)? Define in the Engine low-level design; it drives the per-player write count in Q7.
-- **Q10. Finished-game access.** Assumed: finished games stay readable (history, awards) via the same links until deleted. Confirm, and decide whether spectators keep access.
+| Q9 | Playability minimum | `G_min = N × T`, `R_min = 7N + max(2N, 7)`; see "Playability minimums" in section 3.4. |
+| Q10 | Finished-game access | Finished games stay readable, with history and awards, through the same links until the host deletes them. Spectators keep access too. |

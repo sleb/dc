@@ -22,6 +22,8 @@ The game supports 3 to 10 players; 4 to 8 is the sweet spot. One player is the j
 | Hand | Red cards a player holds | 7 per player |
 | Score pile | Green cards a player has won; one point each | Starts at 0 |
 
+For `N` players and score target `T`, a game needs at least `N × T` green cards and `7N + max(2N, 7)` red cards (the initial deal plus a draw pile of at least `2N`, never fewer than 7). A new deck, where everyone writes the standard counts, always clears this. The game shows each player how many cards they still need to write.
+
 The player-written cards are shuffled into the two decks at game start. When the red deck runs out, its discard pile is reshuffled. With one green card per player per point of the target, the green deck can't run out before someone wins.
 
 ## Setup
@@ -79,7 +81,7 @@ The host can override the target in setup. If a round could somehow produce a ti
 - **Leaving:** A player who leaves has their hand returned to the red deck. The host can also remove a player.
 - **Rejoining:** Each player has a personal link that keeps working until they're removed, so they can pick up their seat on a new device. The host can reissue a player's link, which stops the old one working.
 - **Host plays too:** The host is also a player, with a seat and a hand.
-- **Deleting a game:** Games are kept until the host explicitly deletes them.
+- **Deleting a game:** Games are kept until the host explicitly deletes them. Until then, finished games stay viewable (history and awards) through the same links, by players and spectators alike.
 - **Host leaves:** The host needs to be signed in to run the game, so if they leave it stalls until they return. Host transfer can be added later if this becomes a problem.
 - **Fewer than 3 players:** The game pauses until a third player joins or the host ends it.
 - **Content:** All cards are player-written, so there are no packs to pick. The host sets the profanity filter for card text and display names (on for family groups, off for adults) and can remove any card or player.
