@@ -28,7 +28,7 @@ The player-written cards are shuffled into the two decks at game start. When the
 
 1. A host creates a game and gets a 4-letter room code plus a shareable link. The host signs in with an email and a sign-in link (no password), which is how they return to their host controls.
 2. Players join with a display name (no account needed) and appear in the lobby.
-3. The host sets options: score target (default by player count, see below), and how many red cards each player writes.
+3. The host sets options: score target (default by player count, see below). Players write the cards the game needs for its player count: up to 10 red cards and as many green cards as the target. If the game reuses a saved deck, players write only enough cards to make the game playable; if the deck already has enough, the host can choose how many each player writes, up to the new-deck maximum.
 4. The host starts the game once at least 3 players have joined.
 5. **Write cards:** Each player privately writes their own cards: 10 red noun cards ("My first car", "The DMV") and as many green adjective-phrase cards as the score target (8 in a 3–4 player game, down to 4 at 8+) ("Smells suspicious", "Worth the wait"). Cards are pooled anonymously and shuffled into a red deck and a green deck; no one sees who wrote what. Players can write over as many sittings as they like; play begins once everyone has finished. Players who get stuck can tap for a few example prompts.
 6. Each player is dealt 7 red cards from the shared pool. The first judge is chosen at random.
@@ -77,6 +77,9 @@ The host can override the target in setup. If a round could somehow produce a ti
 - **Late joins:** New players can join at any point. They write their cards (same counts), which are shuffled into the decks, then join the next round with 7 cards and 0 points.
 - **Away players:** The host can remove a player at any time, and rounds stop waiting for them. There is no automatic away status.
 - **Leaving:** A player who leaves has their hand returned to the red deck. The host can also remove a player.
+- **Rejoining:** Each player has a personal link that keeps working until they're removed, so they can pick up their seat on a new device. The host can reissue a player's link, which stops the old one working.
+- **Host plays too:** The host is also a player, with a seat and a hand.
+- **Deleting a game:** Games are kept until the host explicitly deletes them.
 - **Host leaves:** The host needs to be signed in to run the game, so if they leave it stalls until they return. Host transfer can be added later if this becomes a problem.
 - **Fewer than 3 players:** The game pauses until a third player joins or the host ends it.
 - **Content:** All cards are player-written, so there are no packs to pick. The host sets the profanity filter for card text and display names (on for family groups, off for adults) and can remove any card or player.
@@ -90,7 +93,7 @@ Off by default; the host can enable them in setup.
 - **Redraw:** Once per game, a player can discard their hand and draw 7 new cards.
 - **People's choice:** Players (and spectators, if enabled) can vote on the best card each round, independent of the judge's pick; players can't vote for their own card, and votes never count toward winning. At game end, a People's Choice award goes to the player with the most votes across all rounds, and the three most-voted plays of the game are shown as gold, silver and bronze.
 - **Spectators:** People can watch a game via the link without playing, and can vote on the People's Choice.
-- **Saved decks:** The host can save a game's cards and reuse them next time, so a group's deck grows over game nights.
+- **Saved decks:** The host can save a game's cards and reuse them next time, so a group's deck grows over game nights. The host decides how a saved deck is combined with newly written cards.
 
 ## Decisions
 
@@ -99,3 +102,5 @@ Off by default; the host can enable them in setup.
 - [x] No variant lets a player play multiple cards per round.
 - [x] Timeouts deferred: no wait before a round can be closed early or a judge passed over. Players nudge each other in their own text group chat; we add it if it becomes a problem.
 - [x] No solo or bot mode to fill empty seats for now.
+- [x] No room lock for now: late joins stay open to anyone with the invite.
+- [x] Players without push notifications are fine for v1; we'll revisit email if needed.

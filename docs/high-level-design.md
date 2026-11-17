@@ -89,7 +89,7 @@ Each component lists its **responsibility**, what it **owns**, its **invariants*
 
 **Invariants.**
 - I1. A seat token is valid for exactly one `(gameId, playerId)`; it can never act in another game or as another player.
-- I2. Tokens are high-entropy, stored only as hashes, and revocable. Removing a player or ending a game revokes the seat token.
+- I2. Tokens are high-entropy, stored only as hashes, and revocable. Removing a player or deleting a game revokes the seat token. A seat token is long-lived: it is what the player's rejoin link carries, so the link keeps working until the player is removed or the host reissues it (Q3).
 - I3. Sign-in links are single-use and short-lived.
 - I4. Display names are unique within a game (case-insensitive) so "who hasn't played" is unambiguous.
 - I5. The host principal is the only way to obtain host powers; there is no "promote seat to host" path (host transfer is explicitly deferred in gameplay.md).
@@ -100,7 +100,7 @@ requestHostSignIn(email) -> void                       // emails a link
 redeemHostSignIn(token) -> HostSession
 joinGame(roomCodeOrInvite, displayName) -> SeatSession // checks Moderation for name
 resolveSession(credential) -> Principal | null
-issueRejoinLink(gameId, playerId) -> Url               // see open question Q3
+issueRejoinLink(gameId, playerId) -> Url               // host reissue rotates the seat token; the old link stops working. Players can also copy their own current link.
 revoke(principalRef) -> void
 ```
 
@@ -152,7 +152,7 @@ stateDiagram-v2
 *Cards and decks*
 - E5. **Conservation.** Every card is in exactly one place: a pool, a hand, a discard, a score pile (green only), or the current round's submissions. No command creates or destroys a card except `writeIn` (creates) and `removeCard` (destroys, host/moderation).
 - E6. Hands hold at most 7 cards; after a round resolves, every player who played is topped up to 7 (reshuffling the red discard into the deck if the deck is exhausted).
-- E7. The green deck cannot run out before the game ends (`green count >= players × target`); late joiners add their green cards before they're active, preserving this.
+- E7. The green deck cannot run out before the game ends (`green count >= players × target`); late joiners add their green cards before they're active, preserving this. `WRITING -> PLAYING` is refused unless the pools meet the playability minimum for the player count (Q9), which is also what determines how many cards each player must write (Q7).
 
 *Anonymity*
 - E8. **No authorship in the pool.** A card's author is known only while it is in a private draft. When a player marks writing "finished", their cards move into the anonymous pools and the author link is dropped. Nothing after that point, including host tools and logs, can say who wrote a card.
@@ -186,7 +186,7 @@ execute(gameId, cmd, principal, idempotencyKey) -> CommandResult
 | Command | Actor | Phase | Effect |
 |---|---|---|---|
 | `createGame(settings)` | Host | - | New game in `LOBBY`; allocates room code |
-| `updateSettings(...)` | Host | LOBBY | Target, cards-per-player, profanity filter, variants |
+| `updateSettings(...)` | Host | LOBBY | Target, profanity filter, variants, and (only when a reused deck already makes the game playable) cards each player writes, capped at the new-deck maximum |
 | `join(name)` | Anyone | any non-ended | Adds player (`LOBBY` or late-join into `WRITING` status) |
 | `leave()` | Player | any | See E17 |
 | `removePlayer(id)` / `removeCard(id)` | Host | any | See E17, E5 |
@@ -200,6 +200,7 @@ execute(gameId, cmd, principal, idempotencyKey) -> CommandResult
 | `writeIn(text)` / `redraw()` | Player | SUBMITTING | Variants, once each |
 | `castVote(submissionId)` | Player/Spectator | after result | People's Choice, if enabled |
 | `endGame()` | Host | any | To `ENDED` |
+| `deleteGame()` | Host | any | Permanently deletes the game, its history and its tokens; the only way a game is removed (S5) |
 
 **Domain events** (consumed by Change Feed and Notifications; contain ids and kinds, never card text): `PlayerJoined`, `PlayerRemoved`, `WritingStarted`, `PlayerFinishedWriting`, `RoundOpened{judge}`, `SubmissionConfirmed{playerId}`, `SubmissionsClosed`, `WinnerPicked`, `JudgeChanged`, `GameFinished`, `GameEnded`, `PausedChanged`.
 
@@ -214,7 +215,7 @@ execute(gameId, cmd, principal, idempotencyKey) -> CommandResult
 - S2. State, appended events, idempotency record, and outbox rows commit in one transaction (the transactional outbox), so no event is lost or published without its state change.
 - S3. Round history is append-only; `RoundRecord`s are never edited.
 - S4. A game is always loadable from its stored state alone; no dependency on in-memory state.
-- S5. Retention is explicit: ended and finished games are archived or deleted on a defined schedule (see Q6).
+- S5. **Games persist until the host explicitly deletes them**, regardless of phase; nothing expires automatically. `deleteGame` removes the aggregate, event log, outbox rows, idempotency records, push subscriptions and tokens together.
 
 **Interface.**
 ```
@@ -322,7 +323,7 @@ check(text, kind: 'name'|'card'|'pitch', mode: 'on'|'off') -> {ok} | {ok:false, 
 **Invariants.**
 - D1. Library entries are owned by a `Host` and are not visible to others.
 - D2. Saved cards retain no authorship (consistent with E8) and no game or player ids.
-- D3. Importing never violates E5-E7: imported cards enter the pools like written ones, and count rules (per-player write counts, green deck sufficiency) still hold. See Q5.
+- D3. Importing never violates E5-E7: imported cards enter the pools like written ones, and count rules (per-player write counts, green deck sufficiency) still hold. The host decides how an imported deck combines with newly written cards; players only write enough to make the game playable, or a host-chosen number up to the new-deck maximum if the deck already suffices (Q5, Q7).
 
 **Interface.**
 ```
@@ -339,7 +340,7 @@ importDeck(hostId, deckId, gameId) -> void   // LOBBY only
 Principal = Host{hostId} | Seat{gameId, playerId} | Spectator{gameId, token?}
 Role (per game, derived by Engine) = host | player | judge | spectator
 ```
-A host who also plays is both `host` and a `player` in the same game; see Q1.
+The host also plays: they are both `host` and a `player` in the same game, with a seat and a hand like anyone else (Q1).
 
 ### 4.2 Command envelope
 
@@ -415,12 +416,12 @@ GET /lobby/{roomCode}          -> { gameId?, joinable, playerCount }   // pre-jo
 | # | Risk | Mitigation |
 |---|---|---|
 | R1 | **Anonymity leak** via an overlooked field, log line, or notification | Single Projector path (V1), property tests (V2 to V5), no authorship stored after pooling (E8), no card text in push/logs (N2, section 4.5) |
-| R2 | **4-letter codes are guessable**, and late joins are always allowed, so a guessed code lets a stranger into a game | Long unguessable invite token in the shareable link; code lookup is rate-limited (A4); decision needed on a host "lock room" control (Q2) |
-| R3 | **Push is unreliable**, especially iOS where web push needs the PWA installed | Client works without push (C4); onboarding prompts install; daily reminder; revisit email notifications if players miss turns (Q4) |
-| R4 | **Lost seat token** (cleared storage, new phone) loses the player's hand | Rejoin link per player (Q3) |
+| R2 | **4-letter codes are guessable**, and late joins are always allowed, so a guessed code lets a stranger into a game | Long unguessable invite token in the shareable link; code lookup is rate-limited (A4); no room-lock control for now (Q2), so the invite token and rate limiting are the only gates |
+| R3 | **Push is unreliable**, especially iOS where web push needs the PWA installed | Client works without push (C4); onboarding prompts install; daily reminder; accepted for v1; revisit email notifications if it proves insufficient (Q4) |
+| R4 | **Lost seat token** (cleared storage, new phone) loses the player's hand | Persistent personal rejoin link per player, reissuable by the host (Q3, I2) |
 | R5 | **Host absence stalls the game**, as accepted in gameplay.md | Accepted for v1; Engine already has `hostId` indirection so transfer is a small later change |
 | R6 | Lost updates under concurrent commands | S1/S2 single writer with CAS, plus idempotency |
-| R7 | Abandoned games accumulate cost | Retention policy (S5, Q6) |
+| R7 | Games persist until deleted, so abandoned games accumulate | Accepted (S5, Q6); host-initiated delete; revisit if storage cost matters |
 
 ## 8. Technology leanings (non-binding)
 
@@ -440,15 +441,22 @@ Chosen to be easy to swap since the components above are the contract.
 4. **Notifications + Scheduler**: makes async play practical.
 5. **Moderation**, then **variants**, then **spectators / People's Choice**, then **Deck Library**.
 
-## 10. Open questions
+## 10. Decisions and open questions
 
-Each needs a decision before the affected component's low-level design.
+Resolved in PR review (these are now requirements; gameplay.md is updated to match):
 
-- **Q1. Does the host also play?** gameplay.md implies yes (host can pass judging "to the next player"), but never says so. Assumed yes in this design.
-- **Q2. Room lock.** Late joins are always allowed, so should a host be able to lock a game against new joins or spectators?
-- **Q3. Seat recovery.** What happens when a player switches devices or clears storage? Proposal: each player can copy a personal rejoin link, and the host can reissue one.
-- **Q4. Push-denied players.** If a player can't or won't enable push, they only learn it's their turn by checking. Is that acceptable for v1, or do we need an opt-in email fallback earlier?
-- **Q5. Saved-deck import semantics.** If imported cards fill the pools, do players still write 10 red / N green each? Does an imported deck replace or supplement the writing phase?
-- **Q6. Retention.** How long do finished and abandoned games persist? (Affects S5 and privacy expectations for card text.)
-- **Q7. Setup text mismatch.** gameplay.md says the host sets "how many red cards each player writes" but the components table fixes 10. Which is authoritative, and what are the bounds?
-- **Q8. Profanity filter changes mid-game.** Assumed to apply to future writes only (M2).
+| # | Question | Decision |
+|---|---|---|
+| Q1 | Does the host also play? | Yes. The host holds a seat and the host role. |
+| Q2 | Room lock | Not for now. Late joins stay open to anyone with the invite. |
+| Q3 | Seat recovery | A player's personal rejoin link keeps working until they're removed, and the host can reissue it (rotating the old one out). |
+| Q4 | Players who deny push | Acceptable for v1; revisit email notifications if it isn't good enough. |
+| Q5 | Saved-deck import vs. writing phase | The host decides how a reused deck is combined with newly written cards (see Q7). |
+| Q6 | Retention | Games persist until the host explicitly deletes them. |
+| Q7 | Cards written per player | Derived from what the game needs for its player count. For a new deck, players write the standard counts (up to 10 red, target-many green). With a reused deck, players write only enough to make the game playable; if the deck already suffices, the host may choose how many each player writes, up to the new-deck maximum. |
+| Q8 | Profanity filter changes mid-game | Fine: applies to future writes only (M2). |
+
+Still open:
+
+- **Q9. Playability minimum.** Exactly how many red and green cards make a game "playable" for N players (green is `N × target`; red needs at least the initial deal plus a buffer for redraws and write-ins)? Define in the Engine low-level design; it drives the per-player write count in Q7.
+- **Q10. Finished-game access.** Assumed: finished games stay readable (history, awards) via the same links until deleted. Confirm, and decide whether spectators keep access.
