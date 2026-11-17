@@ -6,7 +6,7 @@ Status: draft v0.1. Maps the components in [high-level-design.md](./high-level-d
 
 | Layer | Choice |
 |---|---|
-| Language | TypeScript everywhere (Node 22 on the server) |
+| Language | TypeScript everywhere. Cloud Functions run on **Node 22**; Bun is a dev-time tool only |
 | Client | React + Vite + TypeScript, installable PWA (`vite-plugin-pwa`), Tailwind CSS |
 | Hosting | Firebase Hosting (SPA, preview channels per PR) |
 | API | Cloud Functions for Firebase (2nd gen), callable functions |
@@ -16,8 +16,8 @@ Status: draft v0.1. Maps the components in [high-level-design.md](./high-level-d
 | Push | Firebase Cloud Messaging (Web Push) |
 | Scheduling | Cloud Scheduler via scheduled Cloud Functions |
 | Abuse protection | Firebase App Check + Firestore-backed counters |
-| Repo | pnpm workspace monorepo |
-| Tests | Vitest, fast-check, Firebase Emulator Suite, Playwright |
+| Repo | **Bun** workspace monorepo (package manager, scripts and unit-test runner) |
+| Tests | `bun test`, fast-check, Firebase Emulator Suite, Playwright |
 | CI/CD | GitHub Actions deploying to Firebase |
 
 Firebase plan: **Blaze** (pay as you go) is required for Cloud Functions. At this game's scale (many small games, a handful of commands per player per day) expect costs near zero; set a budget alert anyway.
@@ -141,21 +141,23 @@ dc/
   docs/
 ```
 
-- **Package manager:** pnpm workspaces. **Build:** Vite for web, `tsup` (or `tsc`) for functions and packages.
+- **Package manager and scripts:** Bun workspaces (`workspaces` in the root `package.json`, internal deps as `workspace:*`, one `bun.lock`). **Build:** Vite for web (runs fine under Bun); `bun build --target=node` for functions.
+- **Bun is a dev tool, not a runtime.** Cloud Functions for Firebase run Node, not Bun. So `packages/engine`, `packages/contracts` and `functions/` must use only standard Web/Node APIs; no `Bun.*` globals or `bun:*` imports in anything that ships to Functions (lint-enforced; `bun:test` is allowed in test files only).
+- **Deploying functions from a workspace.** The Firebase CLI uploads the functions directory and installs its dependencies in the cloud, which can't resolve `workspace:*` packages and doesn't read `bun.lock`. So the functions build script bundles `functions/`, `engine` and `contracts` into one Node-target file in `functions/dist`, and generates a minimal `package.json` there that lists only the external runtime deps (`firebase-admin`, `firebase-functions`) at pinned versions. `firebase.json` points `source` at that directory.
 - **Contracts:** zod schemas in `packages/contracts` generate the types for the command envelope, `GameView` and error codes, so the client and server can't drift.
 - **Engine isolation rule:** `packages/engine` may not import `firebase-*`, `node:*` I/O or read the clock; a lint rule enforces this (T3, section 3.4 of the HLD).
 
 **Testing**
 | Level | Tool | Covers |
 |---|---|---|
-| Engine unit and property | Vitest, fast-check | Every rule in gameplay.md; E1 to E18; V2 to V5 over random games and every viewer role |
+| Engine unit and property | `bun test`, fast-check | Every rule in gameplay.md; E1 to E18; V2 to V5 over random games and every viewer role |
 | Security rules | Firebase Emulator + `@firebase/rules-unit-testing` | Section 5 denials |
 | Function integration | Emulator Suite (Firestore, Auth, Functions) | Transactions, idempotency, outbox, custom-token rejoin |
 | End to end | Playwright against emulators | Join, write, play a round, return after reload |
 
 **Environments:** local Emulator Suite for development; two Firebase projects, `deepcuts-staging` and `deepcuts-prod`. Hosting preview channels for each PR.
 
-**CI/CD:** GitHub Actions on every PR runs lint, typecheck, Vitest, and the emulator suites, then deploys a Hosting preview channel. Merge to `main` deploys staging; a tagged release deploys production.
+**CI/CD:** GitHub Actions on every PR installs Bun (`oven-sh/setup-bun`), then runs lint, typecheck, `bun test`, and the emulator suites, then deploys a Hosting preview channel. Merge to `main` deploys staging; a tagged release deploys production.
 
 ## 9. Observability
 
@@ -169,24 +171,26 @@ Cloud Logging with structured logs keyed by `gameId` and `version`; no card text
 | **Cold starts on `command`** | First tap after idle can take 1 to 2 s. Acceptable for async play; set `minInstances: 1` on `command` only if it feels bad (small fixed cost). |
 | **Rules cannot redact fields** | The design never relies on them to: secrets live only in documents clients can't read, and projected docs are the only readable game state. Rules tests guard this. |
 | **No built-in rate limiting** | Section 7. Revisit if abuse appears. |
+| **Bun-built functions deployed to a Node runtime** | Bun's resolver and lockfile aren't understood by Firebase's cloud build. Mitigated by bundling and a generated `package.json` (section 8), a Node-API-only lint rule, and running the emulator integration tests against the Node bundle in CI, not just `bun test`. |
 | **Vendor lock-in** | The Engine, Projector and contracts have no Firebase dependency; only `functions/` and the Hosting/Auth/FCM glue would be rewritten. |
 | **Custom-token IAM and Auth user growth** | One Auth user per seat; deleted with the game. Pruned by `deleteGame` (S5). |
 | **Email deliverability of Firebase's sign-in links** | Default sender can land in spam. Mitigate with a custom domain and sender in Firebase Auth templates before launch. |
 | **Firestore index/limit surprises** | Aggregate stays below 1 MiB (history is in subcollection); reminder query has a declared composite index. |
 
-## 11. Decisions made here, and what to confirm
+## 11. Decisions
 
-Made by recommendation; tell me if any should change:
+Confirmed in PR review:
 
-- **React + Vite + Tailwind** for the client (any SPA framework would work; this is the most widely supported with Firebase and PWA tooling).
-- **Firestore over Realtime Database** because transactions, rules and indexing fit the per-game aggregate better.
-- **Callable functions over a custom REST API**, for built-in Auth and App Check handling.
+- **Bun workspace monorepo** (instead of pnpm), with the Node-runtime and bundling constraints in section 8.
+- **React + Vite + Tailwind** for the client.
+- **Firestore** over Realtime Database.
+- **Callable functions** over a custom REST API.
 - **Firebase's built-in email-link sign-in** instead of a separate email provider.
-- **Firestore region:** to be chosen once at project creation and cannot be changed later. Recommend a multi-region `nam5` (US) unless most players are elsewhere. Please confirm where your groups are.
-- **Two Firebase projects** (staging, prod) rather than three.
+- **Firestore region `nam5`** (US multi-region). This can't be changed after project creation.
+- **Two Firebase projects**, staging and prod.
 
 ## 12. Next steps
 
 1. Create the Firebase projects, enable Auth providers (email link, anonymous), Firestore, Functions, Hosting and App Check.
-2. Scaffold the monorepo and CI.
+2. Scaffold the Bun monorepo and CI, including the functions bundling step, and verify a deploy to staging early since it is the riskiest tooling seam.
 3. Build `packages/engine` with its property tests first, as in the HLD build order, before touching Firebase.
