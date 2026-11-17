@@ -1,0 +1,598 @@
+# Deep Cuts: LLD 0, Platform, Build & Deploy
+
+Status: draft v0.1. Companion to [gameplay.md](../gameplay.md), [high-level-design.md](../high-level-design.md) and [tech-stack.md](../tech-stack.md); the tech stack is the main source for this document. It covers the Firebase projects, the Bun monorepo, the functions bundling step, lint and TypeScript rules, CI/CD, the emulator test setup, config and secrets, observability, and a step-by-step first staging deploy. It contains no game logic, data model, rules content or UI. "Must" statements are testable and labeled P1 onward.
+
+## 1. Environments
+
+| Env | Firebase project | Backend | Web | Deployed by |
+|---|---|---|---|---|
+| local | `demo-deepcuts` (emulators only) | Emulator Suite, Functions emulator running the Node bundle | `vite dev` or `vite preview` | developer |
+| PR preview | `deepcuts-staging` | Staging functions, Firestore and Auth (shared, not per-PR) | Hosting preview channel `pr-{n}`, 7-day expiry | CI on pull request |
+| staging | `deepcuts-staging` | Staging | Live channel | CI on push to `main` |
+| prod | `deepcuts-prod` | Prod | Live channel | CI on tag `v*.*.*` |
+
+- P1. The `demo-` project id prefix is used for every emulator run, so tests cannot reach a real project. Test scripts must unset `GOOGLE_APPLICATION_CREDENTIALS` and fail if it is set.
+- P2. Real project ids appear only in `.firebaserc` and the committed per-env web config files (section 7). Function code reads its project from the runtime (`process.env.GCLOUD_PROJECT`), never from a literal.
+- Region: Firestore `nam5`; functions `us-central1` (co-located; set once in `setGlobalOptions`). Neither can change cheaply, so both are fixed here.
+
+## 2. Firebase project setup
+
+Done once per project (`deepcuts-staging`, `deepcuts-prod`), by hand in the console or `gcloud`; the first-deploy walkthrough (section 11) sequences it. Nothing here is created by CI.
+
+| Item | Setting |
+|---|---|
+| Plan | Blaze. Budget with alerts at 50%, 90%, 100% of $10/month (staging) and $25/month (prod), emailed to the owner. Budgets alert but do not cap; the alert is the control. |
+| Default GCP resource location | `us-central` (set implicitly by creating Firestore in `nam5`). This also satisfies Cloud Scheduler. |
+| Firestore | Native mode, `nam5`. TTL policies on field `expiresAt` for the five collection groups LLD 3 sections 2 and 4 lists: `idem` (covers `games/*/idem` and `hosts/*/idem`, 7 days), `outbox` (14 days), `notifLog` (30 days), `rateLimits` (two windows), `deletions` (7 days after completion). Declared in `firestore.indexes.json` `fieldOverrides` (`"ttl": true`); that this is accepted by the pinned `firebase-tools` is **unverified**, so the first-deploy walkthrough tests it and falls back to `gcloud firestore fields ttls update expiresAt --collection-group=<group> --enable-ttl` per group (step 2), run by `ops-apply` thereafter. Rules and indexes deploy from the repo, never edited in the console. |
+| Auth providers | Email link (passwordless) and Anonymous. Password and all others stay off. Authorized domains: the project's `web.app` and `firebaseapp.com` hosts, plus the custom domain once it exists. |
+| Identity Platform | Upgrade Firebase Authentication to Identity Platform (LLD 4 section 13; free tier at this scale, to confirm). Enable automatic cleanup of anonymous accounts (30 days inactive) and App Check enforcement for Auth endpoints; it is also the prerequisite for the `beforeEmailSent` blocking function (LLD 5 8.1). |
+| Hosting | Default site. SPA rewrite and headers from `firebase.json`. |
+| App Check | reCAPTCHA Enterprise provider for the web app. Enforcement ON for Firestore (so nothing client-side bypasses callables) and enforced per callable in code (`enforceAppCheck: true`). A debug token is registered per project for CI smoke tests (section 8). |
+| Web app | One registered web app per project; its config object is public and committed (section 7). |
+| Secret Manager | API enabled; secrets in section 7. |
+| APIs | Besides the section 11 list: `fcm.googleapis.com` and `fcmregistrations.googleapis.com` (LLD 6 push), `identitytoolkit.googleapis.com` (Identity Platform). |
+| Error Reporting, Logging, Monitoring | On by default; used per section 9. |
+
+**IAM.** Three service accounts per project, least privilege, no downloaded keys.
+
+| Account | Purpose | Roles |
+|---|---|---|
+| `fn-runtime@{project}.iam.gserviceaccount.com` | Runtime identity for all functions (`serviceAccount` in `setGlobalOptions`) | `roles/datastore.user`, `roles/firebaseauth.admin` (create/delete seat users, revoke tokens), `roles/firebasecloudmessaging.admin`, `roles/secretmanager.secretAccessor`, `roles/logging.logWriter`, `roles/cloudtrace.agent`, and `roles/iam.serviceAccountTokenCreator` **granted on itself** |
+| `ci-deployer@{project}.iam.gserviceaccount.com` | Used by GitHub Actions via Workload Identity Federation | `roles/firebase.admin`, `roles/cloudfunctions.developer`, `roles/cloudscheduler.admin`, `roles/artifactregistry.writer`, `roles/serviceusage.serviceUsageConsumer`, `roles/iam.serviceAccountUser` on `fn-runtime`, plus monitoring/logging config roles for the `ops` step |
+| Default compute SA | Unused; its `Editor` role is removed | none |
+
+The self-grant of `iam.serviceAccountTokenCreator` is what lets `admin.auth().createCustomToken()` sign through IAM `signBlob` in the cloud (tech-stack section 4). Without it, `joinGame` and `rejoin` fail in cloud but pass in the emulator, so it is the first thing the first-deploy walkthrough verifies.
+
+- P3. Each project has exactly the accounts above; no service account key exists for either project (org policy `iam.disableServiceAccountKeyCreation` enforced). GitHub reaches GCP only through Workload Identity Federation, with the provider's attribute condition restricted to this repository.
+- P4. The prod provider condition additionally requires `assertion.environment == 'production'`; staging's requires `environment == 'staging'` or a PR from the same repository.
+
+## 3. Repository layout
+
+```
+dc/
+  .bun-version                 # exact Bun version, read by setup-bun
+  .firebaserc
+  .github/workflows/ci.yml
+  bun.lock
+  bunfig.toml
+  eslint.config.js
+  firebase.json
+  firestore.indexes.json
+  firestore.rules
+  package.json
+  tsconfig.base.json
+  apps/web/                    # @dc/web: React, Vite, PWA, Tailwind
+    env/staging.env  env/production.env  env/emulator.env   # public config, committed
+    tsconfig.json  vite.config.ts  src/
+  functions/                   # @dc/functions
+    package.json  tsconfig.json
+    src/index.ts               # exports every deployed function
+    src/api/callable.ts        # defineCallable (alias callable): the only module allowed to import onCall (P12)
+    src/store/  src/notify/    # lint-isolated trees (ST2, T3; section 5)
+    src/log.ts                 # typed logger (section 9)
+    exports.json               # every deployed function name (check-bundle)
+    scripts/build.ts  scripts/check-bundle.ts
+    test-integration/          # emulator suites, bun:test, run against dist (P9)
+    dist/                      # generated, gitignored: index.cjs, package.json, package-lock.json, node_modules
+  packages/
+    engine/                    # @dc/engine: pure core, Projector, Moderation
+    contracts/                 # @dc/contracts: zod schemas and types
+  rules-test/                  # @firebase/rules-unit-testing suites
+  e2e/                         # Playwright
+  ops/                         # metrics, alert policies, dashboard JSON (section 9)
+  scripts/                     # repo-level Bun scripts (smoke.ts, ops-apply.ts, check-web-size.ts); not shipped
+  docs/
+```
+
+Dependency direction, enforced by lint (P5): `contracts` imports no workspace package; `engine` imports only `contracts`; `functions` imports `engine` and `contracts`; `web` imports only `contracts` (the client holds no authority, HLD C1, so it never imports the engine; anything it needs to display comes in the `GameView`).
+
+Root `package.json`:
+
+```json
+{
+  "name": "deepcuts",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*", "functions"],
+  "scripts": {
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun test packages functions/src",
+    "test:web": "bun test --preload apps/web/test/setup.ts apps/web/src",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-deepcuts 'bun test rules-test'",
+    "test:integration": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bun test functions/test-integration --timeout 30000'",
+    "test:e2e": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bunx playwright test'",
+    "build:functions": "bun run --cwd functions build",
+    "build:web": "bun run --cwd apps/web build",
+    "dev": "firebase emulators:start --project demo-deepcuts"
+  },
+  "devDependencies": {
+    "eslint": "9.x", "typescript-eslint": "8.x", "typescript": "5.x",
+    "firebase-tools": "14.x", "@firebase/rules-unit-testing": "4.x", "@playwright/test": "1.x",
+    "happy-dom": "x", "@testing-library/react": "x", "@testing-library/user-event": "x", "@axe-core/playwright": "x"
+  }
+}
+```
+
+Versions in the table are major lines for readability; the real file pins exact versions, and `bun.lock` is committed. The web workspace's own devDependencies (`wouter`, `@tailwindcss/vite`, `vite-plugin-pwa` with its `workbox-*`) are declared in `apps/web/package.json` per LLD 7. Test isolation: `happy-dom`'s global registration (the `--preload`) must not leak into engine and functions tests, so `test` excludes `apps/web/src` and `test:web` runs web tests in a separate Bun process (LLD 7 conflict 10).
+
+Each workspace `package.json` uses `"name": "@dc/<dir>"`, internal deps as `"workspace:*"`, and (for `engine` and `contracts`) `"exports": { ".": "./src/index.ts" }`. Packages are consumed as TypeScript source and are never built on their own; Vite and the functions bundler compile them in place.
+
+`functions/package.json` is the single source of truth for runtime versions:
+
+```json
+{
+  "name": "@dc/functions",
+  "private": true,
+  "scripts": { "build": "bun scripts/build.ts", "typecheck": "tsc --noEmit -p tsconfig.json" },
+  "dependencies": { "firebase-admin": "13.0.0", "firebase-functions": "6.2.0" },
+  "devDependencies": { "@dc/engine": "workspace:*", "@dc/contracts": "workspace:*", "@types/node": "22.10.0" }
+}
+```
+
+`engine` and `contracts` are devDependencies on purpose: they are bundled, not installed in the cloud. `zod` is a dependency of `contracts` and is bundled too.
+
+## 4. Functions bundling
+
+The Firebase CLI uploads the `source` directory and runs `npm install` in Cloud Build. It cannot resolve `workspace:*` and ignores `bun.lock` (tech-stack section 8), so `source` is `functions/dist`, a self-contained package.
+
+`functions/scripts/build.ts`:
+
+```ts
+import { mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+
+const RUNTIME_DEPS = ["firebase-admin", "firebase-functions"] as const;
+const pkg = JSON.parse(await readFile("package.json", "utf8"));
+
+const dependencies: Record<string, string> = {};
+for (const name of RUNTIME_DEPS) {
+  const v = pkg.dependencies?.[name];
+  if (!v || !/^\d+\.\d+\.\d+$/.test(v)) throw new Error(`${name} must be an exact version, got ${v}`);
+  dependencies[name] = v;
+}
+if (Object.keys(pkg.dependencies).some((n) => !(RUNTIME_DEPS as readonly string[]).includes(n)))
+  throw new Error("functions/package.json has a runtime dependency that is not in RUNTIME_DEPS");
+
+await rm("dist/index.cjs", { force: true });
+await mkdir("dist", { recursive: true });
+
+const result = await Bun.build({
+  entrypoints: ["src/index.ts"],
+  outdir: "dist",
+  naming: "index.cjs",
+  target: "node",
+  format: "cjs",
+  minify: false,                       // readable stack traces in Error Reporting
+  sourcemap: "none",
+  external: [...RUNTIME_DEPS, ...RUNTIME_DEPS.map((d) => `${d}/*`)],
+});
+if (!result.success) { console.error(result.logs.join("\n")); process.exit(1); }
+
+const dist = { name: "deepcuts-functions", private: true, main: "index.cjs", engines: { node: "22" }, dependencies };
+const next = JSON.stringify(dist, null, 2) + "\n";
+const prev = await readFile("dist/package.json", "utf8").catch(() => "");
+if (prev !== next) {
+  await writeFile("dist/package.json", next);
+  // Creates package-lock.json (used by Cloud Build's npm ci) and node_modules (needed locally for
+  // the CLI's function discovery and the Functions emulator).
+  const p = Bun.spawnSync(["npm", "install", "--omit=dev", "--no-audit", "--no-fund"], { cwd: "dist", stdio: ["inherit", "inherit", "inherit"] });
+  if (p.exitCode !== 0) process.exit(p.exitCode ?? 1);
+}
+await import("./check-bundle.ts");
+```
+
+`build.ts` runs under Bun; the output it produces runs only under Node. It uses `Bun.*` legitimately because the script is not shipped (P7 scopes the ban accordingly).
+
+`functions/scripts/check-bundle.ts` fails the build unless all of these hold:
+
+1. `dist/index.cjs` contains no `bun:` string, no `Bun.` global use, and no `@dc/` specifier.
+2. Every `require("...")` target is a Node builtin (`node:` prefix) or starts with a name in `dist/package.json` `dependencies`.
+3. The bundle loads under plain Node (`node -e "require('./dist/index.cjs')"` with `GCLOUD_PROJECT=demo-deepcuts`) and exports every name in a checked-in `functions/exports.json` (the callables and triggers LLDs 3 to 6 declare: the LLD 5 callables plus `beforeEmailSent` when implemented, LLD 4's `identityOutbox`, LLD 3's deletion runner trigger `deletionRunner`, LLD 6's `notifyOutbox`, `reminderSweep` and `housekeeping`). A function added in code but missing from the list, or the reverse, fails. The callable `REGISTRY` of `defineCallable` must equal the callable subset of the list (LLD 5 API1).
+
+- P6. `bun run build:functions` produces `functions/dist` deterministically from `bun.lock` plus sources, and `check-bundle` passes. `dist/package.json` lists exactly the exact-pinned `RUNTIME_DEPS` and nothing else.
+- P7. The bundle loads and registers its functions under Node 22 with no Bun present on `PATH` (the CI integration job removes Bun from `PATH` after building).
+- Pinning: direct deps are exact; transitive deps are fixed by the committed-per-build `dist/package-lock.json`. The lockfile is generated, not committed; two builds a day apart can differ in transitive versions. Decision: accept this for v1 and upgrade to committing `functions/package-lock.json` copied into `dist` if it ever bites (see Open questions).
+
+`firebase.json`:
+
+```json
+{
+  "functions": [{
+    "source": "functions/dist",
+    "codebase": "default",
+    "runtime": "nodejs22",
+    "ignore": ["node_modules", "*.log"],
+    "predeploy": ["bun run build:functions"]
+  }],
+  "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
+  "hosting": {
+    "public": "apps/web/dist",
+    "rewrites": [{ "source": "**", "destination": "/index.html" }],
+    "headers": [
+      { "source": "/assets/**", "headers": [{ "key": "Cache-Control", "value": "public,max-age=31536000,immutable" }] },
+      { "source": "/{index.html,sw.js,manifest.webmanifest}", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
+      { "source": "**", "headers": [{ "key": "Referrer-Policy", "value": "no-referrer" }] }
+    ]
+  },
+  "emulators": {
+    "auth": { "port": 9099 }, "functions": { "port": 5001 }, "firestore": { "port": 8080 },
+    "hosting": { "port": 5000 }, "ui": { "enabled": true, "port": 4000 }, "singleProjectMode": true
+  }
+}
+```
+
+`.firebaserc`: `{ "projects": { "default": "deepcuts-staging", "staging": "deepcuts-staging", "prod": "deepcuts-prod" } }`. Deploys always pass `--project` explicitly in CI; the default is for humans and is never `prod`.
+
+The `Referrer-Policy: no-referrer` header keeps the rejoin URL (and any path carrying a game id) from leaking in `Referer` (LLD 4, LLD 7 conflict 12); the SPA rewrite must exclude `/__/` (Firebase Auth helper paths). The service worker is the single `/sw.js` (vite-plugin-pwa `injectManifest`), which also handles FCM background messages; there is no `/firebase-messaging-sw.js`.
+
+The Functions emulator reads `source` from `firebase.json`, so it runs the same `functions/dist` bundle that deploys (P9). A `--no-install`-style shortcut does not exist: `build:functions` is a prerequisite of every emulator script.
+
+## 5. Lint and TypeScript policy
+
+**ESLint** (flat config, typescript-eslint). Chosen over Biome because per-path `no-restricted-imports`, `no-restricted-globals` and `no-restricted-syntax` overrides are mature and the engine rules need all three.
+
+```js
+// eslint.config.js (abridged)
+const NODE_IO = ["node:*", "fs", "fs/promises", "path", "os", "child_process", "net", "http", "https", "crypto", "stream", "worker_threads"];
+const FIREBASE = ["firebase", "firebase/*", "firebase-admin", "firebase-admin/*", "firebase-functions", "firebase-functions/*", "@firebase/*", "@google-cloud/*"];
+const BUN = ["bun", "bun:*"];
+const CLOCK_AND_ENTROPY = [
+  { selector: "CallExpression[callee.object.name='Date'][callee.property.name='now']", message: "No clock in engine; use ctx.now." },
+  { selector: "NewExpression[callee.name='Date'][arguments.length=0]", message: "No clock in engine; use ctx.now." },
+  { selector: "CallExpression[callee.object.name='Math'][callee.property.name='random']", message: "Use the injected Rng." },
+  { selector: "CallExpression[callee.object.name='performance']", message: "No clock in engine." },
+];
+
+export default [
+  { files: ["packages/engine/src/**/*.ts"], ignores: ["**/*.test.ts"], rules: {
+      "no-restricted-imports": ["error", { patterns: [...FIREBASE, ...NODE_IO, ...BUN, "@dc/functions", "@dc/web"] }],
+      "no-restricted-globals": ["error", "process", "Buffer", "fetch", "setTimeout", "setInterval", "performance", "crypto", "Bun", "window", "document"],
+      "no-restricted-syntax": ["error", ...CLOCK_AND_ENTROPY] } },
+  { files: ["packages/contracts/src/**/*.ts"], rules: {
+      "no-restricted-imports": ["error", { patterns: [...FIREBASE, ...NODE_IO, ...BUN, "@dc/*"] }] } },
+  { files: ["apps/web/src/**/*.{ts,tsx}"], rules: {
+      "no-restricted-imports": ["error", { patterns: [...BUN, "firebase-admin", "firebase-admin/*", "@dc/engine", "@dc/functions"] }] } },
+  { files: ["functions/src/**/*.ts"], ignores: ["functions/src/api/callable.ts", "**/*.test.ts"], rules: {
+      "no-restricted-imports": ["error", { patterns: [...BUN], paths: [{ name: "firebase-functions/v2/https", importNames: ["onCall", "onRequest"], message: "Use defineCallable() from api/callable." }] }],
+      "no-restricted-globals": ["error", "Bun"] } },
+  // ST2 (LLD 3): the transaction callback is re-executable, so the Store has no side-effect or entropy sources.
+  { files: ["functions/src/store/**/*.ts"], ignores: ["**/*.test.ts"], rules: {
+      "no-restricted-imports": ["error", { patterns: ["firebase-admin/auth", "firebase-admin/messaging", "**/notify/*", "**/identity/*"] }],
+      "no-restricted-globals": ["error", "fetch"],
+      "no-restricted-syntax": ["error", { selector: "CallExpression[callee.object.name='Math'][callee.property.name='random']", message: "Use deps.newSeed()." }] } },
+  // T3 (LLD 6): time enters notifications only through the injected clock.
+  { files: ["functions/src/notify/**/*.ts"], ignores: ["**/*.test.ts"], rules: {
+      "no-restricted-syntax": ["error", ...CLOCK_AND_ENTROPY.slice(0, 2)] } },
+  // T1 (LLD 6): the sweep holds no game logic; it may import only listWaitingOn and runCommand from the Store.
+  { files: ["functions/src/notify/sweep.ts"], rules: {
+      "no-restricted-imports": ["error", { patterns: ["@dc/engine", "@dc/engine/*", "**/store/*", "!**/store/index"] }] } },
+  // No block for *.test.ts, functions/test-integration and rules-test: the BUN ban above is not applied to them, so bun:test is allowed there and nowhere else.
+];
+```
+
+- P5. `bun run lint` fails on: any `firebase*`, `@firebase/*`, `node:*`/Node I/O module, `bun`, `bun:*` import, or the globals `process`, `Buffer`, `fetch`, `setTimeout`, `performance`, `crypto`, `Bun` in `packages/engine/src`; any `Date.now()`, `new Date()`, `Math.random()` there; any workspace import that violates the direction rule of section 3. `packages/engine` additionally has a test that parses its `package.json` and asserts `dependencies` is a subset of `{"@dc/contracts"}` plus an allowlisted pure-library list (`zod`).
+- P12. `onCall` and `onRequest` are imported only in `functions/src/api/callable.ts`, whose `defineCallable` wrapper (`callable` is a deprecated alias exported from the same file) sets `region`, `serviceAccount`, `enforceAppCheck: true`, `consumeAppCheckToken: false` and the per-callable `runtime` options, and implements the LLD 5 section 4.2 pipeline from its spec options: `allow` (explicit principal kinds, no default), `limits`, `gameIdOf` (seat liveness check), strict `output` parsing, and the `sv` contract-version stamp, with typed structured logging and no body logging. Every callable therefore enforces App Check and never forgets to (A1, LLD 5 API1).
+- P21. `functions/src/store/**` imports no Auth, FCM, identity or notify module and uses neither `fetch` nor `Math.random` (ST2); `functions/src/notify/**` uses no `Date.now()` or `new Date()` (T3); `functions/src/notify/sweep.ts` imports neither the Engine nor any Store module beyond `listWaitingOn` and `runCommand` (T1). Enforced by the lint blocks above; ST2 and T3 also keep their own tests in LLDs 3 and 6.
+- P7 (lint half). `Bun`, `bun`, `bun:*` appear in no shipped code (`packages/*/src`, `functions/src`, `apps/web/src`). `bun:test` imports are allowed only in `*.test.ts`, `functions/test-integration`, `rules-test`. Build and ops scripts (`functions/scripts`, `scripts`) may use `Bun.*`.
+- Warnings are errors (`--max-warnings 0`). Type-aware rules enabled: `no-floating-promises`, `no-misused-promises`, `consistent-type-imports`.
+
+**TypeScript.** One strict base, per-package `lib` and `types` so the compiler also enforces isolation (an engine file that touches `process` or `setTimeout` fails typecheck, not only lint).
+
+```jsonc
+// tsconfig.base.json
+{ "compilerOptions": {
+    "target": "ES2023", "module": "ESNext", "moduleResolution": "Bundler",
+    "strict": true, "noUncheckedIndexedAccess": true, "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true, "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true, "isolatedModules": true, "skipLibCheck": true,
+    "noEmit": true, "resolveJsonModule": true } }
+```
+
+| Package | `lib` | `types` | Notes |
+|---|---|---|---|
+| `packages/engine`, `packages/contracts` | `["ES2023"]` | `[]` | No DOM, no Node: `process`, `Buffer`, `setTimeout`, `fetch` do not exist |
+| `functions` | `["ES2023"]` | `["node"]` | `@types/node` 22 matches the runtime |
+| `apps/web` | `["ES2023","DOM","DOM.Iterable"]` | `["vite/client"]` | `jsx: react-jsx` |
+| tests | per package | adds `["bun"]` | `tsconfig.test.json` per package extends the package config, includes `**/*.test.ts` and `test-integration`; the main config excludes them so `bun-types` cannot leak into shipped code |
+
+- P8. `bun run typecheck` runs `tsc --noEmit` for each package config and each test config. A CI step asserts `git diff --exit-code` after `bun install --frozen-lockfile`, `lint`, and `build:functions` so no generated file is silently out of date.
+
+## 6. Test pyramid and emulator setup
+
+| Level | Command | Runs where | Gate |
+|---|---|---|---|
+| Engine unit and property (fast-check; E1 to E18, V2 to V5) | `bun test packages` | Bun | every PR |
+| Functions unit | `bun test functions/src` | Bun | every PR |
+| Web unit (happy-dom, Testing Library) | `bun run test:web` | Bun, separate process so `happy-dom` globals never reach engine or functions tests | every PR |
+| Rules | `bun run test:rules` | Firestore emulator | every PR |
+| Function integration | `bun run test:integration` | Auth + Firestore + Functions emulators, **Node bundle** | every PR |
+| End to end (Playwright, chromium) | `bun run test:e2e` | Same emulators, `vite preview` with `env/emulator.env` | every PR |
+| Post-deploy smoke | `bun scripts/smoke.ts` | Real staging or prod | after each deploy |
+
+- P9. Integration and e2e suites run against `functions/dist/index.cjs` through the Functions emulator, never against `functions/src` imported under Bun. `test:integration` rebuilds the bundle first, and the CI job runs it under Node with Bun absent from `PATH` for the emulator process (the test runner itself is Bun). This is the control for the "Bun-built functions deployed to Node" risk in tech-stack section 10.
+- P10. Rules suites cover every denial in tech-stack section 5 (aggregate, drafts, outbox, events, idem, `roomCodes`, `pushSubs`, another player's view, `views/spectator` when `enabled` is false) and fail if any of them reads or writes successfully. A CI step lists the collections named in `firestore.rules` and the suites fail if one has no denial test.
+- P11. Tests use deterministic seeds: engine property tests take `FC_SEED` from the environment and print it on failure, so a CI failure is reproducible locally.
+- Emulator specifics. The Firestore emulator needs Java 21 (`actions/setup-java`, temurin); emulator binaries are cached at `~/.cache/firebase/emulators`. Integration tests connect with `FIRESTORE_EMULATOR_HOST` and `FIREBASE_AUTH_EMULATOR_HOST` (set by `emulators:exec`). App Check is not enforced by the Functions emulator, so the integration suite cannot prove enforcement; that is covered by P12 plus the post-deploy smoke test (an unauthenticated-by-App-Check call must be rejected).
+- Integration tests are Bun-run `bun:test` files that call the callables over HTTP with the Firebase JS SDK (`connectFunctionsEmulator`), so the real request path (callable protocol, auth context, custom-token rejoin) is exercised. Seeding uses the Admin SDK against the emulator.
+- Clock and randomness in integration: functions read `now` from a single `clock()` in `functions/src` that tests can set through an env var honored only when `FUNCTIONS_EMULATOR === "true"`.
+
+## 7. Secrets and configuration
+
+| Kind | Where | Examples |
+|---|---|---|
+| Public client config | Committed `apps/web/env/{staging,production,emulator}.env`, loaded by Vite `--mode` | Firebase web config, reCAPTCHA Enterprise site key, functions region, `VITE_APP_ENV` |
+| Function parameters (non-secret) | `defineString`/`defineInt`/`defineBoolean` params with `functions/.env.staging`, `.env.prod` selected by `--project` alias in `.firebaserc` | `REMINDER_SWEEP_CRON`, rate-limit numbers (LLD 5 7.3), `APP_ORIGIN` (per env; base of invite and rejoin URLs), `CODE_WINDOW_MS` (default 72 h), `CODE_LOOKUP_ENABLED` (kill switch, default true), `TRUSTED_HOPS` (proxy hops for IP derivation, LLD 5 7.2), `COMMAND_MIN_INSTANCES` (0 staging, 1 prod) |
+| Secrets | Secret Manager via `defineSecret`, bound per function that needs it | `RATE_LIMIT_HASH_SALT` (IP hashing for counters, R2/A4), `LOG_HASH_SALT` (the id hash in logs), `SEAT_DERIVATION_KEY` (32 random bytes; derives seat secrets, LLD 4; rotating it invalidates every outstanding rejoin link, so it is rotated only deliberately) |
+| CI credentials | None stored. GitHub OIDC to Workload Identity Federation (P3) | Repository variables hold only the provider and service account names |
+| App Check debug tokens | GitHub environment secrets (`staging`, `production`) | `APPCHECK_DEBUG_TOKEN` used by `scripts/smoke.ts` and preview builds |
+
+- P13. No secret value is committed. CI runs `gitleaks` on every PR; Secret Manager secrets are created out of band (`gcloud secrets create`) and read only by `fn-runtime`. Firebase web config and reCAPTCHA site keys are public by design and are the only credential-shaped values in the repo.
+- P14. Staging and prod secrets are distinct values. Function code has no `if (project === ...)` branches; behavior differences come only from params.
+- Preview builds are public URLs on the staging project, so they embed the staging App Check debug token via `VITE_APPCHECK_DEBUG_TOKEN`. Staging data is disposable and the token is rotatable; this is accepted (see Open questions).
+
+## 8. CI/CD (GitHub Actions)
+
+One workflow, `.github/workflows/ci.yml`. Pull requests from forks run `verify` and `emulator` only (no secrets, no preview).
+
+| Trigger | Jobs |
+|---|---|
+| `pull_request` | `verify`, `emulator`, then `preview` (same-repo PRs only) |
+| push to `main` | `verify`, `emulator`, then `deploy-staging` |
+| push tag `v*.*.*` | `verify`, `emulator`, `check-tag`, then `deploy-prod` (environment `production`, required reviewer) |
+
+```yaml
+name: ci
+on:
+  pull_request:
+  push: { branches: [main], tags: ["v*.*.*"] }
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}   # never cancel a deploy
+permissions: { contents: read }
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version-file: .bun-version }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun test packages functions/src
+      - run: bun run test:web
+      - run: bun run build:functions
+      - run: bun run build:web
+      - run: bun scripts/check-web-size.ts   # entry for /g/:id within 300 KB (LLD 7 WC16, 300 KB gzip)
+      - run: git diff --exit-code
+      - uses: gitleaks/gitleaks-action@v2
+      - uses: actions/upload-artifact@v4
+        with: { name: web-dist, path: apps/web/dist }
+
+  emulator:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version-file: .bun-version }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: actions/cache@v4
+        with: { path: ~/.cache/firebase/emulators, key: emulators-${{ hashFiles('bun.lock') }} }
+      - run: bun install --frozen-lockfile
+      - run: bun run test:rules
+      - run: bun run test:integration
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run test:e2e
+
+  preview:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: [verify, emulator]
+    runs-on: ubuntu-24.04
+    environment: staging
+    permissions: { contents: read, id-token: write, pull-requests: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version-file: .bun-version }
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd apps/web build --mode staging
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
+          service_account: ${{ vars.DEPLOYER_SA_STAGING }}
+      - run: bunx firebase hosting:channel:deploy pr-${{ github.event.number }} --project deepcuts-staging --expires 7d
+      # a follow-up step comments the channel URL on the PR
+
+  deploy-staging:
+    if: github.ref == 'refs/heads/main'
+    needs: [verify, emulator]
+    runs-on: ubuntu-24.04
+    environment: staging
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version-file: .bun-version }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: bun install --frozen-lockfile
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
+          service_account: ${{ vars.DEPLOYER_SA_STAGING }}
+      - run: bun run build:functions && bun run --cwd apps/web build --mode staging
+      # order matters (P16): indexes, then functions, then hosting
+      - run: bunx firebase deploy --only firestore --project deepcuts-staging --non-interactive
+      - run: bunx firebase deploy --only functions --project deepcuts-staging --non-interactive
+      - run: bunx firebase deploy --only hosting --project deepcuts-staging --non-interactive
+      - run: bun scripts/ops-apply.ts --project deepcuts-staging
+      - run: bun scripts/smoke.ts --project deepcuts-staging
+        env: { APPCHECK_DEBUG_TOKEN: "${{ secrets.APPCHECK_DEBUG_TOKEN }}" }
+
+  check-tag:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [verify, emulator]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+  deploy-prod:
+    needs: [check-tag]
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions: { contents: read, id-token: write }
+    # same steps as deploy-staging with --project deepcuts-prod, --mode production and prod WIF variables
+```
+
+- P15. Deploys use `--non-interactive`, an explicit `--project`, and no `--force` (so a deploy that would delete a function fails and a human decides).
+- P16. Deploy order is Firestore rules and indexes, then functions, then Hosting. A deploy whose `firestore:indexes` step reports indexes still building waits for `READY` (the `ops-apply` script polls `gcloud firestore indexes composite list`) before the functions step runs.
+- P17. Prod deploys only from a tag whose commit is an ancestor of `main` and only after an approval on the `production` environment. Prod is rebuilt from the tag with the same `bun.lock`, not copied from staging; the web build differs by `--mode` anyway.
+- P18. Third-party actions are pinned to a major version at minimum; the workflow has `permissions: contents: read` by default and grants `id-token: write` only on deploy jobs.
+- PR previews run the staging backend as it stands on `main`. A PR that changes function or contract behavior is verified by the emulator jobs, not by its preview (see Open questions).
+- Rollback: functions and web roll back by re-running the workflow on the previous tag (`workflow_dispatch` with a `ref` input, same prod gate). Firestore rules roll back the same way. Data is never rolled back by CI.
+- Node and Bun are both pinned (`node-version: 22`, `.bun-version`); `firebase-tools` is a pinned root devDependency so CLI behavior is identical locally and in CI.
+
+## 9. Observability
+
+Mirrors HLD 4.5 and tech-stack section 9; this LLD fixes the conventions.
+
+**Logger.** `functions/src/log.ts` wraps `firebase-functions/logger` and is the only logging path (lint forbids `console.*` in `functions/src`). It takes a typed field set; unknown keys are a type error and are dropped at runtime.
+
+| Field | Meaning |
+|---|---|
+| `event` | Dotted name. Store: `command.done`, `command.rejected`, `txn.retry`, `store.size.warn`, `deletion.stuck`, `roomcode.collision`. API (LLD 5): `api.done`, `api.gate`, `api.detail.stripped`, `rate.limited`, `ip.unresolved`. Identity (LLD 4): `auth.join`, `auth.rejoin`, `auth.reissue`, `auth.revoke`, `auth.purge.partial`. Notifications (LLD 6): `notify.row.done`, `notify.dedupe`, `notify.payload_invalid`, `notify.poison`, `push.result`, `push.register`, `push.unregister`, `reminder.sweep.done`, `reminder.sweep.game_failed`, `outbox.redrive`. An event not in this list is a type error; there is no `outbox.sent` (nothing emits it; `notify.row.done` replaces it) |
+| `callable`, `principalKind` (`host`\|`seat`\|`spectator`\|`guest`\|`none`), `clientV` | API lines (LLD 5 section 9) |
+| `gameId`, `version` | Always present on game-scoped lines. `version` is the version read (and, on success, written) |
+| `commandType`, `outcome` (`ok`\|`rejected`\|`error`), `reason` (an `ErrorCode`, or the log-only codes of LLD 5 section 9) | Command and API lines |
+| `playerId` | Opaque id only (allowed; it carries no name) |
+| `latencyMs`, `attempts` | Timing and transaction attempts (retry rate = lines with `attempts > 1`) |
+| `replay` | Boolean; true when the call was served from the idempotency ledger |
+| `bucket`, `retryAfterMs` | Rate-limit lines (`rate.limited`) |
+| `rowId`, `kind` | Outbox row id (`v{n}_{i}`; carries no player data) and its event or notification kind |
+| `recipients`, `devices`, `eventToFcmMs` | Notification fan-out: recipient and device counts, and `now - row.at` at the end of the first send |
+| `result` | `sent`, `failed` or `pruned` on `push.result` |
+| `ipHash`, `uidHash` | HMAC with `LOG_HASH_SALT`, truncated to 12 hex chars; never raw IPs |
+| `count`, `sent`, `pruned`, `failed`, `skipped`, `pages`, `listed`, `replayed`, `noop` | Notification and sweep volumes (the superset of LLD 6 section 7.2) |
+
+**Forbidden in any log line, error message or `HttpsError` detail** (P19): card text and drafts; display names; emails; seat tokens, rejoin secrets or anything from a URL fragment; Firebase ID tokens and custom tokens; FCM tokens and push endpoints; raw IPs; pitch text; and anything linking a submission to its owner before the result is committed (no `cardId` paired with `playerId` for `confirmSubmission`, no `revealOrder`, no `submissionId` to owner mapping). Unhandled errors are logged as `Error` objects (so Error Reporting groups them) with the message scrubbed of request payloads.
+
+- P19. An integration test plays a full game with sentinel strings in every user-supplied field (display names `NAME-SENTINEL-*`, card text `CARD-SENTINEL-*`, an email `sentinel@example.test`), captures all Functions emulator log output, and fails if any sentinel appears. This is the log half of R1.
+
+**Log-based metrics** (definitions in `ops/metrics/*.yaml`, applied idempotently by `scripts/ops-apply.ts`):
+
+| Metric | Source | Labels |
+|---|---|---|
+| `dc_command_total` | counter, `event="command.done" or "command.rejected"` | `commandType`, `outcome`, `reason` |
+| `dc_command_latency_ms` | distribution of `latencyMs` on `command.done` | `commandType` |
+| `dc_txn_retry_total` | counter, `event="txn.retry"` | none |
+| `dc_push_total` | counter, `event="push.result"` | `result` (`sent`, `failed`, `pruned`) |
+| `dc_reminder_sent_total` | counter, `event="reminder.sweep.done"` weighted by `sent` | none |
+| `dc_roomcode_collision_total` | counter, `event="roomcode.collision"` (LLD 3 createGame retry) | none |
+| LLD 5 metrics | `dc_api_total`, `dc_api_latency_ms`, `dc_ratelimit_total`, `dc_api_invalid_total`, `dc_client_outdated_total`, `dc_idem_replay_total`, `dc_appcheck_denied_total` | as defined in LLD 5 section 9 |
+| LLD 6 metrics | `dc_push_pruned_total`, `dc_reminder_push_total`, `dc_notify_dedupe_total`, `dc_notify_latency_ms`, `dc_notify_poison_total` | as defined in LLD 6 section 7.3 |
+
+**Dashboard** (`ops/dashboards/main.json`, one per project): command rate and rejection rate by `reason`; p50/p95/p99 latency by `commandType`; transaction retry ratio; function instance count and cold starts for `command`; push sent/failed/pruned; reminders per sweep; Firestore reads/writes.
+
+**Alert policies** (`ops/alerts/*.json`, notification channel is the owner's email; prod and staging both, staging at warning severity):
+
+| Alert | Condition |
+|---|---|
+| `command` error rate | `outcome=error` above 2% over 10 min (rejections are not errors) |
+| `command` latency | p95 above 3 s for 15 min (cold starts alone must not fire it) |
+| Transaction contention | retry ratio above 20% for 15 min |
+| Sweep missed | no `reminder.sweep.done` for 3 h (hourly job) |
+| Push health | failed share above 50% over 1 h with at least 20 attempts |
+| Function failure | any new Error Reporting group for a function |
+| Stuck deletion | any `deletion.stuck` line (LLD 3) |
+| Store size | any `store.size.warn` line (LLD 3) |
+| Identity | `auth.revoke` retries above 5 in an hour; any `auth.purge.partial` repeating for the same game (LLD 4) |
+| Notification pipeline | any `notify.poison` or `notify.payload_invalid`; `dc_notify_latency_ms` p95 above 60 s for 30 min; an `outbox.redrive` run processing more than 20 rows (LLD 6) |
+| API health | the LLD 5 section 9 alerts (invalid-request share, `CLIENT_OUTDATED`, `ip.unresolved`, `api.detail.stripped`, `code_ip` spike, App Check denials) |
+| Budget | thresholds in section 2 |
+
+- P20. `ops-apply` is idempotent and runs on every staging and prod deploy; a metric or alert present in `ops/` but absent in the project after the run fails the deploy. Log retention uses the default 30-day bucket.
+
+## 10. Production readiness checks (rolled up)
+
+Checked by CI where marked: P5 and P21 lint (CI), P6 and P7 bundle and `exports.json` (CI), P9 to P11 test suites including `test:web` (CI), P12 `defineCallable` wrapper (CI lint, LLD 5 registry tests), P13 secret scan (CI), WC16 web size via `check-web-size.ts` (CI), P15 to P18 workflow (review), P19 log sentinels (CI), P1, P3, P4, P20 and the section 2 table including Identity Platform, the five TTL groups and the FCM APIs (manual checklist at project creation, re-verified by the walkthrough below).
+
+## 11. First staging deploy, step by step
+
+Goal: prove the riskiest seam (Bun monorepo, bundle, Node runtime, IAM custom tokens, App Check, rules, Hosting) with a trivial system before any real code exists. Use a throwaway `ping` callable and a throwaway `diag` callable.
+
+**A. Cloud setup (once, about 45 minutes)**
+1. Create project `deepcuts-staging` in the console. Attach billing and upgrade to Blaze. Create the budget and alerts (section 2).
+2. Create Firestore in Native mode at `nam5`. Add the TTL policies for all five groups: `for g in idem outbox notifLog rateLimits deletions; do gcloud firestore fields ttls update expiresAt --collection-group=$g --enable-ttl --project deepcuts-staging; done`. This is also the fallback if `firebase deploy --only firestore` (step 12) rejects `"ttl": true` in `fieldOverrides`; if it accepts it, confirm with `gcloud firestore fields list --filter=ttlConfig` and keep only the file.
+3. Enable APIs: `gcloud services enable cloudfunctions.googleapis.com run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com iamcredentials.googleapis.com recaptchaenterprise.googleapis.com firebaseappcheck.googleapis.com fcm.googleapis.com fcmregistrations.googleapis.com identitytoolkit.googleapis.com --project deepcuts-staging`.
+4. Auth: upgrade to Identity Platform; enable Email link and Anonymous, anonymous-account auto-cleanup and App Check enforcement for Auth; add authorized domains.
+5. Register the web app; copy its config into `apps/web/env/staging.env`. Create a reCAPTCHA Enterprise key, register it under App Check, and put the site key in the env file. Generate an App Check debug token, register it, and store it as the `APPCHECK_DEBUG_TOKEN` secret in the GitHub `staging` environment.
+6. Create service accounts `fn-runtime` and `ci-deployer` with the roles in section 2, including the **self-grant**: `gcloud iam service-accounts add-iam-policy-binding fn-runtime@deepcuts-staging.iam.gserviceaccount.com --member=serviceAccount:fn-runtime@deepcuts-staging.iam.gserviceaccount.com --role=roles/iam.serviceAccountTokenCreator`.
+7. Create the Workload Identity pool and provider restricted to this repository; set GitHub variables `WIF_PROVIDER_STAGING`, `DEPLOYER_SA_STAGING`. Create secrets `RATE_LIMIT_HASH_SALT`, `LOG_HASH_SALT` and `SEAT_DERIVATION_KEY` with random values, and set the params in `functions/.env.staging` (`APP_ORIGIN`, `CODE_WINDOW_MS`, `CODE_LOOKUP_ENABLED`, `TRUSTED_HOPS`, `COMMAND_MIN_INSTANCES`).
+
+**B. Local proof (no cloud)**
+8. Scaffold the workspace per section 3 with a minimal `functions/src/index.ts` exporting `ping` and `diag` through `defineCallable`; `ping` returns `{ ok: true, node: process.version }`; `diag` calls `getAuth().createCustomToken("seat:probe:probe")` and returns the token (staging-only, deleted in step 17).
+9. `bun install`, `bun run lint`, `bun run typecheck`, `bun run build:functions`. Confirm `functions/dist` contains `index.cjs`, `package.json`, `package-lock.json`, `node_modules/firebase-admin`.
+10. `bun run test:integration` with a one-test suite calling `ping` through the emulator and asserting `node` starts with `v22`. This proves the Node bundle loads under the emulator. Also run `bun run test:web` and `bun scripts/check-web-size.ts` once the web scaffold exists.
+
+**C. Deploy**
+11. `firebase login:ci` is not used; authenticate locally with `gcloud auth application-default login` as a project owner for this first run.
+12. `bunx firebase deploy --only firestore --project deepcuts-staging` (rules deny-all plus the empty indexes file).
+13. `bunx firebase deploy --only functions --project deepcuts-staging`. Expect: predeploy build, "Loading and analyzing source code" succeeds (needs `dist/node_modules`), Cloud Build runs `npm ci` against `dist/package-lock.json`, functions appear in `us-central1`. Verify the runtime options LLD 5 conflict 14 assumes (`cpu: 1` at 256MiB, `concurrency: 80`, `consumeAppCheckToken: false`, a `minInstances` param) by giving `ping` the same runtime shape as `command`.
+14. `bun run --cwd apps/web build --mode staging && bunx firebase deploy --only hosting --project deepcuts-staging`.
+
+**D. Verify the seams**
+15. `bun scripts/smoke.ts --project deepcuts-staging` calls `ping` with the debug App Check token and expects `ok: true` and a Node 22 version. A second call without an App Check token must fail with `failed-precondition`/`unauthenticated`, which proves enforcement.
+16. Call `diag` (same smoke script, extra flag), take the custom token, `signInWithCustomToken` from the client SDK, and confirm a signed-in uid `seat:probe:probe`; then delete that Auth user. Failure here with `iam.serviceAccounts.signBlob` denied means step 6 is wrong.
+17. Remove `diag`, redeploy functions, run `bunx firebase functions:delete diag --project deepcuts-staging --force` if it lingers.
+18. Run `bun scripts/ops-apply.ts --project deepcuts-staging`; confirm the dashboard and alert policies exist, and that `ping` produced a structured log line visible in Logs Explorer with `event` set.
+19. Open a PR; confirm `verify`, `emulator`, `preview` pass and the preview URL loads. Merge; confirm `deploy-staging` repeats steps 12 to 15 from CI under Workload Identity Federation with no keys.
+
+**Known failure modes**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Failed to load function definition from source: Cannot find module 'firebase-functions'` | `dist/node_modules` missing at deploy time | `build.ts` must run `npm install` in `dist`; check `predeploy` ran |
+| Cloud Build `npm ci` lockfile mismatch | `dist/package.json` and `package-lock.json` out of sync | Delete `dist` and rebuild; `build.ts` regenerates both together |
+| `Cannot find module 'bun:...'` or `Bun is not defined` at runtime | Shipped code touched Bun | P5/P7 lint and `check-bundle` should have caught it; fix the import |
+| `iam.serviceAccounts.signBlob` denied | Missing self-grant of `serviceAccountTokenCreator` | Step 6 |
+| `The query requires an index` | Deploy order or index still building | P16 ordering; wait for `READY` |
+| Callable returns `unauthenticated` with App Check on | Missing or unregistered debug token, or domain not allowed in the reCAPTCHA key | Register the token; add the preview and live hosts |
+| Secret access denied at cold start | `fn-runtime` lacks `secretAccessor` or the function did not bind the secret | Add the role; add the secret to the function's `secrets` option |
+| Functions emulator exits "No functions found" | `dist` not built | Always run `build:functions` first |
+
+## Open questions / conflicts
+
+1. **Preview channels share the staging backend.** The HLD and tech-stack say "Hosting preview channels for each PR" but do not say which backend they call. Here previews hit staging functions from `main`, so a PR that changes the callable contract cannot be previewed end to end. Options: accept (chosen), or deploy per-PR function codebases (cost and cleanup overhead). Needs a decision before the first contract change.
+2. **Lockfile for the generated functions package.** Tech-stack section 8 specifies only a minimal `package.json` with pinned direct deps. Transitive dependencies of `firebase-admin` and `firebase-functions` then resolve at build time and are not reviewed. This LLD generates `dist/package-lock.json` per build (not committed); committing it is a possible tightening.
+3. **Debug App Check token in public preview builds.** Needed so preview and smoke traffic passes App Check, but it is visible in the bundle. Acceptable only because staging is disposable; prod never gets one in a web build (the prod smoke token lives only in the GitHub `production` environment).
+4. **Firestore App Check enforcement.** Tech-stack section 7 mentions App Check on callables only. This LLD also enforces it on Firestore reads (the client's view-document listeners), which means the web client must initialize App Check before attaching listeners (LLD 7), and the emulator does not exercise it.
+5. **Web may not import `packages/engine`.** Implied by HLD C1 but not stated; lint enforces it here. If the UI needs a derived value (for example cards-still-to-write), it must arrive in `GameView`, not be recomputed client-side.
+6. **Runtime service account and roles.** The HLD and tech-stack name only the `serviceAccountTokenCreator` role. The dedicated `fn-runtime` account and its role list (notably `firebaseauth.admin` for seat Auth user disable, revoke and purge, FCM admin) are this LLD's proposal and should be verified against what LLDs 4 and 6 actually call. Partly confirmed: LLD 4 calls `createCustomToken`, `updateUser`, `revokeRefreshTokens` and `deleteUsers`; LLD 6 calls FCM send only. Final check at the first deploy.
+7. **Reminder sweep schedule.** HLD 3.9 says "e.g., hourly" and tech-stack says hourly; the "sweep missed" alert here assumes hourly. If LLD 6 changes the cadence, the alert threshold moves with it.
+8. **TTL.** **Resolved (LLD 3 sections 2 and 4):** field is `expiresAt` (a `Timestamp`) on five collection groups, `idem`, `outbox`, `notifLog`, `rateLimits`, `deletions`; section 2 and walkthrough step 2 now configure all five. Still open: whether the pinned `firebase-tools` accepts `"ttl": true` in `fieldOverrides` (unverified; gcloud fallback documented, LLD 3 open question 6).
+9. **Dynamic Links.** Email-link sign-in must not depend on Firebase Dynamic Links (shut down). Standard web email-link flow with a `continueUrl` on an authorized domain is assumed; LLD 4 should confirm. **Resolved by LLD 4 (section 3 and its interface table):** SDK email-link flow with `continueUrl` on `APP_ORIGIN`; Identity Platform upgrade added to section 2.
+10. **Wrapper path and name.** **Resolved by LLD 5 section 4.2:** `defineCallable` in `functions/src/api/callable.ts` (`callable` deprecated alias); P12, lint and file tree updated here. LLD 4's `guestOk` option is the spec's `allow` containing `"guest"`; LLD 4 sections 2.2 and 13 now use `allow`.
+11. **Logger field and event set.** **Resolved:** section 9 is the superset of LLD 5 section 9 and LLD 6 section 7.2 plus LLD 3 and LLD 4 events. `outbox.sent` removed. LLD 3's `deletion.stuck` and `store.size.warn` alerts added.
+12. **Runtime options and `beforeEmailSent`.** Open until the first deploy: `cpu: 1` at 256MiB, `concurrency: 80`, `consumeAppCheckToken: false` (LLD 5 conflict 14), and `beforeEmailSent` support in the pinned `firebase-functions` (LLD 5 8.1). If unsupported, `beforeEmailSent` leaves `exports.json` and Identity Platform is still needed for anonymous cleanup.
+13. **Identity Platform cost.** Free tier assumed to cover this scale (LLD 4 conflict 12); confirm at upgrade. Fallback is a scheduled `listUsers` sweep.
+14. **`deletionRunner` name. RESOLVED.** `deletionRunner` is assigned here for LLD 3's `onDocumentCreated("deletions/{gameId}")` export; LLD 3 section 6.4 now uses the name and it matches `exports.json`.
+
+## Interfaces to other LLDs
+
+| LLD | This LLD provides | This LLD expects |
+|---|---|---|
+| 1 Engine | `packages/engine` layout, tsconfig (`lib: ES2023`, `types: []`), isolation lint (P5), `bun test` and fast-check wiring, seeded `FC_SEED` runs (P11) | Pure `decide` and `project` exports from `src/index.ts`; clock only via `ctx.now`, randomness only via `Rng`; deps limited to `@dc/contracts` plus allowlisted pure libraries |
+| 2 Projector | Same package rules as Engine; property test harness location and CI gate | Exports `project`/`projectFeed` from `@dc/engine`; no Node or Firebase imports |
+| 3 Store & command transaction | Emulator integration harness against the Node bundle (P9); `fn-runtime` Firestore role; TTL policy setup for the five groups; lint block for `functions/src/store` (ST2); `firestore.rules`/`firestore.indexes.json` deploy path and order (P16); rules test harness (P10) | `expiresAt` (`Timestamp`) on `idem`, `outbox`, `notifLog`, `rateLimits`, `deletions` docs; `deletionRunner` export; every new collection gets a rules denial test; composite indexes declared in `firestore.indexes.json`; `command.done`, `command.rejected`, `txn.retry`, `store.size.warn`, `deletion.stuck`, `roomcode.collision` log events with `attempts`, `latencyMs` |
+| 4 Identity | Custom-token IAM (self-granted `serviceAccountTokenCreator`), Auth provider setup, `diag` probe in the walkthrough, `fn-runtime` Auth admin role | Which Auth admin calls it makes (to confirm the role list); email-link `continueUrl` and authorized-domain needs; the `auth.*` log events without secrets; `SEAT_DERIVATION_KEY`, `APP_ORIGIN`, `CODE_WINDOW_MS`, `CODE_LOOKUP_ENABLED`; Identity Platform upgrade (section 2); `identityOutbox` in `exports.json` |
+| 5 Command API & contracts | `defineCallable` wrapper (P12, `functions/src/api/callable.ts`) enforcing region, App Check, service account and error logging; `@dc/contracts` package rules; `functions/exports.json` check; smoke test call path | Every deployed function registered through `defineCallable`; params `COMMAND_MIN_INSTANCES`, `TRUSTED_HOPS`; logger fields and metrics of its section 9; a cheap `lobbyInfo` (or equivalent) usable by smoke tests; contract version policy for the web/functions deploy skew window |
+| 6 Notifications & Scheduler | Scheduler API enablement, Secret Manager bindings, `fn-runtime` FCM role, `push.result` and `reminder.sweep.done` metrics and alerts | Declare `onSchedule` and outbox trigger exports in `exports.json`; emit the specified log fields (all in section 9); `housekeeping`, `notifyOutbox`, `reminderSweep` in `exports.json`; `sweep.ts` import lint (P21); sweep cadence stated if not hourly |
+| 7 Web Client | Vite mode and env files, `test:web` script and CI step, `check-web-size.ts` step, web devDependencies, Hosting config and headers (`Referrer-Policy`, single `/sw.js`), preview channel flow, Playwright runner against emulators, App Check debug token for previews | Initializes App Check before any callable or listener; imports only `@dc/contracts`; reads all config from `env/*.env`; service worker and manifest served per the no-cache headers |

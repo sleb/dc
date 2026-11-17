@@ -71,20 +71,29 @@ The host can override the target in setup. If a round could somehow produce a ti
 ## Web-specific rules
 
 - **No timers:** Rounds wait for players; nothing expires on its own.
-- **Notifications:** Players get a push notification when it's their turn: a new green card to play on or, for the judge, all cards in (no email notification to start). A daily reminder goes to anyone the round is waiting on.
+- **Notifications:** A player gets a push notification whenever they become the one the game is waiting on (no email notification to start). Copy is generic: no card text, no names. Pushes go out:
+  - when writing starts, to every player ("write your cards");
+  - when a new round opens, to every non-judge player;
+  - when all cards are in or submissions are closed, to the judge;
+  - when judging passes to a new judge, to that new judge;
+  - when a paused game resumes, to the players the game is waiting on;
+  - when the judge picks a winner, to everyone in the game;
+  - when the game ends, to everyone.
+
+  A player who joins late is already in the app, so they get no push, but they are included in reminders. A daily reminder goes to anyone the game is still waiting on, in any phase: players who haven't finished writing, players who haven't submitted, or the judge.
 - **Closing a round early:** The judge or host can close submissions and reveal what's in at any time, with no minimum wait. Players who missed it keep their hand and sit out that round.
-- **Stalled judge:** If the judge hasn't picked, the host can pass judging to the next player at any time, who picks from the same cards. If that player submitted a card, it goes back to their hand.
+- **Stalled judge:** If the judge hasn't picked, the host can pass judging to the next player at any time, who picks from the same cards. If that player submitted a card, it goes back to their hand. If that leaves nothing to judge, the round is voided and a new round opens with the passed-to player as judge.
 - **Coming and going:** There's no live connection to lose. Players open their game link whenever they like and pick up with the same hand.
 - **Catching up:** A round-by-round feed shows each green card, every card played and who played it, so anyone returning after a day can see what they missed.
-- **Late joins:** New players can join at any point. They write their cards (same counts), which are shuffled into the decks, then join the next round with 7 cards and 0 points.
+- **Late joins:** New players can join at any point. They write their cards, which are shuffled into the decks, then join the next round with 7 cards and 0 points. A late joiner may be asked to write more than the standard counts, so the decks still meet the minimums for the larger table. The score target is fixed when the game starts and does not change as players join.
 - **Away players:** The host can remove a player at any time, and rounds stop waiting for them. There is no automatic away status.
-- **Leaving:** A player who leaves has their hand returned to the red deck. The host can also remove a player.
+- **Leaving:** A player who leaves has their hand returned to the red deck and their score pile returned to the green deck; their points leave with them. The same applies when the host removes a player.
 - **Rejoining:** Each player has a personal link that keeps working until they're removed, so they can pick up their seat on a new device. The host can reissue a player's link, which stops the old one working.
 - **Host plays too:** The host is also a player, with a seat and a hand.
 - **Deleting a game:** Games are kept until the host explicitly deletes them. Until then, finished games stay viewable (history and awards) through the same links, by players and spectators alike.
 - **Host leaves:** The host needs to be signed in to run the game, so if they leave it stalls until they return. Host transfer can be added later if this becomes a problem.
 - **Fewer than 3 players:** The game pauses until a third player joins or the host ends it.
-- **Content:** All cards are player-written, so there are no packs to pick. The host sets the profanity filter for card text and display names (on for family groups, off for adults) and can remove any card or player.
+- **Content:** All cards are player-written, so there are no packs to pick. The host sets the profanity filter for card text and display names (on for family groups, off for adults) and can remove any card that has been shown to the table (played into a round's reveal, or in a resolved round) or any player. A card removal that would leave the decks below the minimums for the current player count is refused; the host's way out is to end the game.
 
 ## Optional variants
 
@@ -94,7 +103,7 @@ Off by default; the host can enable them in setup.
 - **Write-in:** Once per game, a player can write a new red card on the spot instead of playing one from their hand.
 - **Redraw:** Once per game, a player can discard their hand and draw 7 new cards.
 - **People's choice:** Players (and spectators, if enabled) can vote on the best card each round, independent of the judge's pick; players can't vote for their own card, and votes never count toward winning. At game end, a People's Choice award goes to the player with the most votes across all rounds, and the three most-voted plays of the game are shown as gold, silver and bronze.
-- **Spectators:** People can watch a game via the link without playing, and can vote on the People's Choice.
+- **Spectators:** People can watch a game via the link without playing, and can vote on the People's Choice. With spectator voting on, a seated player could open the link anonymously and vote for their own card or vote twice; this is accepted, since People's Choice never affects scoring. With spectators off, resolved rounds remain readable to anyone who holds the game id or link; turning spectators off does not make a game's history private.
 - **Saved decks:** The host can save a game's cards and reuse them next time, so a group's deck grows over game nights. The host decides how a saved deck is combined with newly written cards.
 
 ## Decisions
