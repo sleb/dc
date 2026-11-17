@@ -440,15 +440,9 @@ GET /lobby/{roomCode}          -> { gameId?, joinable, playerCount }   // pre-jo
 | R6 | Lost updates under concurrent commands | S1/S2 single writer with CAS, plus idempotency |
 | R7 | Games persist until deleted, so abandoned games accumulate | Accepted (S5, Q6); host-initiated delete; revisit if storage cost matters |
 
-## 8. Technology leanings (non-binding)
+## 8. Technology
 
-Chosen to be easy to swap since the components above are the contract.
-
-- Client: TypeScript, installable PWA with a service worker for push; plain SSE for the feed.
-- Engine: TypeScript, shared by server and (for tests/fixtures only) client; no framework dependencies.
-- Store: Postgres with one row per game aggregate plus event and outbox tables; `version` CAS in a single transaction. A per-game actor/durable-object model is an equally good fit for S1.
-- Notifications: standard Web Push (VAPID); outbox drained by a worker.
-- Email: transactional provider, used only for host sign-in links.
+Decided: Firebase backend (Firestore, Cloud Functions, Auth, FCM, Hosting) with a TypeScript React PWA. See [tech-stack.md](./tech-stack.md) for the component mapping. One deliberate deviation from this document: on Firestore the Change Feed (F1) is replaced by listeners on per-viewer, already-redacted view documents, since Firestore rules cannot hide fields in the aggregate.
 
 ## 9. Suggested build order
 
