@@ -168,7 +168,7 @@ stateDiagram-v2
 - E7. The green deck cannot run out before the game ends (`green count >= players × target`); late joiners add their green cards before they're active, preserving this. `WRITING -> PLAYING` is refused unless the pools meet the playability minimums below, which also determine how many cards each player must write (Q7, Q9).
 
 *Anonymity*
-- E8. **No authorship in the pool.** A card's author is known only while it is in a private draft. When a player marks writing "finished", their cards move into the anonymous pools and the author link is dropped. Nothing after that point, including host tools and logs, can say who wrote a card. No stored event or log can be used to reconstruct authorship: card ids are not derived from replayable seeds, and events for card-minting commands (`finishWriting`, `importDeck`, `writeIn`) carry neither seed nor actor.
+- E8. **No authorship in the pool.** A card's author is known only while it is in a private draft. When a player marks writing "finished", their cards move into the anonymous pools and the author link is dropped. Nothing after that point, including host tools and logs, can say who wrote a card. No stored event or log can be used to reconstruct authorship: card ids are not derived from replayable seeds, and events for card-minting commands (`finishWriting`, `importDeck`, `writeIn`) carry neither seed nor actor. Write-in cards stay in the game and recirculate like any card, and nothing stored or shown to other players marks a card or submission as a write-in (no `variant` in events, outbox rows, round docs or history; `powerUsage` is server-only and projected only to its owner; LLD 1, LLD 2). Accepted residual: players may guess a write-in from unfamiliar text.
 - E9. A submission's owner is recorded for the round but is not exposed to anyone (including the judge and host) until the round result is committed.
 - E10. `revealOrder` is fixed once at reveal time and persisted, so a refresh never reshuffles the judge's view.
 - E11. The judge can only pick a submission present in `revealOrder`, and only after the round is in `JUDGING`.
@@ -235,7 +235,7 @@ execute(gameId, cmd, principal, idempotencyKey) -> CommandResult      // realize
 | `deleteGame()` | Host (own callable) | any | Permanently deletes the game, its history and its seats; the only way a game is removed (S5) |
 | `markReminded(episode)` | System (Scheduler) | WRITING, PLAYING | Advances the reminder clock and records the reminder intent (section 3.9); a no-op if the episode changed or is not yet due |
 
-**Domain events** (consumed by the event log and Notifications; contain ids and kinds, never card text): `GameCreated`, `SettingsUpdated`, `PlayerJoined`, `PlayerLeft`, `PlayerRemoved`, `DeckImported`, `WritingStarted`, `PlayerFinishedWriting`, `PlayStarted`, `PlayerActivated`, `RoundOpened{judge}`, `SubmissionConfirmed{playerId}`, `HandRedrawn`, `SubmissionsClosed`, `JudgeChanged`, `RoundVoided`, `WinnerPicked`, `VoteCast`, `CardRemoved`, `GameFinished`, `GameEnded`, `GameDeleted`, `PausedChanged` (LLD 1 section 11). The notifying subset is in section 3.8.
+**Domain events** (consumed by the event log and Notifications; contain ids and kinds, never card text): `GameCreated`, `SettingsUpdated`, `PlayerJoined`, `PlayerLeft`, `PlayerRemoved`, `DeckImported`, `WritingStarted`, `PlayerFinishedWriting`, `PlayStarted`, `PlayerActivated`, `RoundOpened{judge}`, `SubmissionConfirmed{playerId}`, `HandRedrawn`, `SubmissionsClosed`, `JudgeChanged{reason: passed|left|removed|resumed}`, `RoundVoided`, `WinnerPicked`, `VoteCast`, `CardRemoved`, `GameFinished`, `GameEnded`, `GameDeleted`, `PausedChanged` (LLD 1 section 11). The notifying subset is in section 3.8.
 
 ### 3.5 Game Store
 
@@ -313,12 +313,13 @@ toRoundDoc(record) -> RoundDoc;  projectFeed(records, sinceRound?) -> RoundDoc[]
 | `SubmissionsClosed` (all submitted, or the judge closed it) | the judge | Time to judge |
 | `JudgeChanged` | the new judge ("Time to judge" if all cards are in, else "You're judging"); the old judge only if they now owe a card ("Your turn") | |
 | `PausedChanged{paused:false}` | the players the game is waiting on | Game resumed |
-| `WinnerPicked` | all active players (merged into the next `RoundOpened` as "Your turn" for non-judges) | Round result |
-| `GameFinished` | all seated players | Game over |
-| Daily reminder (`Reminder`) | players the game is currently waiting on in WRITING, SUBMITTING or JUDGING | Reminder |
-| pause, `PlayerLeft`, `PlayerRemoved`, `PlayerJoined`, `GameEnded`, others | nobody | |
+| `WinnerPicked` | all seated players, including late joiners still writing (merged into the next `RoundOpened` as "Your turn" for non-judges) | Round result |
+| `GameFinished` | all seated players, including late joiners still writing | Game over |
+| `GameEnded` (the host ended the game) | all seated players (writing, ready or active), also while paused | Game ended ("The host ended the game.") |
+| Daily reminder (`Reminder`) | players the game is currently waiting on in WRITING, SUBMITTING or JUDGING, and late joiners still writing | Reminder |
+| pause, `PlayerLeft`, `PlayerRemoved`, `PlayerJoined`, others | nobody | |
 
-A late joiner who becomes waited-on in WRITING is already in the app, so gets no push, but is included in reminders. Nothing is sent while paused. Copy is generic (no card text, no names).
+A player is notified whenever they become newly waited-on, and reminded daily for as long as they remain waited-on, in WRITING, SUBMITTING and JUDGING (a late joiner still writing is reminded in any phase). Nothing is sent while paused, except that ending the game notifies everyone seated; copy is generic (no card text, no names). A late joiner who becomes waited-on in WRITING is already in the app, so gets no push.
 
 **Invariants.**
 - N1. **At most one visible notification per `(outbox row, recipient)`** (a rare duplicate alert is possible), enforced by a delivery record created before sending, so redelivery of the trigger cannot double-notify. A crash between provider acceptance and the record update may resend once with the same collapse key and tag; the device shows one notification, which may alert twice.
@@ -433,7 +434,7 @@ reissueRejoinLink { v, gameId, playerId } -> { rejoinUrl };  signOutEverywhere; 
 ```
 **Reads** (Firestore listeners, section 3.7)
 ```
-views/{uid}  or  views/spectator      -> ViewDoc { schema, rev, enabled, version, view: GameView | null, draftSeq?, draft? }
+views/{uid}  or  views/spectator      -> ViewDoc { schema, viewsRev, enabled, version, view: GameView | null, draftSeq?, draft? }
 rounds  (ordered by `round`)          -> resolved RoundDocs  (the catch-up feed)
 ```
 **Representative `GameView`** (superseded sketch, now per LLD 2 section 4.2 and LLD 5 section 2.5; what a player may see):
@@ -507,3 +508,4 @@ Resolved in PR review (these are now requirements; gameplay.md is updated to mat
 | Q11 | Notifications on every turn | A player is pushed whenever they become newly waited-on, in every phase including WRITING ("write your cards"), and on a new judge or an unpause; a daily reminder follows while they stay waited-on (section 3.8; LLD 6). |
 | Q12 | Leaver's score pile | A departing or removed player's score pile returns to the green deck; their points leave with them (E17). |
 | Q13 | `removeCard` reach | The host may remove only a card that has been shown to the table (played into a reveal, or in a resolved round), refused when it would drop totals below the playability minimums; `endGame` is the escape hatch (E5, LLD 1 section 8.6). |
+| Q14 | Write-in cards after use | Write-ins stay in the deck and are indistinguishable from other cards (E8). |

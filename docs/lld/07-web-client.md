@@ -27,7 +27,7 @@ Status: draft v0.1. Companion to [gameplay.md](../gameplay.md), [high-level-desi
 
 ```
 apps/web/
-  index.html  vite.config.ts  tsconfig.json  env/{staging,production,emulator}.env   # LLD 0
+  index.html  vite.config.ts  tsconfig.json  .env.staging  .env.production  .env.emulator   # Vite .env.<mode> names, LLD 0
   public/icons/  (192, 512, maskable, badge-72, apple-touch-icon)
   src/
     main.tsx                 # boot: capture #k, init App Check, render (section 2.4)
@@ -156,8 +156,8 @@ Resolution order (first match wins), implemented in `session/resolve.ts`:
 
 - **Host.** `sendSignInLinkToEmail(auth, email, { url: origin + "/host/finish?next=%2Fhost", handleCodeInApp: true })`; the email is kept in `localStorage["dc.hostEmail"]` for same-device completion, otherwise `/host/finish` asks for it (cross-device, LLD 4 section 3.1). After sign-in the client calls `hostProfile({v})` once (bootstrap, LLD 5 section 3.1) and `listGamesByHost`. UX cooldown: 60 s between sends, 5 per hour per browser. Sign-in errors map to copy: `auth/invalid-email`, `auth/expired-action-code`, `auth/invalid-action-code` ("This link has expired or was already used. Send a new one."), `auth/too-many-requests`, `auth/network-request-failed`.
 - **Installed iOS PWA** (LLD 4 oq 10): the email link opens in Safari, which has separate storage. `/host/finish` and Home both offer **"Paste your sign-in link"**: the user copies the link from the email, pastes it in the installed app, which calls `signInWithEmailLink(auth, email, pastedUrl)` (the code is consumed there). This needs no server work.
-- **Seat.** After `signInWithCustomToken` the SDK refreshes ID tokens hourly (LLD 4 section 4.5). `onIdTokenChanged` errors `auth/user-token-expired` or `auth/user-disabled` mean the seat was reissued or removed: go to `NeedsLink` (reissued, link replaced) or let the tombstone view (below) explain a removal.
-- **Revoked-seat classification.** `assertSeatLive` failures arrive as `NOT_AUTHORIZED` with `detail: "seat_revoked"` (the L5 editor adds it to `DETAIL_BY_CODE`, conflict 6): go to `NeedsLink` with the replaced-link copy, no probe. Fallback while talking to a server without the detail: `NOT_AUTHORIZED` with no `detail` forces `getIdToken(true)`; failure means revoked, success means an ordinary role rejection (generic copy).
+- **Seat.** After `signInWithCustomToken` the SDK refreshes ID tokens hourly (LLD 4 section 4.5). Revocation detection does **not** rely on the `onIdTokenChanged` error callback: Firebase never invokes it for a failed background refresh. Instead the client detects a dead seat explicitly in two ways: (a) a forced refresh `getIdToken(true)` on the game app at session start, on `visibilitychange` to visible, on `online`, and on any listener `permission-denied`; a rejection with `auth/user-token-expired`, `auth/user-disabled`, `auth/user-not-found` or `auth/invalid-user-token` means the seat was reissued or removed (a network error is transient and retried); (b) any command or callable answering `NOT_AUTHORIZED` with `detail: "seat_revoked"` (next bullet). Either goes to `NeedsLink` (reissued, link replaced), unless a tombstone view (below) already explains a removal. A seat token minted before a reissue carries a stale `ep` (seat epoch) claim and is rejected by the server even if the SDK still holds it (LLD 4, K-B), so (b) catches what (a) cannot.
+- **Revoked-seat classification.** `assertSeatLive` failures arrive as `NOT_AUTHORIZED` with `detail: "seat_revoked"` (the L5 editor adds it to `DETAIL_BY_CODE`, conflict 6): go to `NeedsLink` with the replaced-link copy, no probe. Fallback while talking to a server without the detail: `NOT_AUTHORIZED` with no `detail` forces `getIdToken(true)`; a rejection with one of the codes above means revoked, success means an ordinary role rejection (generic copy).
 - **Spectator.** `signInAnonymously(gameAuth)`, `spectate({v, gameId})`, then `onSnapshot(views/spectator)`. `available:false`, or `permission-denied`/`view: null` on the doc, shows "Spectating isn't available for this game" (LLD 3 section 3.2). Spectator votes are held locally per game (`dc.votes.{gameId}`, LLD 2 oq 5).
 - **Leave this device** (`/g/:id/me`): call `unregisterPush` for this game (LLD 6 section 2.3), `signOut(gameAuth)`, delete the IDB seat secret and registry entry, remove this game's local keys (`dc.draft.{gameId}`, `dc.votes.{gameId}`, `dc.sel.{gameId}.*`, and `dc.intent.{gameId}.*` in `sessionStorage`; one `clearGameLocal(gameId)` in `lib/storage.ts`, shared with removal and the Gone screen), then `terminate` and `clearIndexedDbPersistence` for the game app (section 10.2). The seat itself stays (LLD 4 threat table). On a shared device the draft mirror would otherwise expose the previous player's unfinished cards (the cards are theirs, not yet pooled).
 
@@ -170,10 +170,16 @@ Resolution order (first match wins), implemented in `session/resolve.ts`:
 const viewRef = doc(db, "games", gameId, "views", docId);         // docId: seat uid | hostId | "spectator"
 this.unsub = onSnapshot(viewRef, { includeMetadataChanges: true }, (snap) => {
   if (!snap.exists()) return snap.metadata.fromCache ? this.waitForServer() : this.setGone();   // missing from SERVER = deleted (LLD 3)
-  this.apply(ViewDocLooseSchema.parse(snap.data()), snap.metadata.fromCache ? "cache" : "server");
+  const raw = snap.data();
+  if (typeof raw.schema !== "number" || raw.schema > VIEW_SCHEMA) return this.block("schema");   // WC11: envelope version FIRST, before any parse
+  const parsed = ViewDocLooseSchema.safeParse(raw);
+  if (!parsed.success) return this.updateNeeded();                 // never crash on a doc we cannot read: "Update needed" banner, keep last view
+  this.apply(parsed.data, snap.metadata.fromCache ? "cache" : "server");
 }, (err) => this.onListenError(err));                              // permission-denied: probe (3.1), spectator doc: "unavailable"
 ```
 
+- **Schema check before parsing.** The strict and loose `ViewDoc` schemas pin `schema` to a literal (LLD 5 section 2.5), so a doc written by a newer server would fail the parse and look like a client bug. The listener, the poll path and `getDocFromServer` all read the raw envelope `schema` first: above `VIEW_SCHEMA` goes straight to the hard-block update screen (section 8.5); only an equal schema is parsed.
+- **Unknown enum values.** A newer server may add an enum member (for example a new `YouTurn`, `phase`, `status` or `audience`) without bumping `schema` (LLD 5 section 2.5). The loose schemas accept any string in enum positions (`z.union([z.enum(TUPLE), z.string()])`, conflict 21), so such a doc parses; the typed value then hits the default branch of the consuming `switch` (`screenFor` returns `unknown`) and shows the "Update needed" banner. Any other loose parse failure also routes to that banner, keeping the last good view.
 - One listener per open game, on one document (LLD 3: no `list` on views). The same snapshot carries the `draft` region (own draft, section 6.3).
 - **Rounds.** A single-document listener on `rounds/{view.resolved}` feeds the result panel. The History route (and `GameOver`) attaches `onSnapshot(query(collection(.., "rounds"), orderBy("round")))`; with the persistent cache the SDK syncs only deltas, so it also picks up the one permitted mutation (a `redacted` rewrite, LLD 3 ST13) that a cache-only read would miss. Doc ids are strings; order by the `round` field (LLD 2 section 7.1).
 - **`resolved` handshake (F6').** If `view.resolved = n` and `rounds/n` is not yet present, the result panel shows a skeleton (not a guess), polls `getDocFromServer` after 3 s and 10 s, and never renders names or card text for that round until the doc arrives. Names always come from `view.players[]` (round docs hold ids only).
@@ -183,19 +189,26 @@ this.unsub = onSnapshot(viewRef, { includeMetadataChanges: true }, (snap) => {
 
 ```ts
 // game/viewReducer.ts  (pure; unit tested)
-export function applyViewDoc(s: GameState, d: ViewDocLoose, src: "cache" | "server" | "poll" | "command"): GameState {
-  if (d.schema > VIEW_SCHEMA) return { ...s, blocked: "schema" };            // WC11: hard block
+const older = (v: number, r: number, sv: number, sr: number) => v < sv || (v === sv && r < sr);   // lexicographic (version, viewsRev)
+export function applyViewDoc(s: GameState, d: ViewDocLoose, src: "cache" | "server" | "poll"): GameState {
+  if (d.schema > VIEW_SCHEMA) return { ...s, blocked: "schema" };            // WC11: hard block (also checked on the raw doc, 4.1)
   if (d.view === null) return { ...s, spectatorUnavailable: true };         // disabled spectator doc
-  if (s.view && d.view.version < s.view.version) return s;                  // WC1: stale, discard (equal is accepted: identical content)
+  if (s.view && older(d.view.version, d.viewsRev, s.view.version, s.viewsRev)) return s;   // WC1: stale, discard (equal pair is accepted: identical content)
   const confirmed = s.confirmed || src !== "cache";
-  return { ...s, view: d.view, confirmed, draftRegion: applyDraftRegion(s.draftRegion, d) };
+  return { ...s, view: d.view, viewsRev: d.viewsRev, confirmed, draftRegion: applyDraftRegion(s.draftRegion, d) };
 }
 export function applyDraftRegion(r: DraftRegion, d: ViewDocLoose): DraftRegion {
   return d.draftSeq !== undefined && d.draftSeq >= r.seq ? { seq: d.draftSeq, draft: d.draft ?? null } : r;   // ordered by draftSeq, not version
 }
+// Command responses carry a bare GameView (LLD 5 section 3.3), no envelope and no draft region.
+export function applyCommandResult(s: GameState, r: { view: GameViewLoose; version: number }): GameState {
+  if (s.view && r.view.version < s.view.version) return s;                  // WC1 on view.version only; r.version is NOT an ordering key
+  return { ...s, view: r.view, confirmed: true };                           // viewsRev and draftRegion untouched
+}
 ```
 
-- Orderings: view region by `view.version`, draft region by `draftSeq`. The client **never** infers "I am behind" from `view.version` being smaller than a command response `version` (LLD 2 8.4, LLD 5 6.1: on a replay `version` can be lower than `view.version`). A command response's `view` goes through the same reducer with `src: "command"`.
+- Orderings: view region by the pair `(view.version, viewsRev)` compared lexicographically (K-F, LLD 2 section 8.2): after a projector deploy the Store rebuilds views at the same `version` with a higher envelope `viewsRev`, so the rebuilt snapshot wins and an older same-version snapshot (for example from the cache) is discarded. The draft region is ordered by `draftSeq`. The client **never** infers "I am behind" from `view.version` being smaller than a command response `version` (LLD 2 8.4, LLD 5 6.1: on a replay `version` can be lower than `view.version`).
+- **Command responses** do not go through `applyViewDoc`. `applyCommandResult` takes `response.view` (a `GameView`) and `response.version`, applies the WC1 check on `view.version` (equal accepted: the response view is freshly projected by the deployed projector), keeps the stored `viewsRev`, and never touches the draft region (a `saveDraft` response's `draftSeq` is handled by the draft store, section 6.3). A later listener snapshot at the same `version` and same or higher `viewsRev` is then accepted as usual.
 - Every enum `switch` over `phase`, `status`, `turn`, `audience` has a default branch that sets `unknownValue` and shows the "Update needed" banner (LLD 5 section 2.5, WC11).
 
 ### 4.3 Missing or late snapshots (C2, F3 revised)
@@ -205,7 +218,7 @@ export function applyDraftRegion(r: DraftRegion, d: ViewDocLoose): DraftRegion {
 | Mount, `visibilitychange` to visible, `pageshow` (bfcache), `online` | `getDocFromServer(viewRef)` through `applyViewDoc(..., "poll")` |
 | Visible and no server snapshot for 120 s | Same poll (cost: about 30 reads per hour per open tab) |
 | Listener error | Backoff re-attach (1, 2, 4, 8, max 30 s); polling continues meanwhile at 30 s |
-| Command response | Apply `response.view` immediately |
+| Command response | Apply `response.view` immediately through `applyCommandResult` (4.2) |
 | Hidden tab | Listener stays (the SDK manages it); no polling |
 
 C2 holds because nothing depends on having seen an earlier snapshot: a tab closed for days boots, reads one view doc and at most the latest round doc.
@@ -242,7 +255,7 @@ async function send<T extends ClientCommandType>(type: T, payload: PayloadOf<T>)
 ```mermaid
 stateDiagram-v2
     [*] --> Pending: tap (key minted, slot locked, UI shows "Sending")
-    Pending --> Applied: ok:true (view applied through reducer)
+    Pending --> Applied: ok:true (view applied via applyCommandResult)
     Pending --> Definitive: ok:false (any ErrorCode), invalid-argument, resource-exhausted
     Pending --> Backoff: aborted, unavailable, deadline-exceeded, network (same key)
     Backoff --> Pending: delay 0.5,1,2,4,8 s full jitter, max 5 retries
@@ -258,7 +271,7 @@ Rules (binding table of LLD 5 section 6.5, specialized):
 
 | Outcome | Client action |
 |---|---|
-| `ok:true` | Apply `view` (reducer), key discarded. A `replay: true` is treated the same |
+| `ok:true` | Apply `view` via `applyCommandResult` (4.2), key discarded. A `replay: true` is treated the same |
 | `ok:false` | Definitive: render copy for `reason` and `detail`; never auto-retry; discard key |
 | `RATE_LIMITED` | Disable the slot for `retryAfterMs` and show the countdown |
 | `aborted`, `unavailable`, `deadline-exceeded` | Backoff with the same key (timeout is 35 s client side, LLD 5 section 6.4) |
@@ -287,6 +300,7 @@ An unknown outcome is **never** rendered as success (WC4): the UI reads "Not con
 | Remembered games registry | IndexedDB `dc/games` | gameId: `{role, name?, lastOpenedAt, lastSeenResolved, lastWaitingOnMe, lastSeenAt}` | Cosmetic; host list rebuilt by `listGamesByHost`; seat entries rebuilt only via the link |
 | Unconfirmed red-card or winner selection | memory + `sessionStorage` | `dc.sel.{gameId}.{round.number}` | Discarded when `round.number` or phase changes (WC8); never sent anywhere |
 | In-flight idempotency key | memory + `sessionStorage` | `dc.intent.{gameId}.{slot}` (LLD 5 section 6.3) | Cleared on definitive answer |
+| Pending join key | `sessionStorage` only | `dc.join.pending` = `{key, target, displayName}` | The join `idempotencyKey` is a credential (a same-key replay can return the seat's custom token and rejoin secret until the seat's first sign-in, LLD 4, K-C). Minted once per join attempt, reused for every retry, including after a tab reload or after the room code expired; deleted as soon as the join response is persisted (custom token signed in and `{secret, playerId}` written to IndexedDB `seats`) or on a definitive rejection. Never in `localStorage`, IndexedDB, route state, diagnostics or any log |
 | Draft mirror | `localStorage` | `dc.draft.{gameId}` = `{red, green, baseSeq, base, dirty}` | Survives reloads; cleared on `finishWriting` ok, on leave, removal and Gone (`clearGameLocal`) |
 | Spectator votes | `localStorage` | `dc.votes.{gameId}` | Lost with storage; a new uid is a new vote (LLD 4 section 7). Cleared on leave, removal and Gone. Spectator voting is a weaker identity by design (a seated player can vote anonymously, including for their own card; People's Choice never affects scoring); UI copy stays neutral and does not claim one vote per person |
 | Notification state | IndexedDB `dc/meta`, `dc-sw/receipts` | `deviceId` (128-bit, once per install), last registered token hash, `notif.off.{gameId}`, prompt dismissals, `missedNotices` | Gone: re-register on next opt-in |
@@ -304,8 +318,10 @@ Selecting a card is local; **Confirm** is the only moment a command exists. The 
 State per game: `local` (what the editor shows), `base` (the last server draft applied, with `baseSeq = draftSeq`), `dirty`.
 
 - **Edits** update `local` and the `localStorage` mirror (throttled 300 ms). A save is scheduled **1.5 s after the last keystroke** (LLD 5 section 6.5), and flushed immediately on blur, on `visibilitychange` to hidden, on `pagehide`, and before `finishWriting`.
-- **One in flight.** Saves are serialized (slot `draft`, no concurrency). `saveDraft` sends the full `{red, green}` arrays; texts are trimmed and empty rows are not sent. On `ok:true` with `draftSeq = s`: `base := sent`, `baseSeq := s`, `dirty := local !== base` (typing during the flight schedules another save).
-- **Remote draft (another device or tab).** A snapshot with `draftSeq > baseSeq` is merged three-way, treating each color as a set of normalized texts (NFC, trimmed, case-folded):
+- **One in flight.** Saves are serialized (slot `draft`, no concurrency). `saveDraft` sends the full `{red, green}` arrays; texts are trimmed and empty rows are not sent. The draft store keeps the in-flight payload as `sent` (and `sentFrom = base`, the base it was built on). On `ok:true` with `draftSeq = s`: if `s > baseSeq` then `base := sent`, `baseSeq := s`; in all cases `dirty := local !== base` and `sent := null` (typing during the flight schedules another save).
+- **Own echo during a flight.** The listener can deliver the snapshot of the client's own in-flight save before its response arrives. A snapshot with `draftSeq > baseSeq` whose draft equals `sent` (same normalized texts per color) while `sent !== null` is the echo, **not** a remote edit: `base := sent`, `baseSeq := draftSeq`, `local` is kept unchanged (later local edits are thereby rebased onto the sent draft), `dirty := local !== base`. The later response with the same `draftSeq` is then a no-op. (A remote edit that happens to equal `sent` is indistinguishable and harmless: the content is identical.)
+- **Remote snapshot during a flight.** Any other snapshot with `draftSeq > baseSeq` that arrives while `sent !== null` is buffered (latest wins) and processed when the flight resolves, once the own save's `s` is known: if its `draftSeq > s` it is merged against `base = sent` as below; if its `draftSeq < s` our full-array save already overwrote it, so its changes are recovered with `local := merge3(sentFrom, local, remote)` while `base` stays `sent` and `baseSeq` stays `s`, and a new save is scheduled if `local !== base`.
+- **Remote draft (another device or tab).** A snapshot with `draftSeq > baseSeq` (outside a flight, or released from the buffer) is merged three-way, treating each color as a set of normalized texts (NFC, trimmed, case-folded):
 
 ```ts
 // drafts/merge.ts  (pure)
@@ -365,7 +381,7 @@ Field names are LLD 2 section 4.2. "Cmds" are client command types (LLD 5 sectio
 | Screen | Shown when | View fields rendered | Cmds | Empty / loading / error specifics |
 |---|---|---|---|---|
 | Home | `/` | none (registry, `listGamesByHost`) | `joinGame`, `lobbyInfo` (optional), `listGamesByHost`, `hostProfile` | No games: join form and "Host a game" only. List skeleton. `RATE_LIMITED` shows countdown. Not-found copy is uniform for unknown, expired (72 h), full and finished codes |
-| Join (invite) | `/g/:id`, no session | none (`lobbyInfo` result only) | `joinGame`, `spectate` path | Name field with 24-code-point counter; `NAME_TAKEN`, `ROOM_FULL`, `CONTENT_REJECTED`, `WRONG_PHASE` inline; code and name sent together (LLD 5 section 7.3) |
+| Join (invite) | `/g/:id`, no session | none (`lobbyInfo` result only) | `joinGame`, `spectate` path | Name field with 24-code-point counter; `NAME_TAKEN`, `ROOM_FULL`, `CONTENT_REJECTED`, `WRONG_PHASE` inline; code and name sent together (LLD 5 section 7.3). Transient failures retry with the same `idempotencyKey` from `dc.join.pending` (6.1), so a join that committed but whose response was lost is recovered even after the code expired; a replay answered `NOT_FOUND` (the seat was already signed in somewhere) deletes the pending key and shows the not-found copy with a pointer to the personal link |
 | Host sign-in / create | `/host` | none | email link, `createGame` | Sent-state with resend cooldown; paste-link path; create form (`hostName`, settings) |
 | Lobby (`lobby`) | `you.turn = lobby` | `players[]` (`name`, `status`, `isHost`), `target`, `targetFrozen`, `settings`, `you.roomCode`, `host.playability` | host: `startGame`, `updateSettings`, `removePlayer`; all: `leave` | Fewer than 3 players: "Need {n} more to start". `startGame` `NOT_PLAYABLE` copy. Share sheet with room code (valid 72 h) and link (no expiry) |
 | Writing (`write`) | `you.turn = write` (also late joiners in PLAYING) | `you.writeTarget`, `you.cardsLeft`, `draft` region, `players[].cardsLeft`, `waitingOn` | `saveDraft`, `finishWriting`, `leave` | Empty lists show examples. Save state "Saved / Saving / Not saved". Late joiner banner: "You joined a game in progress. Write your cards, then you'll be dealt in next round" |
@@ -377,7 +393,7 @@ Field names are LLD 2 section 4.2. "Cmds" are client command types (LLD 5 sectio
 | Judging, non-judge (`judgingWait`) | `you.turn = wait`, not judge | same `reveal[]` read-only, own card tagged "Yours" from `you.yourSubmission.cardId` | none | "Waiting for the judge to pick" |
 | Round result (panel) | `resolved` advanced | `rounds/{resolved}`: `green`, `winnerId`, `winnerCardId`, `plays[]` (with owners), `absent`; names from `players[]` | `castVote` (variant) | Skeleton until the doc arrives (F6'); redacted text shown as "[card removed]" |
 | Sit out (`sitOut`) | `you.turn = sit_out` | `round.green`, progress | none | "You're sitting this round out and will be dealt in next round" |
-| Paused (`paused`) | `you.turn = paused`, `paused` | same as the underlying phase, `players[]` | `leave`; host: `endGame` | "Paused until a third player joins" with invite share |
+| Paused (`paused`) | `you.turn = paused`, `paused` | same as the underlying phase, `players[]` | `leave`; host: `endGame` | "Paused until a third player joins" with invite share; `round.judgeId` may be `null` (LLD 2 4.2), in which case no judge is named |
 | Over (`over`) | FINISHED / ENDED | `winnerId`, `players[].score`, `awards`, `phase` | `castVote`, host `endGame`/`deleteGame` | ENDED: "The host ended this game"; podium card texts come from round docs; History link |
 | Board (spectator, unseated host) | `audience` spectator or host | `LiveViewBase` only | spectator `castVote` (if `vote`) | "Spectating" header; no hand. Disabled spectating: "Spectating isn't available" |
 | History | `/g/:id/history` | round docs, `players[]`, `awards`, `you.myVotes` | `castVote` | Empty: "No rounds yet"; own card has no vote button (server also rejects `own_card`) |
@@ -546,7 +562,7 @@ function status(): NotifStatus {
 | `permission_default`, `permission_denied`, `unsupported`, `ios_needs_install`, `registration_failed` | Persistent, dismissible-per-session banner on Lobby, Writing and Hand with the specific fix (per-platform re-enable text for `denied`) |
 | any | **Your-turn indicators that need no push (C4):** an in-page banner on open and on every transition into a waited-on state when `view.waitingOn` includes `you.playerId` ("It's your turn: pick a red card" / "Time to judge" / "Time to write your cards" / "The game is back on. It's your turn" after a resume); the rule is phase-independent, so it covers WRITING (turn `write`, still unfinished), SUBMITTING, JUDGING and resume-after-pause; document title `(1) Your turn - Deep Cuts` (generic text, no card content) and a favicon dot; `navigator.setAppBadge(1)` when waited on and visible, cleared when acted on; `aria-live="polite"` announcement |
 
-- **Phase coverage (U1).** LLD 2 section 4.4 already maps WRITING-phase unfinished writers to `you.turn = write` and a paused-then-resumed game back to the underlying turn, so no new `YouTurn` value is needed; the client keys the banner, title and badge on `waitingOn` alone. Pushes follow the LLD 6 triggers (writing started, new round, all submitted, new judge, resume, result, game over); the screen copy is generic and carries no card text or names.
+- **Phase coverage (U1).** LLD 2 section 4.4 already maps WRITING-phase unfinished writers to `you.turn = write` and a paused-then-resumed game back to the underlying turn, so no new `YouTurn` value is needed; the client keys the banner, title and badge on `waitingOn` alone. Pushes follow the LLD 6 triggers (writing started, new round, all submitted, new judge, resume, result, game over, and host-ended game, kind `game_ended`; result and game-end pushes also reach late joiners still writing, K-D); the screen copy is generic and carries no card text or names. The client renders no notification copy of its own: the worker shows the server's `title`/`body` (LLD 6 `COPY`, "The host ended the game." for `game_ended`), so a new kind needs no client change beyond the generic fallback for an unknown `v`.
 - **Badge from the worker.** On a displayed push, the worker records a receipt `{gameId, kind, at, seen:false}` and calls `setAppBadge(unseenGames)`; the page marks a game's receipts `seen` once a **server-confirmed** view for it is applied and clears the badge when none remain.
 - **"Not reaching you" heuristic** (LLD 6 section 6, interpreted in conflict 3): at the **first server snapshot of a page load**, if `waitingOn` now includes me, `registry.lastWaitingOnMe` was false and `lastSeenAt` is set, and there is **no** receipt for this game with `at > lastSeenAt`, count one missed notice; two consecutive misses show "Turn alerts don't seem to be reaching this device" with a button running `unregisterPush`, `deleteToken`, `getToken`, `registerPush`. Live transitions while the app is open never count. It only ever shows a hint.
 
@@ -581,9 +597,9 @@ self.addEventListener("message", (e) => { if (e.data?.type === "SKIP_WAITING") s
 | Signal | UI |
 |---|---|
 | `HttpsError` `failed-precondition` with `details.reason === "CLIENT_OUTDATED"` | Full-screen "Update required", stops all calls, runs `registration.update()` and `updateSW(true)`; if the page is still outdated after reload, unregister workers, clear `caches`, reload |
-| `ViewDoc.schema > VIEW_SCHEMA` | Same screen |
+| `ViewDoc.schema > VIEW_SCHEMA` (read from the raw envelope before any parse, section 4.1) | Same screen |
 | Response `sv > CONTRACT_V` | Non-blocking "New version available" banner and `registration.update()` |
-| Unknown enum value | "Update needed" banner on the affected screen |
+| Unknown enum value (accepted by the loose schema) or other loose parse failure | "Update needed" banner on the affected screen, last good view kept |
 
 ## 9. UX and design system basics
 
@@ -698,10 +714,15 @@ Persistent local cache with `persistentMultipleTabManager()`, per app. Implicati
 | Render per fixture | Each screen renders without error or console output; roles and names present |
 | Reveal order (E10) | For JUDGING fixtures the DOM order of `[data-card]` equals `round.reveal` order; re-render and reorder the unrelated `players[]` keeps it |
 | Anonymity DOM | No element contains both a reveal card and any `players[].name`; no owner text in JUDGING/SUBMITTING fixtures; title contains no card text |
-| Reducer | `applyViewDoc` is monotonic in `version`, ignores lower, accepts equal, ignores lower `draftSeq`, flags `schema > VIEW_SCHEMA`, handles `view: null` |
+| Reducer | `applyViewDoc` is monotonic in `(version, viewsRev)` lexicographically: ignores a lower pair, accepts an equal pair, accepts the same `version` with a higher `viewsRev` (rebuild) and then discards a cached snapshot at that `version` with the lower `viewsRev`; ignores lower `draftSeq`; flags `schema > VIEW_SCHEMA`; handles `view: null` |
+| Command result | `applyCommandResult` accepts `response.view` when `view.version >= current`, ignores a lower one, never reads `response.version` for ordering (replay with `version < view.version` still applies the view), and leaves `draftRegion` and `viewsRev` unchanged |
+| Envelope and enums | A raw doc with `schema = VIEW_SCHEMA + 1` (and otherwise unparseable fields) blocks with the update screen without calling the parser; a doc with an unknown `you.turn`, `phase`, `status` or `audience` string parses with the loose schema and shows "Update needed" (`screenFor` returns `unknown`), keeping the app running; any other loose parse failure shows the same banner and keeps the last view |
+| Revoked seat | With a fake Auth whose `onIdTokenChanged` error callback is never called: a forced `getIdToken(true)` rejecting with `auth/user-token-expired` (on visible, `online`, listener `permission-denied`) goes to `NeedsLink`; a network error does not; a command answered `NOT_AUTHORIZED/seat_revoked` goes to `NeedsLink` |
+| Join key | The join `idempotencyKey` is written only to `sessionStorage`, reused on a retry (also after a reload of the tab), deleted once the session and secret are persisted, and appears in no `localStorage`, IndexedDB, `console` or diagnostics string |
 | Command client | Fake transport: transient errors reuse the key and frozen `expectedVersion`; schedule is 0.5/1/2/4/8 s with jitter (fake timers); `ok:false` never retries; `RATE_LIMITED` locks the slot; `CLIENT_OUTDATED` blocks; second tap on a slot is a no-op |
 | STALE | Selection retained when the card still exists, cleared otherwise, toast shown, no resend |
 | Drafts | `merge3` properties (idempotent, commutative on disjoint edits, honors remote deletions); debounce 1.5 s; one in flight; flush on hidden; Finish gating on `you.cardsLeft` |
+| Draft own echo ([A]->[B]->[C]) | One card typed `A`, save of `[A]` in flight; card edited to `B`; the listener delivers the echo `[A]` (`draftSeq = s`) before the response; card edited to `C`; response `s` arrives; next save. The editor never shows `A` again, the final server draft is exactly `[C]` (not `[C, A]` or `[B, A]`), and no merge runs for the echo. Variant with a genuine remote edit buffered during the flight (`draftSeq` above and below `s`) keeps both sides' cards |
 | Error copy | Every `ERROR_CODES` entry and every `DETAIL_BY_CODE` pair has copy; every key in `en.ts` is used; lint finds no literal UI strings |
 | Notification status | Table over (iOS or not) x (standalone) x (PushManager) x (permission) gives the expected `NotifStatus`; the permission request is only reachable from a click handler |
 | Fragment | `#k=` captured, rejoin called, fragment stripped only after a definitive result; transient failure keeps it; the secret appears in no `history.state`, `console`, storage key or URL after redeem |
@@ -712,7 +733,7 @@ Persistent local cache with `persistentMultipleTabManager()`, per app. Implicati
 | Error copy (revoked) | `NOT_AUTHORIZED/seat_revoked` goes straight to `NeedsLink`; no detail triggers the token probe |
 | Isolation | Static test: `apps/web/src` imports only `@dc/contracts` among workspace packages, no `@dc/engine` (LLD 0 P5) |
 
-### 11.2 End to end (Playwright, `e2e/`, emulators, `vite preview` with `env/emulator.env`, LLD 0 section 6)
+### 11.2 End to end (Playwright, `e2e/`, emulators, `vite preview` built with `--mode emulator` (`.env.emulator`), LLD 0 section 6)
 
 Multiple browser contexts play one game against the Node bundle with `PUSH_SENDER=fake` (LLD 6 section 4.5) and the emulator clock.
 
@@ -758,17 +779,17 @@ Multiple browser contexts play one game against the Node bundle with `PUSH_SENDE
 
 | # | Invariant | Mechanism and tests |
 |---|---|---|
-| **WC1** | The applied view's `version` never decreases and the draft region's `draftSeq` never decreases; unknown `schema` blocks | `applyViewDoc`; reducer tests |
+| **WC1** | The applied view's `(version, viewsRev)` pair never decreases lexicographically (command results: `view.version` never decreases) and the draft region's `draftSeq` never decreases; unknown `schema` blocks, checked on the raw envelope before parsing | `applyViewDoc`, `applyCommandResult`; reducer, command-result and envelope tests |
 | **WC2** | UI game state is derived only from the latest applied `GameView` plus local-only state; a command's effect appears only after a view is applied (no optimistic update) | Single writer `GameSession.apply`; E3, command tests |
 | **WC3** | One idempotency key per user intent, reused for every retry of that intent; `expectedVersion` for the five required commands equals `view.version` at tap time and is not recomputed | `Intent`; command tests |
 | **WC4** | An unknown outcome is never shown as success | "Not confirmed yet" state; E9 |
 | **WC5** | Reveal cards are rendered in `round.reveal` order, keyed by `submissionId`, with no owner shown before the round doc; no card text, name or id appears in the title, URL, logs, notification copy or analytics (none exists) | Reveal-order and anonymity DOM tests; lint (no `console`, no `sort` on reveal paths) |
-| **WC6** | The rejoin secret is never in a URL after redeem, a log, route state, a worker message or a notification; stored only in IndexedDB `seats` | Fragment tests; E5 |
+| **WC6** | The rejoin secret is never in a URL after redeem, a log, route state, a worker message or a notification; stored only in IndexedDB `seats`. The pending join `idempotencyKey` lives only in `sessionStorage` until the join response is persisted, then is deleted, and is never logged | Fragment tests; join-key test; E5 |
 | **WC7** | A seat or spectator session lives only in its game's named app and the host session only in the default app; actions on one game never change another's session | E12 |
 | **WC8** | The unconfirmed selection is keyed by `(gameId, round.number)` and discarded when either changes; it is never sent to the server | Selection tests |
-| **WC9** | At most one `saveDraft` in flight; edits are flushed on blur, hide and before `finishWriting`; remote drafts merge three-way and an older `draftSeq` never overwrites a newer one | Draft tests; E2 |
+| **WC9** | At most one `saveDraft` in flight; edits are flushed on blur, hide and before `finishWriting`; remote drafts merge three-way, the snapshot of the client's own in-flight save is recognized as its echo (never merged as a remote edit), and an older `draftSeq` never overwrites a newer one | Draft tests, [A]->[B]->[C] echo test; E2 |
 | **WC10** | The push permission prompt is never requested on load or without a user gesture; every `NotifStatus` has visible UI and a working non-push signal | Status tests; E8 |
-| **WC11** | `CLIENT_OUTDATED` and `ViewDoc.schema > VIEW_SCHEMA` hard-block; `sv` above ours soft-warns; unknown enum values hit a default branch | Reducer and gate tests; E10 |
+| **WC11** | `CLIENT_OUTDATED` and `ViewDoc.schema > VIEW_SCHEMA` hard-block; `sv` above ours soft-warns; unknown enum values parse under the loose schema and hit a default branch ("Update needed"), never a crash | Reducer, envelope-and-enums and gate tests; E10 |
 | **WC12** | Remote screen changes never move focus and are announced in a polite live region; interactive targets are at least 44x44 CSS px; no literal UI strings in components | Component tests; axe; lint |
 | **WC13** | Every `ErrorCode` and `detail` has user copy (compile time and runtime) | Error-copy tests |
 | **WC14** | Cached snapshots enable no commands until a server-confirmed snapshot or poll applies; no mutation is queued across page loads | Cached-boot test; E4, E9 |
@@ -797,6 +818,8 @@ Multiple browser contexts play one game against the Node bundle with `PUSH_SENDE
 18. **Late-join and phase hints on the invite screen.** `lobbyInfo` returns no phase (ID14), so the "game in progress" message appears only after joining (late-joiner banner), not before.
 19. **Spectators off and history.** Resolved rounds stay readable to anyone with the game id; host copy says so (section 7.4).
 20. **`YouTurn` coverage for U1.** No gap found: LLD 2 section 4.4 covers WRITING (`write`) and resume (underlying turn). If LLD 2 later adds a distinct resume or waiting-in-WRITING value, it is an LLD 2 change, not made here.
+21. **Loose schemas and unknown enum values. RESOLVED by LLD 5 section 2.5** (loose-schema rule: every enum position is `z.string()` in the loose variant via `en()`). `makeViewSchemas("loose")` must accept any string in enum positions (`phase`, `status`, `turn`, `audience`, `reason`, and similar), for example `z.union([z.enum(TUPLE), z.string()])`, while the strict server schemas stay closed; otherwise an additive enum member fails the parse instead of reaching the client's default branch (section 4.1). The client additionally treats any loose parse failure as "Update needed" and checks the envelope `schema` before parsing, so the hard block does not depend on the literal in the schema.
+22. **Command responses carry no `viewsRev`. RESOLVED by LLD 2 section 8.4** (a command response carries only `version`; a stale same-version snapshot arriving after it is followed by the rebuilt snapshot the same transaction wrote, so the doc converges). The response `view` is a bare `GameView` projected by the deployed projector, so `applyCommandResult` orders it by `view.version` only and keeps the stored `viewsRev` (section 4.2). A rebuilt snapshot at the same `version` is still accepted afterwards; the worst case is one redundant re-render.
 
 ## Interfaces to other LLDs
 
@@ -804,8 +827,8 @@ Multiple browser contexts play one game against the Node bundle with `PUSH_SENDE
 |---|---|---|
 | 0 Platform | `apps/web` layout, Vite modes and env consumption, `vite-plugin-pwa` config, `scripts/check-web-size.ts`, Playwright specs in `e2e/`, `test:web` invocation, preview-channel behavior (staging debug App Check token) | Hosting headers per conflict 12 (`Referrer-Policy`, no-cache for `/sw.js`), SPA rewrite excluding `/__/`; CI step for web tests and optional WebKit/Firefox nightly; App Check debug token plumbing; `web` imports only `@dc/contracts` (P5) |
 | 1 Engine | Nothing (never imported). Renders `Rejection` codes and `detail` strings as copy; sends the 15 client commands unchanged | `ErrorCode`/`detail` stay inside `DETAIL_BY_CODE`; `TEXT_LIMITS` exported via contracts (conflict 5, resolved); `saveDraft` rejection semantics (conflict 8) |
-| 2 Projector | Consumption rules: own `views/{uid}` or `views/spectator`, `rounds` by `round`, version and `draftSeq` ordering, `resolved` handshake, `DepartedView` and spectator fallback, default branches for enums, cache and anonymity handling | `GameView` fields exactly as LLD 2 section 4.2; `you.turn` and `cardsLeft` as the only derived UI inputs; golden fixtures exported (conflict 11); `reveal` order stable (PJ6) |
+| 2 Projector | Consumption rules: own `views/{uid}` or `views/spectator`, `rounds` by `round`, `(version, viewsRev)` and `draftSeq` ordering, `resolved` handshake, `DepartedView` and spectator fallback, default branches for enums, cache and anonymity handling | `GameView` fields exactly as LLD 2 section 4.2; `viewsRev` in the `ViewDoc` envelope (K-F); `you.turn` and `cardsLeft` as the only derived UI inputs; golden fixtures exported (conflict 11); `reveal` order stable (PJ6) |
 | 3 Store | Single-document listeners only, no `list` on views; treats a missing own view doc as deleted; `permission-denied` on the spectator doc as unavailable; serialized `saveDraft`; `deleteGame` `NOT_FOUND` as success | Rules as in LLD 3 section 3; round-doc `redacted` rewrites visible to a collection listener; draft region and `draftSeq` as in LLD 2 section 8.4 |
 | 4 Identity | Named-app-per-game session handling, host in the default app, fragment capture and strip, stored secret and "Copy my link", silent `rejoin`, sign-out and cache clearing, paste-link recovery, App Check on every app | `rejoin`, `joinGame`, `spectate`, `reissueRejoinLink`, `hostProfile` as in LLD 4/5; `Referrer-Policy`; `NOT_AUTHORIZED` detail `seat_revoked` (conflict 6, resolved) |
-| 5 Command API | Typed `call()` from `CALLABLES`, `v` on every request, `sv`/`VIEW_SCHEMA`/`CLIENT_OUTDATED` handling, key generation and retry table, `expectedVersion = view.version`, serialized and debounced `saveDraft`, loose view schemas, error copy per code | Contracts exports (`ERROR_CODES`, `DETAIL_BY_CODE`, `TEXT_LIMITS`, enum tuples, loose schemas, fixtures); behavior of `internal` for network failures (conflict 7) |
+| 5 Command API | Typed `call()` from `CALLABLES`, `v` on every request, `sv`/`VIEW_SCHEMA`/`CLIENT_OUTDATED` handling, key generation and retry table, `expectedVersion = view.version`, serialized and debounced `saveDraft`, loose view schemas, error copy per code | Contracts exports (`ERROR_CODES`, `DETAIL_BY_CODE`, `TEXT_LIMITS`, enum tuples, loose schemas that accept unknown enum strings (conflict 21), fixtures); `joinGame` replay by idempotency key independent of the room code (K-C); behavior of `internal` for network failures (conflict 7) |
 | 6 Notifications | Permission and install onboarding, `getToken` with our worker registration, `registerPush`/`unregisterPush` cadence (token change or 7 days, `deviceId`), always-show push handler, `tag`/`renotify`, click routing to `/g/{id}`, receipts and the "not reaching you" hint, badge | Payload shape per LLD 6 section 3.4 (verify raw form, conflict 2); worker location decision (conflict 1); `VITE_FCM_VAPID_KEY` in env files |

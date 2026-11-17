@@ -77,10 +77,10 @@ The host can override the target in setup. If a round could somehow produce a ti
   - when all cards are in or submissions are closed, to the judge;
   - when judging passes to a new judge, to that new judge;
   - when a paused game resumes, to the players the game is waiting on;
-  - when the judge picks a winner, to everyone in the game;
-  - when the game ends, to everyone.
+  - when the judge picks a winner, to everyone in the game, including late joiners still writing their cards;
+  - when the game ends, whether someone reached the target or the host ended it, to everyone in the game (late joiners still writing included).
 
-  A player who joins late is already in the app, so they get no push, but they are included in reminders. A daily reminder goes to anyone the game is still waiting on, in any phase: players who haven't finished writing, players who haven't submitted, or the judge.
+  A player who joins late is already in the app, so they get no push to write, but they are included in reminders until they finish writing, even while rounds are being played. A daily reminder goes to anyone the game is still waiting on, in any phase: players who haven't finished writing, players who haven't submitted, or the judge.
 - **Closing a round early:** The judge or host can close submissions and reveal what's in at any time, with no minimum wait. Players who missed it keep their hand and sit out that round.
 - **Stalled judge:** If the judge hasn't picked, the host can pass judging to the next player at any time, who picks from the same cards. If that player submitted a card, it goes back to their hand. If that leaves nothing to judge, the round is voided and a new round opens with the passed-to player as judge.
 - **Coming and going:** There's no live connection to lose. Players open their game link whenever they like and pick up with the same hand.
@@ -100,7 +100,7 @@ The host can override the target in setup. If a round could somehow produce a ti
 Off by default; the host can enable them in setup.
 
 - **Pitch it:** Players can add a short written justification (up to 140 characters) with their card.
-- **Write-in:** Once per game, a player can write a new red card on the spot instead of playing one from their hand.
+- **Write-in:** Once per game, a player can write a new red card on the spot instead of playing one from their hand. Write-in cards join the deck afterwards like any other card, and nothing marks them as write-ins.
 - **Redraw:** Once per game, a player can discard their hand and draw 7 new cards.
 - **People's choice:** Players (and spectators, if enabled) can vote on the best card each round, independent of the judge's pick; players can't vote for their own card, and votes never count toward winning. At game end, a People's Choice award goes to the player with the most votes across all rounds, and the three most-voted plays of the game are shown as gold, silver and bronze.
 - **Spectators:** People can watch a game via the link without playing, and can vote on the People's Choice. With spectator voting on, a seated player could open the link anonymously and vote for their own card or vote twice; this is accepted, since People's Choice never affects scoring. With spectators off, resolved rounds remain readable to anyone who holds the game id or link; turning spectators off does not make a game's history private.

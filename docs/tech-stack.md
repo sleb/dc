@@ -55,13 +55,13 @@ Every principal is a Firebase Auth user, so Firestore rules and callables share 
 | Principal | Firebase mechanism | Notes |
 |---|---|---|
 | **Host** | Email-link (passwordless) sign-in | Firebase sends the link itself, so **no email provider is needed in v1** (N5). Optionally brand the sender domain later. The Auth `uid` is the `hostId`. |
-| **Player seat** | **Custom token**, `uid = seat:{gameId}:{playerId}` | `joinGame` mints it. The player's **rejoin link** carries a long-lived secret in the URL fragment (`/g/{gameId}#k=...`, so it never reaches server logs). A new device calls `rejoin(secret)`, which verifies the hash and mints a fresh custom token for the same uid. |
+| **Player seat** | **Custom token**, `uid = seat:{gameId}:{playerId}` | `joinGame` mints it. The player's **rejoin link** carries a long-lived secret in the URL fragment (`/g/{gameId}#k=...`, so it never reaches server logs). A new device calls `rejoin(secret)`, which verifies the hash and mints a fresh custom token for the same uid. Seat custom tokens carry one developer claim, `ep` (seat epoch); there are no other custom claims. |
 | **Host's own seat** | The host's email-link `uid` | The host plays too (Q1), so their player record stores `uid = hostUid`. Commands resolve `request.auth.uid` to a playerId through the game's player list, so host powers and the host's seat share one identity. |
 | **Spectator** | Anonymous Auth | Their `uid` only dedupes People's Choice votes. |
 
 Mapping to HLD invariants:
 - I1: a seat's uid embeds `(gameId, playerId)`, and `command` rejects any uid not in that game's player list.
-- I2/Q3: the stored secret is a hash; the host can **reissue** a player's link, which replaces the hash and so kills the old link. Removing a player disables and tombstones the seat's Auth user and revokes its refresh tokens; the Auth user is deleted at the `deleteGame` cascade (a deleted user could be silently recreated by a still-valid custom token).
+- I2/Q3: the stored secret is a hash; the host can **reissue** a player's link, which replaces the hash and increments the seat's `epoch`, so it kills the old link and every custom token minted before the reissue (`assertSeatLive` refuses an `ep` claim that is not the current epoch, LLD 4). Removing a player disables and tombstones the seat's Auth user and revokes its refresh tokens; the Auth user is deleted at the `deleteGame` cascade (a deleted user could be silently recreated by a still-valid custom token).
 - I3: Firebase single-use email links.
 - I4: display-name uniqueness is enforced by the Engine on `join`.
 
@@ -75,14 +75,15 @@ Mapping to HLD invariants:
 games/{gameId}                      // Game aggregate plus a server-only `store` map (viewsRev, deleting). ALL client access denied
 games/{gameId}/drafts/{playerId}    // private drafts; the ONLY place authorship exists (E8). Denied to clients.
 games/{gameId}/rounds/{n}           // resolved RoundDocs, append-only (S3) except `removeCard` redaction. Written only at resolution. Read: any signed-in user
-games/{gameId}/views/{uid}          // `ViewDoc` envelope {schema, rev, enabled, version, view, draftSeq, draft}: a view region and the player's own draft region. Read: auth.uid == {uid}
+games/{gameId}/views/{uid}          // `ViewDoc` envelope {schema, viewsRev, enabled, version, view, draftSeq, draft}: a view region and the player's own draft region. Read: auth.uid == {uid} (seat uids also need token `ep` == the seat's `epoch`)
 games/{gameId}/views/spectator      // projected spectator view. Read: any signed-in user, if `enabled`
 games/{gameId}/events/{version}     // domain event log, one doc per version, no gaps (ids and kinds only; seed and actor omitted for card-minting commands)
 games/{gameId}/outbox/{rowId}       // transactional outbox, id `v{version}_{i}`; triggers Notifications and Identity. Denied to clients.
 games/{gameId}/idem/{hash}          // idempotency ledger (E4)
-games/{gameId}/seats/{playerId}     // rejoin-secret hash, epoch, notBefore, revokedAt (LLD 4). Denied to clients.
+games/{gameId}/seats/{playerId}     // rejoin-secret hash, epoch, notBefore, revokedAt, firstSignInAt (LLD 4). Denied to clients.
 games/{gameId}/notifLog/{rowId}_{uid}   // notification dedupe record (N1). Denied to clients.
 roomCodes/{code}                    // -> gameId. Denied to clients.
+joinIdem/{keyHash}                  // join replay index, keyHash = sha256(idempotencyKey) -> {gameId, playerId, uid, createdAt, expiresAt}; lets a same-key retry recover a seat after the code expired (LLD 4). Denied to clients.
 deletions/{gameId}                  // deleteGame cascade job. Denied to clients.
 hosts/{hostUid}                     // host profile
 hosts/{hostUid}/decks/{deckId}      // saved decks (D1, D2); read by that host only, written only by functions
@@ -91,7 +92,7 @@ pushSubs/{uid}_{gameId}             // FCM tokens for a seat: a `devices` map of
 rateLimits/{kind}_{key}             // abuse counters. Denied to clients.
 ```
 
-**TTL** (Firestore TTL policies on field `expiresAt`, exactly five collection groups; LLD 3 section 2.1): `idem` (both `games/*/idem`, 7 days, and `hosts/*/idem`), `outbox` (14 days), `notifLog` (30 days), `rateLimits` (two windows) and `deletions` (7 days after `done`). Nothing that defines a game expires (S5). Whether the pinned firebase-tools supports `ttl` in `fieldOverrides` is unverified; the fallback is a `gcloud firestore fields ttls update` per group in the deploy step (LLD 0).
+**TTL** (Firestore TTL policies on field `expiresAt`, exactly six collection groups; LLD 3 section 2.1): `idem` (both `games/*/idem`, 7 days, and `hosts/*/idem`), `outbox` (14 days), `notifLog` (30 days), `rateLimits` (two windows), `deletions` (7 days after `done`) and `joinIdem` (7 days). Nothing that defines a game expires (S5). Whether the pinned firebase-tools supports `ttl` in `fieldOverrides` is unverified; the fallback is a `gcloud firestore fields ttls update` per group in the deploy step (LLD 0).
 
 **Why this shape**
 - *Rounds are world-readable to any signed-in user who knows the game id.* Only resolved rounds are ever written there, and players and spectators see the same resolved history (V5, V7), so correctness holds by construction. Unguessable game ids give the same "anyone with the link" access the gameplay doc specifies for spectators and finished games (Q10).
@@ -114,23 +115,25 @@ Firestore retries a transaction on contention, which gives per-game serializatio
 match /games/{gameId} {
   allow read, write: if false;                                  // aggregate, drafts, events, outbox, idem, seats, notifLog
   match /rounds/{n}      { allow get, list: if signedIn(); allow write: if false; }
-  match /views/{uid}     { allow get: if signedIn() && request.auth.uid == uid && uid != 'spectator'; allow list, write: if false; }
+  match /views/{uid}     { allow get: if signedIn() && request.auth.uid == uid && uid != 'spectator'
+                           && (!uid.matches('^seat:.*') || request.auth.token.ep == get(.../seats/$(playerIdOf(uid))).data.epoch);   // seat epoch claim (K-B)
+                           allow list, write: if false; }
   match /views/spectator { allow get: if signedIn() && resource.data.enabled == true; allow list, write: if false; }
 }
 match /hosts/{hostUid} {
   allow read, write: if false;                                  // profile and the createGame ledger
   match /decks/{deckId}  { allow get, list: if signedIn() && request.auth.uid == hostUid; allow write: if false; }
 }
-match /{document=**} { allow read, write: if false; }           // roomCodes, pushSubs, rateLimits, deletions, anything unlisted
+match /{document=**} { allow read, write: if false; }           // roomCodes, joinIdem, pushSubs, rateLimits, deletions, anything unlisted
 ```
-(Final rules text: LLD 3 section 3.1. No rule uses `get()`/`exists()`.)
+(Final rules text: LLD 3 section 3.1. The only `get()` is the seat-epoch check on seat view reads, one extra document read per seat read or listener attach.)
 Rules are covered by `@firebase/rules-unit-testing` tests (the LLD 3 section 3.3 denial matrix) that attempt every forbidden read (another player's view, the aggregate, drafts, seats, outbox) and expect denial.
 
 ## 6. Notifications and scheduling
 
-- **Push:** FCM web push via the Firebase JS SDK and the single `/sw.js` service worker. A client registers its token through a callable (`registerPush`), which stores it in `pushSubs/{uid}_{gameId}` (a `devices` map, up to 5 tokens). Notifications cover the WRITING phase as well as turns and judging (U1; LLD 6 section 3.2).
+- **Push:** FCM web push via the Firebase JS SDK and the single `/sw.js` service worker. A client registers its token through a callable (`registerPush`), which stores it in `pushSubs/{uid}_{gameId}` (a `devices` map, up to 5 tokens). Notifications cover the WRITING phase as well as turns and judging (U1; LLD 6 section 3.2), round results, and game end: a finished game and a host-ended game (`GameEnded`, kind `game_ended`, "The host ended the game.") notify every seated player, including late joiners still writing.
 - **Outbox to FCM:** `notifyOutbox`, triggered by `onDocumentCreated('games/{gameId}/outbox/{rowId}')`, fans out per the HLD trigger table. Triggers are at-least-once, so the function creates a `notifLog/{rowId}_{uid}` doc before sending (N1). Payloads are ids and generic copy only (N2).
-- **Failure isolation (N4):** this function runs outside the command transaction; a push failure can never fail a command. Tokens that return `registration-token-not-registered`, `invalid-registration-token`, or (guarded, LLD 6 section 4.4) `invalid-argument` are removed.
+- **Failure isolation (N4):** this function runs outside the command transaction; a push failure can never fail a command. Tokens that return `registration-token-not-registered` (or an equivalent unregistered-token error) are removed; `invalid-argument` never prunes a token, it is counted and alerted on (LLD 6 section 4.4).
 - **Daily reminders:** the hourly `reminderSweep` queries games with `reminderDueAt <= now` (a denormalized top-level field the Engine maintains on the aggregate; automatic single-field index, no composite index and no `phase`/`paused` filters, because the field is non-null only while the game is waiting on someone and unpaused). For each due game it calls the Engine's `markReminded` system command through `runCommand`, which advances `reminderDueAt` and writes a `Reminder` outbox row in one transaction; the row is delivered like any other notification. Reminders cover every phase in which the game waits on someone: WRITING, SUBMITTING and JUDGING. A replayed idempotency key writes nothing, which makes the sweep idempotent (T2).
 - **iOS:** web push requires iOS 16.4+ and the PWA installed to the home screen. The client onboarding must prompt for install (R3).
 
@@ -204,6 +207,6 @@ Confirmed in PR review:
 
 ## 12. Next steps
 
-1. Create the Firebase projects, enable Auth providers (email link, anonymous) and upgrade to Identity Platform, then enable Firestore, Functions, Hosting, App Check and the FCM APIs, and configure the five TTL groups (LLD 0).
+1. Create the Firebase projects, enable Auth providers (email link, anonymous) and upgrade to Identity Platform, then enable Firestore, Functions, Hosting, App Check and the FCM APIs, and configure the six TTL groups (LLD 0).
 2. Scaffold the Bun monorepo and CI, including the functions bundling step, and verify a deploy to staging early since it is the riskiest tooling seam.
 3. Build `packages/engine` with its property tests first, as in the HLD build order, before touching Firebase.

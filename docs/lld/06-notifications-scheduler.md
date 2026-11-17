@@ -15,7 +15,7 @@ Items earlier LLDs pushed to this one, and their resolutions.
 | Composite index for the sweep (tech-stack 6, LLD 3 conflict 2) | None. Single-field `reminderDueAt` index (LLD 3 section 7) | `reminderDueAt` is non-null only while a wait episode exists: WRITING, SUBMITTING or JUDGING, unpaused (LLD 1 X8) |
 | `JudgeChanged` trigger (LLD 1 oq 5) | Notified, merged per outbox version (section 3.3). The new judge always gets a push; the old judge gets one only if they now owe a card | The judge change creates a new obligation |
 | Principle (user decision U1) | A player gets a push whenever they **become** newly waited-on, and a daily reminder for as long as they stay waited-on, in every phase where the game waits on someone: WRITING (unfinished writers), SUBMITTING (non-judge, not submitted), JUDGING (the judge) | gameplay.md: nobody should have to poll the app to learn it is their turn. Transitions: `WritingStarted`, `RoundOpened`, `SubmissionsClosed`, `JudgeChanged`, unpause (section 3.2) |
-| Pause, unpause, late join, removal | Pausing is silent (HLD). **Unpause notifies the players the game is waiting on.** A late joiner in WRITING is already in the app: no push, but they are in the reminders. Removal sends nothing (section 3.2) | A paused game has nobody waited on; on resume they are again |
+| Pause, unpause, late join, removal, game end | Pausing is silent (HLD). **Unpause notifies the players the game is waiting on.** A late joiner (WRITING or PLAYING) is already in the app: no push, but while in status `writing` they are in `waitingOn` and so in the reminders. Removal sends nothing. **A host-ended game (`GameEnded`) notifies every seated player**, even while paused (section 3.2) | A paused game has nobody waited on; on resume they are again. Nobody should learn the game is over only by polling |
 | Outbox delivery, ordering, retention (LLD 3 section 8) | At-least-once, unordered; per-recipient claim doc; superseded and stale rows skipped; redrive hourly | Section 4 |
 | Dedupe handoff and doc key (LLD 3) | `games/{g}/notifLog/{rowId}_{uid}`, created in a transaction before any send | N1 |
 | TTL configuration (LLD 3 conflict 6) | `notifLog` 30 days via `expiresAt` (declared by LLD 3); this LLD adds no TTL collection | Outlives the 14-day outbox |
@@ -158,25 +158,26 @@ sequenceDiagram
 
 ### 3.2 Event to recipient map
 
-Source: LLD 1 section 11.1 and LLD 3's `NOTIFY_EVENTS` (`RoundOpened`, `SubmissionsClosed`, `WinnerPicked`, `GameFinished`, `JudgeChanged`, `WritingStarted`, `PausedChanged`). Everything planning needs is on the row, captured at commit time (C-OUTBOX): `roster` (the row's post-state snapshot, seated players with status), `judgeId`, `paused`, `round?: { number, phase }` (post-state; absent in WRITING) and `waitingOn: PlayerId[]` (ids only, post-state). `planVersion` therefore does no Firestore read. Only `Reminder` rows still consult a masked live read of `games/{g}` (`episode`, `waitingOn`), because a player may have acted between the sweep and the fan-out (5.3). Every row with `paused: true` produces nothing (NT2); an unpause row has `paused: false`.
+Source: LLD 1 section 11.1 and LLD 3's `NOTIFY_EVENTS` (`RoundOpened`, `SubmissionsClosed`, `WinnerPicked`, `GameFinished`, `GameEnded`, `JudgeChanged`, `WritingStarted`, `PausedChanged`). Everything planning needs is on the row, captured at commit time (C-OUTBOX): `roster` (the row's post-state snapshot, seated players with status), `judgeId`, `paused`, `round?: { number, phase }` (post-state; absent in WRITING) and `waitingOn: PlayerId[]` (ids only, post-state). `planVersion` therefore does no Firestore read. Only `Reminder` rows still consult a masked live read of `games/{g}` (`episode`, `episodeGen`, `waitingOn`), because a player may have acted between the sweep and the fan-out (5.3). Every row with `paused: true` produces nothing (NT2), except `GameEnded` (the host may end a paused game); an unpause row has `paused: false`.
 
 | Event (outbox row) | Recipients | Kind | Decision |
 |---|---|---|---|
 | `WritingStarted` | roster players with status `writing` (the active players of the phase; `ready` players owe nothing) | `write` | Notified (U1): "write your cards" |
 | `RoundOpened` | `event.expected` that are `active` in the roster | `turn` | Notified (HLD) |
 | `SubmissionsClosed` (any reason) | `event.judgeId` if `active` | `judge` | Notified (HLD) |
-| `WinnerPicked` | all `active` roster players | `result` | Notified (HLD) |
-| `GameFinished` | all seated roster players (`active`, `ready`, `writing`) | `game_over` | Notified (HLD) |
+| `WinnerPicked` | all seated roster players (`active`, `ready`, `writing`), including late joiners still writing | `result` | Notified (HLD, K-D) |
+| `GameFinished` | all seated roster players (`active`, `ready`, `writing`), including late joiners still writing | `game_over` | Notified (HLD, K-D) |
+| `GameEnded` (host ended the game) | all seated roster players (`active`, `ready`, `writing`; not departed), also from a `paused: true` row | `game_ended` | Notified (K-D) |
 | `JudgeChanged`, new judge `to` | `to` if `active` and `row.judgeId == to` | `judge_now` when `row.round.phase == "JUDGING"` (all cards in), else `judge_assigned` (phase `SUBMITTING`: "you are now judging", cards still coming) | Notified (U1). No one else is told that judging moved, except the old judge below |
-| `JudgeChanged`, old judge `from` | `from`, only if `reason == "passed"`, `row.round.phase == "SUBMITTING"` and `from` is in `row.waitingOn` | `owe_card` | Notified: a newly waited-on transition (they became an ordinary player who owes a card; open question 18). `left`/`removed` judges are departed and never notified |
+| `JudgeChanged`, old judge `from` | `from`, only if `reason == "passed"`, `row.round.phase == "SUBMITTING"` and `from` is in `row.waitingOn` | `owe_card` | Notified: a newly waited-on transition (they became an ordinary player who owes a card; open question 18). `left`/`removed` judges are departed and never notified; `resumed` (`from: null`, LLD 1 8.3) is treated like `left`: only the new judge `to` is notified |
 | `PausedChanged{paused:false}` | `row.waitingOn` members that are roster `active` or `writing` | `resumed` | Notified (U1): "game resumed, it is your turn". Resolves open question 14 |
 | `PausedChanged{paused:true}` | none | | HLD: no notice while paused (row has `paused: true`) |
-| `Reminder` | `event.waitingOn` that are roster `active` or `writing` **and** in live `waitingOn` while live `episode == event.episode` | `reminder_write` (WRITING, `row.round` absent), `reminder_play` (non-judge), `reminder_judge` (the judge) | Notified (HLD amended, U1) |
+| `Reminder` | `event.waitingOn` that are roster `active` or `writing` **and** in live `waitingOn` while live `episode == event.episode` and live `episodeGen == event.episodeGen` | `reminder_write` (any player in status `writing`: WRITING, or a late joiner during PLAYING), `reminder_play` (non-judge), `reminder_judge` (the judge) | Notified (HLD amended, U1) |
 | `RoundVoided` | none | | Followed by `RoundOpened` |
-| `PlayerJoined`, `PlayerFinishedWriting`, `PlayerActivated`, `HandRedrawn`, `SubmissionConfirmed`, `VoteCast`, `SettingsUpdated`, `CardRemoved`, `PlayStarted` | none | | Not in `NOTIFY_EVENTS`. A late joiner in WRITING is already in the app (no push) and is simply added to `waitingOn`, so reminders include them; a late joiner in PLAYING is activated at the next `RoundOpened` and appears in its `expected`, so they get `turn` there; a paused-recovery activation sits out the round and gets nothing |
-| `GameEnded`, `PlayerLeft`, `PlayerRemoved`, `GameCreated`, `GameDeleted`, `DeckImported` | none (the two removal events only trigger cleanup, 2.4) | | Nobody newly waits on anything |
+| `PlayerJoined`, `PlayerFinishedWriting`, `PlayerActivated`, `HandRedrawn`, `SubmissionConfirmed`, `VoteCast`, `SettingsUpdated`, `CardRemoved`, `PlayStarted` | none | | Not in `NOTIFY_EVENTS`. A late joiner (WRITING or PLAYING) is already in the app (no push); while in status `writing` they are added to `waitingOn` without changing the episode or anyone's `waitingSince` (LLD 1 4.2), so reminders include them. A late joiner in PLAYING is activated at the next `RoundOpened` after finishing writing and appears in its `expected`, so they get `turn` there; a paused-recovery activation sits out the round and gets nothing |
+| `PlayerLeft`, `PlayerRemoved`, `GameCreated`, `GameDeleted`, `DeckImported` | none (the two removal events only trigger cleanup, 2.4) | | Nobody newly waits on anything |
 
-Every "newly waited-on" transition in the engine maps to one row above: writing start, round open, close of submissions, judge change (both parties), and resume. A player who becomes waited-on any other way (a late join during WRITING) is already looking at the app.
+Every "newly waited-on" transition in the engine maps to one row above: writing start, round open, close of submissions, judge change (both parties), and resume. A player who becomes waited-on any other way (a late join in any phase) is already looking at the app.
 
 Spectators and unseated hosts never have `pushSubs` (registration rejects them) and are never recipients (NT3).
 
@@ -186,16 +187,16 @@ One command can emit several qualifying rows (`WinnerPicked` then `RoundOpened`;
 
 ```ts
 export type NotifKind = "write" | "turn" | "turn_after_result" | "judge" | "judge_now" | "judge_assigned" | "owe_card" | "resumed" | "result" | "game_over"
-                      | "reminder_write" | "reminder_play" | "reminder_judge";
+                      | "game_ended" | "reminder_write" | "reminder_play" | "reminder_judge";
 export interface Plan { uid: Uid; playerId: PlayerId; kind: NotifKind; round: number | null; rowId: string }   // rowId = the winning row; dedupe key is `${rowId}_${uid}`
-export interface Live { episode: string | null; waitingOn: PlayerId[] }          // masked read, Reminder rows only (5.3)
-type By = Partial<Record<"write"|"turn"|"result"|"judge"|"judge_now"|"judge_assigned"|"owe_card"|"resumed"|"game_over", string>>;
+export interface Live { episode: string | null; episodeGen: number; waitingOn: PlayerId[] }   // masked read, Reminder rows only (5.3)
+type By = Partial<Record<"write"|"turn"|"result"|"judge"|"judge_now"|"judge_assigned"|"owe_card"|"resumed"|"game_over"|"game_ended", string>>;
 
 export function planVersion(rows: OutboxRow[] /* same gameId and version, topic notify, no Reminder; no live read */): Plan[] {
   const cands = new Map<Uid, { pid: PlayerId; round: number | null; by: By }>();
   const add = (r: OutboxRow, pid: PlayerId, k: keyof By, round: number | null) => {
     const m = r.roster.find((x) => x.playerId === pid);
-    if (!m || r.paused) return;                                            // departed or paused: no recipient (NT2)
+    if (!m || (r.paused && k !== "game_ended")) return;                   // departed or paused: no recipient (NT2); a host may end a paused game
     const c = cands.get(m.uid) ?? { pid, round, by: {} }; c.by[k] ??= r.id; cands.set(m.uid, c);
   };
   for (const r of rows) {
@@ -205,8 +206,9 @@ export function planVersion(rows: OutboxRow[] /* same gameId and version, topic 
       case "PausedChanged":     if (!e.paused) r.waitingOn.filter((p) => r.roster.some((x) => x.playerId === p && (x.status === "active" || x.status === "writing"))).forEach((p) => add(r, p, "resumed", r.round?.number ?? null)); break;
       case "RoundOpened":       e.expected.filter((p) => active.some((a) => a.playerId === p)).forEach((p) => add(r, p, "turn", e.round)); break;
       case "SubmissionsClosed": if (active.some((a) => a.playerId === e.judgeId)) add(r, e.judgeId, "judge", e.round); break;
-      case "WinnerPicked":      active.forEach((a) => add(r, a.playerId, "result", e.round)); break;
+      case "WinnerPicked":      r.roster.forEach((x) => add(r, x.playerId, "result", e.round)); break;   // all seated, incl. late joiners still writing (K-D)
       case "GameFinished":      r.roster.forEach((x) => add(r, x.playerId, "game_over", null)); break;
+      case "GameEnded":         r.roster.forEach((x) => add(r, x.playerId, "game_ended", null)); break;  // roster = seated players only (K-D)
       case "JudgeChanged":                                                 // all inputs are on the row: no live read
         if (r.judgeId === e.to && r.round?.number === e.round) add(r, e.to, r.round.phase === "JUDGING" ? "judge_now" : "judge_assigned", e.round);
         if (e.reason === "passed" && r.round?.number === e.round && r.round.phase === "SUBMITTING" && r.waitingOn.includes(e.from)) add(r, e.from, "owe_card", e.round);
@@ -215,7 +217,7 @@ export function planVersion(rows: OutboxRow[] /* same gameId and version, topic 
   }
   return [...cands].map(([uid, c]) => {
     const b = c.by;                                                        // precedence, highest first
-    const [kind, rowId] = b.game_over ? ["game_over", b.game_over] : b.turn && b.result ? ["turn_after_result", b.turn]
+    const [kind, rowId] = b.game_ended ? ["game_ended", b.game_ended] : b.game_over ? ["game_over", b.game_over] : b.turn && b.result ? ["turn_after_result", b.turn]
       : b.judge ? ["judge", b.judge] : b.judge_now ? ["judge_now", b.judge_now] : b.judge_assigned ? ["judge_assigned", b.judge_assigned]
       : b.turn ? ["turn", b.turn] : b.write ? ["write", b.write] : b.owe_card ? ["owe_card", b.owe_card] : b.resumed ? ["resumed", b.resumed] : ["result", b.result!];
     return { uid, playerId: c.pid, kind: kind as NotifKind, round: c.round, rowId };
@@ -223,7 +225,7 @@ export function planVersion(rows: OutboxRow[] /* same gameId and version, topic 
 }
 ```
 
-Consequences, all covered by tests: a non-judge player in a resolved round gets one `turn_after_result` push; the new judge gets `result`; at game end everyone gets `game_over` only; a void-pass sends `turn` and no `owe_card`; a pass during SUBMITTING sends the new judge `judge_assigned` and the old judge `owe_card`, and a pass during JUDGING sends the new judge `judge_now`; an unpause sends `resumed` to exactly the waited-on players; `WritingStarted` sends `write` to writers only. `planReminder(row, live)` is the separate pure function for `Reminder` rows (section 5.3).
+Consequences, all covered by tests: a non-judge player in a resolved round gets one `turn_after_result` push; the new judge and any late joiner still writing get `result`; at game end everyone seated (writers included) gets `game_over` only; a host-ended game sends `game_ended` to everyone seated, paused or not; a void-pass sends `turn` and no `owe_card`; a pass during SUBMITTING sends the new judge `judge_assigned` and the old judge `owe_card`, and a pass during JUDGING sends the new judge `judge_now`; an unpause sends `resumed` to exactly the waited-on players; `WritingStarted` sends `write` to writers only. `planReminder(row, live)` is the separate pure function for `Reminder` rows (section 5.3).
 
 The handler loads sibling rows with `outbox.where("version", "==", v)` (at most 6 documents; `version` has the automatic single-field index). It loads `live` (one masked read) only for `Reminder` rows.
 
@@ -249,11 +251,11 @@ export const topicFor = (gameId: GameId) => base64url(sha256(`dc-topic:${gameId}
 | Message type | **Data-only** (`data`, no `notification`) | One code path in the worker for all platforms; click handling and `renotify` are ours; copy is server-owned so a stale cached client still shows current text |
 | Allowed `data` keys | exactly `v, kind, gameId, round?, title, body, tag, url` (NT1) | A closed set the anonymity test can enforce |
 | Replacement | `tag = g-{gameId}` (visible, per game) and `Topic` (undelivered, at the push service) | A phone offline for a day receives only the latest state of each game, which is what matters |
-| `TTL` | write, turn, judge, resumed, result, game over: 72 h; reminders: 12 h | A turn notice is still useful after a weekend away; a reminder older than half a day is noise |
-| `Urgency` | `high` for `turn`, `turn_after_result`, `judge`, `judge_now`, `judge_assigned`, `owe_card`, `resumed`; `normal` for the rest (`write`, `result`, `game_over`, reminders) | High urgency is what gets Android out of Doze for the "your turn" notices; results and reminders can wait |
+| `TTL` | write, turn, judge, resumed, result, game over, game ended: 72 h; reminders: 12 h | A turn notice is still useful after a weekend away; a reminder older than half a day is noise |
+| `Urgency` | `high` for `turn`, `turn_after_result`, `judge`, `judge_now`, `judge_assigned`, `owe_card`, `resumed`; `normal` for the rest (`write`, `result`, `game_over`, `game_ended`, reminders) | High urgency is what gets Android out of Doze for the "your turn" notices; results and reminders can wait |
 | Deep link | relative `/g/{gameId}`, no fragment | Never carries the rejoin secret (LLD 4 ID4) |
 
-Never in a payload, log or `notifLog`: card text or ids, display names, `playerId` of any other player, uids, `roomCode`, tokens, the winner or judge identity, scores. The same holds for the outbox rows that feed it (C-EV, NT13): a row carries ids of roster members, phase, round number and `waitingOn` ids, and **no `seed`, `actorPlayerId`, `commandType` or card id**. Events that mint or author cards (`PlayerFinishedWriting`, `DeckImported`, write-ins) are not in `NOTIFY_EVENTS` and never reach an outbox row, so nothing a consumer stores or logs can reveal authorship of a pooled card. `waitingOn` in WRITING lists who has not finished writing, which every player's view already shows.
+Never in a payload, log or `notifLog`: card text or ids, display names, `playerId` of any other player, uids, `roomCode`, tokens, the winner or judge identity, scores. The same holds for the outbox rows that feed it (C-EV, NT13): a row carries ids of roster members, phase, round number and `waitingOn` ids, and **no `seed`, `actorPlayerId`, `commandType` or card id**. Events that mint or author cards (`PlayerFinishedWriting`, `DeckImported`, write-ins) are not in `NOTIFY_EVENTS` and never reach an outbox row, so nothing a consumer stores or logs can reveal authorship of a pooled card. `waitingOn` in WRITING (and, for late joiners, in PLAYING) lists who has not finished writing, which every player's view already shows.
 
 ### 3.5 Copy (English only)
 
@@ -271,6 +273,7 @@ Generic strings, no names (rationale: lock-screen exposure, the profanity-off mo
 | `resumed` | Game resumed | The game is going again and it's waiting on you. |
 | `result` | Round result | The round has a winner. Open the game to see who played what. |
 | `game_over` | Game over | The game has a winner. Open it to see the final result. |
+| `game_ended` | Game ended | The host ended the game. |
 | `reminder_write` | Reminder | The game is waiting for you to finish writing your cards. |
 | `reminder_play` | Reminder | A round is still waiting for your card. |
 | `reminder_judge` | Reminder | Your friends are waiting for you to pick a winner. |
@@ -306,16 +309,18 @@ async function claim(db: Firestore, now: number, row: OutboxRow, p: Plan): Promi
     const [sub, log] = await Promise.all([tx.get(subRef), tx.get(logRef)]);
     const devs = (sub.get("devices") ?? {}) as Record<string, PushDevice>;
     if (Object.keys(devs).length === 0) return { skip: "no_devices" };
+    const superseded = (sub.get("lastNotifiedVersion") ?? 0) > row.version;   // a newer notice already went out (NT4)
     if (log.exists) {                                                      // duplicate or retried trigger
       const l = log.data() as NotifLogDoc;
       if (l.status === "done") return { skip: "dedupe_done" };
-      if (l.status === "pending" && now - l.claimedAt < STALE_CLAIM_MS) return { skip: "dedupe_inflight" };   // another invocation is sending
+      if (l.status === "pending" && now - l.claimedAt < STALE_CLAIM_MS) return { skip: "dedupe_inflight" };   // another invocation is sending; NOT done (4.3)
+      if (superseded) { tx.update(logRef, { status: "done", updatedAt: now }); return { skip: "superseded" }; }   // retries are superseded too
       const todo = Object.entries(devs).filter(([id]) => l.devices[id] !== "ok" && l.devices[id] !== "dead");
       tx.update(logRef, { status: "pending", claimedAt: now, attempts: l.attempts + 1 });
       return { send: Object.fromEntries(todo.map(([id, d]) => [id, d.token])), log: l };
     }
-    if ((sub.get("lastNotifiedVersion") ?? 0) > row.version) return { skip: "superseded" };   // a newer notice already went out (NT4)
-    const reminder = p.kind.startsWith("reminder");
+    if (superseded) return { skip: "superseded" };
+    const reminder = p.kind.startsWith("reminder");                       // gap from the previous reminder claim of this (player, game), at delivery time
     if (reminder && sub.get("lastReminderAt") !== null && now - sub.get("lastReminderAt") < REMINDER_MIN_GAP_MS) return { skip: "min_gap" };
     const doc: NotifLogDoc = { gameId: row.gameId, rowId: p.rowId, uid: p.uid, playerId: p.playerId, kind: p.kind, status: "pending", devices: {},
                                attempts: 1, claimedAt: now, updatedAt: now, expiresAt: ttl(now, 30) };
@@ -327,15 +332,17 @@ async function claim(db: Firestore, now: number, row: OutboxRow, p: Plan): Promi
 ```
 
 - **Creation precedes send.** If the process dies after the claim and before the send, the claim is `pending`; after `STALE_CLAIM_MS` (120 s) the next attempt resends the devices not yet marked `ok`/`dead`. In the narrow window where FCM accepted the message but the log was not updated, that resend duplicates a message, but the same `tag` and `Topic` make the browser show one notification. N1 is therefore stated as at most one **visible** notification per `(row, recipient)` (section 9).
+- **In-flight claims are not done.** `dedupe_inflight` means another invocation of the same row holds a fresh claim (only the row that won a plan delivers it, 3.3, so the claim is always this row's). It never marks the row processed: the row stays eligible until that claim is finalized (`done`/`retry`) or recovered. Recovery rule: a `pending` claim older than `STALE_CLAIM_MS` is taken over by the next invocation; the hourly redrive (4.6, rows older than 10 min, well past 120 s) guarantees that next invocation if the owner died.
+- **Supersession applies to retries.** The `lastNotifiedVersion` check (NT4) runs for an existing `retry` or stale `pending` log as well as for a new claim; a superseded retry is finalized `done` without sending.
 - **No devices, no log.** A recipient without devices creates no `notifLog` doc and no write.
-- `REMINDER_MIN_GAP_MS = 20 h` is a safety net against a bug or a double-run, never the primary N3 mechanism (section 5.4).
+- **Reminder gap at delivery.** `REMINDER_MIN_GAP_MS = 24 h` is checked against `lastReminderAt`, the claim time of the previous reminder for this `(player, game)`, using the delivery-time `now`; so a delayed `Reminder` row (platform retry, redrive) cannot land within 24 h of the previous reminder (N3). A row skipped this way is not resent; the next reminder follows the Engine's clock. Normal cadence is about 25 h between claims (5.4), so the check bites only on delays or bugs.
 
 ### 4.3 Send, retry and partial failures
 
 ```ts
-export async function deliver(d: Deps, row: OutboxRow, p: Plan): Promise<"done" | "retry"> {
+export async function deliver(d: Deps, row: OutboxRow, p: Plan): Promise<"done" | "retry" | "inflight"> {
   const c = await claim(d.db, d.clock(), row, p);
-  if ("skip" in c) { log.info({ event: "notify.dedupe", reason: c.skip, gameId: row.gameId, kind: p.kind }); return "done"; }
+  if ("skip" in c) { log.info({ event: "notify.dedupe", reason: c.skip, gameId: row.gameId, kind: p.kind }); return c.skip === "dedupe_inflight" ? "inflight" : "done"; }
   const badArg: string[] = [];
   let pending = c.send; const result: NotifLogDoc["devices"] = { ...c.log.devices };
   for (let attempt = 0; attempt <= BACKOFF_MS.length && Object.keys(pending).length; attempt++) {    // BACKOFF_MS = [1000, 4000]; jittered
@@ -347,14 +354,14 @@ export async function deliver(d: Deps, row: OutboxRow, p: Plan): Promise<"done" 
       const id = ids[i]!;
       if (r.ok) { result[id] = "ok"; log.info({ event: "push.result", result: "sent", kind: p.kind }); }
       else if (r.code === "not-registered" || r.code === "invalid-token") { result[id] = "dead"; }
-      else if (r.code === "invalid-argument") { result[id] = "retry"; badArg.push(id); }          // resolved in 4.4
+      else if (r.code === "invalid-argument") { result[id] = "lost"; badArg.push(id); }           // never pruned; counted and alerted (4.4)
       else if (r.code === "transient" || r.code === "quota") { result[id] = "retry"; next[id] = pending[id]!; }
       else { result[id] = "lost"; log.error({ event: "push.result", result: "failed", code: r.code }); }   // auth/unknown: operator problem, not retryable per device
     });
     pending = next;
   }
-  const pruned = await resolveInvalidArgument(d, row, p, result, badArg);   // 4.4
-  await pruneDead(d, row.gameId, p.uid, result, c.send);
+  reportInvalidArgument(row, p, badArg, Object.keys(c.send).length);       // 4.4: logs only, prunes nothing
+  await pruneDead(d, row.gameId, p.uid, result, c.send);                   // only `dead` devices
   const retry = Object.values(result).includes("retry");
   await d.db.doc(`games/${row.gameId}/notifLog/${p.rowId}_${p.uid}`).update({ devices: result, status: retry ? "retry" : "done", updatedAt: d.clock() });
   return retry ? "retry" : "done";
@@ -363,18 +370,18 @@ export async function deliver(d: Deps, row: OutboxRow, p: Plan): Promise<"done" 
 
 - Devices are sent independently, so one recipient's three devices can end `ok`, `dead`, `retry`. Only the `retry` devices are resent on the next attempt; `ok` devices are never resent (NT5).
 - `handleNotifyRow` runs all recipients with `Promise.allSettled`, so one recipient's failure never blocks another's (N4). If any recipient returned `retry` or rejected with an infrastructure error, it throws after all have settled, and the platform retries the trigger with exponential backoff (10 s to 10 min). The retried invocation finds finished recipients `done` (dedupe hit) and resumes only the rest.
-- The row is marked `processedAt` (and `notifDoneAt`) only when every recipient is `done`.
+- The row is marked `processedAt` (and `notifDoneAt`) only when every recipient is `done`. If some recipient is `inflight` (and none is `retry`), the invocation returns without throwing and without marking the row: the invocation holding the claim marks the row when it finishes, and if it died, the hourly redrive re-runs the row after the claim has gone stale (4.2). An `inflight` result therefore never burns platform retries or poison attempts by itself.
 
 ### 4.4 Dead tokens and `invalid-argument`
 
 | FCM / Admin error code | Class | Action |
 |---|---|---|
 | `messaging/registration-token-not-registered`, `messaging/invalid-registration-token` | `not-registered`, `invalid-token` | Device `dead`; the token is removed from the doc in a transaction that checks the stored token still equals the failed one (a concurrent rotation is not undone); the doc is deleted if no devices remain. Log `push.result` `pruned` |
-| `messaging/invalid-argument` | ambiguous: bad token **or** a malformed payload | Resolved after the loop: if the same invocation sent at least one message to another token successfully, or fewer than 2 tokens were tried and none succeeded, only the `invalid-argument` tokens are treated as dead and pruned. If **every** attempted token (at least 2) of the invocation returned `invalid-argument`, assume a payload bug: prune nothing, log `notify.payload_invalid` at error severity (Error Reporting), and let the row fail toward poison (4.6) |
+| `messaging/invalid-argument` | ambiguous: bad token **or** a malformed payload | **Never pruned**, even when it is the recipient's only device. The device is `lost` for this `(row, recipient)` (not resent) and stays registered. `reportInvalidArgument` logs `push.result` with `result=invalid_argument` per device (counted by `dc_push_invalid_argument_total`, alerted in 7.3); if **every** attempted token (at least 2) of the invocation returned it, it also logs `notify.payload_invalid` at error severity (Error Reporting), since a payload bug is the likely cause. A token that is truly dead is pruned later when FCM reports it `registration-token-not-registered` |
 | `messaging/internal-error`, `server-unavailable`, `unavailable`, `message-rate-exceeded`, `device-message-rate-exceeded`, quota | `transient`, `quota` | In-process backoff, then platform retry |
 | `messaging/third-party-auth-error`, `messaging/sender-id-mismatch`, anything else | `auth`, `unknown` | Device `lost` (no retry); error logged; the failed-share alert (LLD 0) catches a systemic cause such as a wrong VAPID or sender id |
 
-`sender-id-mismatch` means the token belongs to another Firebase project (for example a staging token sent to prod). It is treated as `invalid-token` and pruned if it appears on a single token, and as a systemic error if it appears on all.
+`sender-id-mismatch` means the token belongs to another Firebase project (for example a staging token sent to prod). It is treated as `invalid-token` and pruned if it appears on a single token, and as a systemic error if it appears on all. Pruning happens only for `registration-token-not-registered`, `invalid-registration-token` and this single-token `sender-id-mismatch` case; no other code ever removes a device.
 
 ### 4.5 The `PushSender` port
 
@@ -391,7 +398,7 @@ export interface PushSender { sendEach(msgs: PushMessage[]): Promise<PushResult[
 - `handleNotifyRow` increments `notifAttempts` on the outbox row (transactionally, on the fresh row) at the start of each invocation. At `notifAttempts > MAX_ATTEMPTS` (5) the row is marked `processedAt = now, poisonedAt = now`, `notify.poison` is logged at error severity (alert, section 7.3), and the invocation returns success so the platform stops retrying. Recipients already `done` were notified; the rest are lost. This bounds the cost of any bug triggered by one row (NT7).
 - `notifAttempts`, `poisonedAt`, `notifSkipped` and `notifDoneAt` are optional `OutboxRow` fields declared by LLD 3 (C-OUTBOX, open question 4, resolved). `id` on the row is the document id, so handlers need not carry it separately.
 - `housekeeping` (hourly, minute 37) runs three independent steps, each in its own try/catch so a failure in one never blocks the others:
-  1. **Outbox redrive.** `collectionGroup("outbox").where("processedAt","==",null).where("at","<", now - 10 min).orderBy("at").limit(200)` (index in LLD 3 section 4). Rows are dispatched by `topic`: `notify` to `handleNotifyRow`; `identity` to LLD 4's exported `handleIdentityRow(db, gameId, rowId)` (revocation work, writes `processedAt`; C-IDHANDOFF) followed by this module's idempotent push cleanup (2.4), which sets `notifDoneAt` only. Stale rows (section 3.1) are expired, not sent.
+  1. **Outbox redrive.** `collectionGroup("outbox").where("processedAt","==",null).where("at","<", now - 10 min).orderBy("at").limit(200)` (index in LLD 3 section 4). Rows are dispatched by `topic`: `notify` to `handleNotifyRow`; `identity` to LLD 4's exported `handleIdentityRow(db, gameId, rowId)` (revocation work, writes `processedAt`; C-IDHANDOFF) followed by this module's idempotent push cleanup (2.4), which sets `notifDoneAt` only. A second query, independent of `processedAt`, selects identity rows whose push cleanup is still owed: `collectionGroup("outbox").where("topic","==","identity").where("notifDoneAt","==",null).where("at","<", now - 10 min).orderBy("at").limit(200)` (index declared in LLD 3 section 4; LLD 3 writes `notifDoneAt: null` at row creation so the equality matches). Each such row gets only the push cleanup, so a cleanup that failed after LLD 4 already set `processedAt` is still retried. Stale rows (section 3.1) are expired, not sent.
   2. **Deletion redrive.** `deletions where status == "running" and heartbeatAt < now - 15 min` calls LLD 3's `runDeletion` (LLD 3 6.4).
   3. Optional tombstone sweep for LLD 4 (conflict 3): not built in v1.
 
@@ -399,13 +406,13 @@ export interface PushSender { sendEach(msgs: PushMessage[]): Promise<PushResult[
 
 ### 5.1 Design and reconciliation with HLD T1
 
-`reminderDueAt` is written **only by the Engine**, inside `decide`/`settle`, as part of a returned `Game` (LLD 1 4.2, X8; LLD 3 ST12). It is set to `waitingSince + 24 h` when a wait episode starts and to `null` when no episode exists (paused, FINISHED, ENDED, LOBBY). Since U1 an episode also exists in WRITING (C-WRITING): `waitingOn` is the active players whose writing is unfinished, `waitingSince` the writing start or, for a late joiner, their activation time. After a reminder the Scheduler asks the Engine to advance it by running the system command `markReminded` through the Store's `runCommand`, which writes the new `reminderDueAt` and, in the same transaction, one `Reminder` outbox row. This is LLD 3 section 7 unchanged. Final design, in one line each:
+`reminderDueAt` is written **only by the Engine**, inside `decide`/`settle`, as part of a returned `Game` (LLD 1 4.2, X8; LLD 3 ST12). It is set to `waitingSince + 24 h` when a wait episode starts and to `null` when no episode exists (paused, FINISHED, ENDED, LOBBY). Since U1 an episode also exists in WRITING (C-WRITING): `waitingOn` in WRITING is the seated players with status `writing`, and `waitingSince` the writing start (LLD 1 4.2, the single definition). A late joiner in status `writing` is added to `waitingOn` in any phase (WRITING or PLAYING) without changing the episode or the `waitingSince` of others. Each episode carries a generation number `episodeGen`, incremented every time an episode starts (including after an unpause), so two successive episodes of the same kind (for example WRITING before and after a pause) are distinguishable; reminder rows and the sweep compare `episodeGen`, not only the episode kind. After a reminder the Scheduler asks the Engine to advance it by running the system command `markReminded` through the Store's `runCommand`, which writes the new `reminderDueAt` and, in the same transaction, one `Reminder` outbox row. This is LLD 3 section 7 unchanged. Final design, in one line each:
 
 | Concern | Who | How |
 |---|---|---|
-| Start and reset of the 24 h clock | Engine `settle` | New episode on writing start, round open, close, judge change, void, un-pause (not on a submission or a finished writer; a late joiner in WRITING is added to `waitingOn` of the running episode) |
-| Find due games | Store `listWaitingOn` | `reminderDueAt <= now`, keyset pages of 100, single-field index |
-| Advance the clock and record the intent | Engine `markReminded` via `runCommand`, `idemKey = remind:{episode}:{dueAt}` | One CAS transaction; episode and `now >= reminderDueAt` are rechecked inside |
+| Start and reset of the 24 h clock | Engine `settle` | New episode (and `episodeGen + 1`) on writing start, round open, close, judge change, void, un-pause (not on a submission or a finished writer; a late joiner in status `writing`, in any phase, is added to `waitingOn` of the running episode) |
+| Find due games | Store `listWaitingOn` | `reminderDueAt <= now`, keyset pages of 100, single-field index; each item carries `episode` and `episodeGen` |
+| Advance the clock and record the intent | Engine `markReminded` via `runCommand`, `idemKey = remind:{episode}:{dueAt}` | One CAS transaction; `episode`, `episodeGen` and `now >= reminderDueAt` are rechecked inside |
 | Send | `notifyOutbox` on the `Reminder` row | Same path as turn notices |
 
 The Scheduler therefore never edits a game field itself, but it does cause one Engine-decided state change (a `version` bump with no event and no view write). T1 is reworded accordingly (section 9).
@@ -426,7 +433,7 @@ export async function runSweep(d: Deps): Promise<SweepStats> {
     await pool(10, page.items, async (g) => {
       if (d.clock() - t0 > SWEEP_BUDGET_MS) return;                      // 240 s; the remainder is next hour's work (level-triggered)
       try {
-        const o = await d.runCommand({ gameId: g.gameId, cmd: { type: "markReminded", episode: g.episode }, actor: { kind: "system" }, idemKey: `remind:${g.episode}:${g.dueAt}` });
+        const o = await d.runCommand({ gameId: g.gameId, cmd: { type: "markReminded", episode: g.episode, episodeGen: g.episodeGen }, actor: { kind: "system" }, idemKey: `remind:${g.episode}:${g.dueAt}` });
         if (o.kind !== "accepted") st.noop++; else if (o.replay) st.replayed++; else if (o.version > g.version) st.sent++; else st.noop++;
       } catch (e) { st.failed++; log.error({ event: "reminder.sweep.game_failed", gameId: g.gameId }); }
     });
@@ -445,19 +452,20 @@ export async function runSweep(d: Deps): Promise<SweepStats> {
 
 | Phase | `waitingOn` (Engine) | Reminded |
 |---|---|---|
-| WRITING | active players whose writing is unfinished (status `writing`), including late joiners | Yes: `reminder_write` (open question 1, resolved) |
-| PLAYING, SUBMITTING | expected non-judge players without a submission | Yes: `reminder_play` |
-| PLAYING, JUDGING | the judge | Yes: `reminder_judge` |
+| WRITING | seated players with status `writing`, including late joiners (added without resetting `waitingSince`) | Yes: `reminder_write` (open question 1, resolved) |
+| PLAYING, SUBMITTING | expected non-judge players without a submission, plus any late joiner still in status `writing` | Yes: `reminder_play`; `reminder_write` for the late joiner |
+| PLAYING, JUDGING | the judge, plus any late joiner still in status `writing` | Yes: `reminder_judge`; `reminder_write` for the late joiner |
 | paused, FINISHED, ENDED, LOBBY | irrelevant | No (`episode == null`); on unpause a `resumed` push goes to the waited-on players and a new episode starts |
 
 ```ts
 export function planReminder(row: OutboxRow & { event: { t: "Reminder" } }, live: Live | null): Plan[] {
-  if (row.paused || !live || live.episode !== row.event.episode) return [];       // moved on: nothing is owed any more (NT10)
-  const kindOf = (pid: PlayerId): NotifKind => !row.round ? "reminder_write" : pid === row.judgeId && row.round.phase === "JUDGING" ? "reminder_judge" : "reminder_play";
+  if (row.paused || !live || live.episode !== row.event.episode || live.episodeGen !== row.event.episodeGen) return [];   // moved on: nothing is owed any more (NT10)
+  const kindOf = (pid: PlayerId, status: string): NotifKind => !row.round || status === "writing" ? "reminder_write"
+    : pid === row.judgeId && row.round.phase === "JUDGING" ? "reminder_judge" : "reminder_play";
   return row.event.waitingOn
     .filter((pid) => live.waitingOn.includes(pid))
     .flatMap((pid) => { const m = row.roster.find((x) => x.playerId === pid && (x.status === "active" || x.status === "writing")); return m
-      ? [{ uid: m.uid, playerId: pid, kind: kindOf(pid), round: null, rowId: row.id }] : []; });
+      ? [{ uid: m.uid, playerId: pid, kind: kindOf(pid, m.status), round: null, rowId: row.id }] : []; });
 }
 ```
 
@@ -465,10 +473,10 @@ A player who submitted (or finished writing) between the sweep and the fan-out i
 
 ### 5.4 Once per 24 h (N3), quiet hours, drift
 
-- **Structural guarantee.** Within one episode, successive `Reminder` rows are at least 24 h apart because `markReminded` sets `reminderDueAt = now + 24 h` and the sweep acts only when `now >= reminderDueAt`. A new episode restarts the clock at `waitingSince + 24 h`, so a reminder in a new episode cannot fire within 24 h of the notice that started it (every episode start has a push: `write`, `turn`, `judge`, `judge_now`/`judge_assigned`, `owe_card`, `resumed`). A late joiner in WRITING is the exception: they are reminded when the running episode next falls due, possibly sooner than 24 h after joining, and then every 24 h (open question 17). Across an episode change, a stale due row is rejected inside `markReminded` (episode mismatch). The scope of "per player" is per `(player, game)`: a player in three games may get three reminders in one hour (open question 9).
+- **Structural guarantee.** Within one episode, successive `Reminder` rows are at least 24 h apart because `markReminded` sets `reminderDueAt = now + 24 h` and the sweep acts only when `now >= reminderDueAt`. A new episode restarts the clock at `waitingSince + 24 h`, so a reminder in a new episode cannot fire within 24 h of the notice that started it (every episode start has a push: `write`, `turn`, `judge`, `judge_now`/`judge_assigned`, `owe_card`, `resumed`). A late joiner (WRITING or PLAYING) is the exception: they are reminded when the running episode next falls due, possibly sooner than 24 h after joining, and then every 24 h (open question 17). Across an episode change, a stale due row is rejected inside `markReminded` (episode or `episodeGen` mismatch), and a `Reminder` row whose `episodeGen` no longer matches the live one sends nothing (NT10). The scope of "per player" is per `(player, game)`: a player in three games may get three reminders in one hour (open question 9).
 - **Drift.** Because `markReminded` uses `now`, not the old due time, a reminder repeats about every 24 h plus up to 1 h of sweep lag (average 24.5 h). Acceptable. After an outage or a skipped sweep, a game gets **one** reminder when sweeps resume, never a catch-up burst (the due time is simply in the past once).
 - **Quiet hours: none in v1.** The server does not know a player's time zone, a reminder lands 24 h after a notice the player already received at that hour, and OS Do Not Disturb applies. A future version can record `tzOffsetMin` per `PushDevice` and have `deliver` defer; it needs an LLD 5 contract change (open question 8).
-- Safety net: `lastReminderAt` on `pushSubs` and `REMINDER_MIN_GAP_MS` (20 h) in `claim`.
+- Delivery-time guard: `lastReminderAt` on `pushSubs` and `REMINDER_MIN_GAP_MS` (24 h) in `claim` (4.2), measured from the previous reminder claim, so a delayed row cannot break N3.
 
 ### 5.5 Idempotency, scale and cost
 
@@ -524,7 +532,7 @@ Events: `notify.row.done`, `notify.dedupe`, `notify.payload_invalid`, `notify.po
 
 | Event | Fields |
 |---|---|
-| `push.result` (one line per device attempt) | `gameId`, `kind`, `result` in `sent`, `failed`, `pruned` |
+| `push.result` (one line per device attempt) | `gameId`, `kind`, `result` in `sent`, `failed`, `pruned`, `invalid_argument` |
 | `notify.row.done` | `gameId`, `rowId`, `kind` (the row's event kind), `recipients`, `sent`, `pruned`, `failed`, `skipped`, `eventToFcmMs` (`now - row.at` at the end of the first send), `latencyMs`, `attempts` |
 | `reminder.sweep.done` | `pages`, `listed`, `sent`, `replayed`, `noop`, `failed`, `latencyMs` |
 
@@ -536,13 +544,14 @@ Events: `notify.row.done`, `notify.dedupe`, `notify.payload_invalid`, `notify.po
 |---|---|---|
 | `dc_push_total{result}` | `push.result` | Existing in LLD 0; delivery success rate is `sent / (sent + failed)` |
 | `dc_push_pruned_total` | `push.result` with `result=pruned` | Token prune count |
+| `dc_push_invalid_argument_total` | `push.result` with `result=invalid_argument` | New; such tokens are never pruned (4.4) |
 | `dc_reminder_sent_total` | `reminder.sweep.done` weighted by `sent` | Existing in LLD 0; an upper bound (5.2) |
 | `dc_reminder_push_total` | `notify.row.done` where row kind is `Reminder`, weighted by `sent` | New; exact reminder pushes |
 | `dc_notify_dedupe_total{reason}` | `notify.dedupe` | New; duplicate triggers and supersedes |
 | `dc_notify_latency_ms` | distribution of `eventToFcmMs` on `notify.row.done` | New; event to FCM |
 | `dc_notify_poison_total` | `notify.poison` | New |
 
-New alerts (same channel as LLD 0): any `notify.poison` or `notify.payload_invalid`; `dc_notify_latency_ms` p95 above 60 s for 30 min; `outbox.redrive` processing more than 20 rows in one run (consumers are failing or slow). LLD 0's push-health alert (failed share above 50 percent over 1 h, at least 20 attempts) and sweep-missed alert apply unchanged.
+New alerts (same channel as LLD 0): any `notify.poison` or `notify.payload_invalid`; `dc_push_invalid_argument_total` above 5 in 1 h; `dc_notify_latency_ms` p95 above 60 s for 30 min; `outbox.redrive` processing more than 20 rows in one run (consumers are failing or slow). LLD 0's push-health alert (failed share above 50 percent over 1 h, at least 20 attempts) and sweep-missed alert apply unchanged.
 
 ## 8. Email (N5)
 
@@ -553,7 +562,7 @@ No email notification in v1 (gameplay.md, N5). The seam: delivery is behind `del
 | Where | New text |
 |---|---|
 | HLD 3.8 Owns | "Push subscriptions (per seat, per game, up to 5 devices) and a per-(outbox row, recipient) delivery record." (replaces `lastNotifiedFor` and "delivery log") |
-| HLD 3.8 trigger table | Replace with "New HLD 3.8 trigger table (exact)" below this table, plus footnotes: "One recipient receives at most one notification per command; `WinnerPicked` merges into the next `RoundOpened` or `GameFinished`." "A player is notified whenever they become newly waited-on, and reminded daily for as long as they remain waited-on, in WRITING, SUBMITTING and JUDGING. Nothing is sent while paused; copy is generic (no card text, no names)." |
+| HLD 3.8 trigger table | Replace with "New HLD 3.8 trigger table (exact)" below this table, plus footnotes: "One recipient receives at most one notification per command; `WinnerPicked` merges into the next `RoundOpened` or `GameFinished`." "A player is notified whenever they become newly waited-on, and reminded daily for as long as they remain waited-on, in WRITING, SUBMITTING and JUDGING (a late joiner still writing is reminded in any phase). Nothing is sent while paused, except that ending the game notifies everyone seated; copy is generic (no card text, no names)." |
 | HLD N1 | "N1. **At most one visible notification per `(outbox row, recipient)`** (a rare duplicate alert is possible), enforced by a delivery record created before sending, so redelivery of the trigger cannot double-notify. A crash between provider acceptance and the record update may resend once with the same collapse key and tag; the device shows one notification, which may alert twice." |
 | HLD N3 | "N3. Reminders only to players the game is currently waiting on (WRITING: unfinished writers; SUBMITTING: non-judge players who have not submitted; JUDGING: the judge), **at most one per 24 h per `(player, game)`**, stopping on pause, finish or end." (adds the per-`(player, game)` scope; section 11 and open question 9) |
 | HLD N4 | "... dead subscriptions are pruned when the push provider reports the token unregistered or invalid." (replaces "on 404/410") |
@@ -563,7 +572,7 @@ No email notification in v1 (gameplay.md, N5). The seam: delivery is behind `del
 | HLD 3.9 Interface | "Periodic job (hourly) calling `Store.listWaitingOn`, then `Store.runCommand(markReminded)` per due game; the resulting `Reminder` outbox row is delivered by Notifications." |
 | tech-stack 5 | `pushSubs/{uid}_{gameId}` holds a `devices` map (up to 5 tokens), not one token |
 | tech-stack 6, reminders | "... queries games with `reminderDueAt <= now` (automatic single-field index; no composite index), calls `markReminded` per due game, and the `Reminder` outbox row it writes is delivered like any other notification. Reminders cover every phase in which the game waits on someone: WRITING, SUBMITTING and JUDGING." (replaces the `phase`/`paused` filters and the direct advance) |
-| tech-stack 6, failure isolation | "Tokens that return `registration-token-not-registered`, `invalid-registration-token`, or (guarded, section 4.4) `invalid-argument` are removed." |
+| tech-stack 6, failure isolation | "Tokens that return `registration-token-not-registered` or `invalid-registration-token` are removed. `invalid-argument` never removes a token; it is counted and alerted." |
 
 **New HLD 3.8 trigger table (exact):**
 
@@ -574,12 +583,13 @@ No email notification in v1 (gameplay.md, N5). The seam: delivery is behind `del
 | `SubmissionsClosed` (all submitted, or the judge closed it) | the judge | Time to judge |
 | `JudgeChanged` | the new judge ("Time to judge" if all cards are in, else "You're judging"); the old judge only if they now owe a card ("Your turn") | |
 | `PausedChanged{paused:false}` | the players the game is waiting on | Game resumed |
-| `WinnerPicked` | all active players (merged into the next `RoundOpened` as "Your turn" for non-judges) | Round result |
-| `GameFinished` | all seated players | Game over |
-| Daily reminder (`Reminder`) | players the game is currently waiting on in WRITING, SUBMITTING or JUDGING | Reminder |
-| pause, `PlayerLeft`, `PlayerRemoved`, `PlayerJoined`, `GameEnded`, others | nobody | |
+| `WinnerPicked` | all seated players, including late joiners still writing (merged into the next `RoundOpened` as "Your turn" for non-judges) | Round result |
+| `GameFinished` | all seated players, including late joiners still writing | Game over |
+| `GameEnded` (the host ended the game) | all seated players (writing, ready or active), also while paused | Game ended ("The host ended the game.") |
+| Daily reminder (`Reminder`) | players the game is currently waiting on in WRITING, SUBMITTING or JUDGING, and late joiners still writing | Reminder |
+| pause, `PlayerLeft`, `PlayerRemoved`, `PlayerJoined`, others | nobody | |
 
-tech-stack 6 additionally: "Notifications cover the WRITING phase as well as turns and judging; an episode (and so a `reminderDueAt`) exists in WRITING." The tech-stack 6 dead-token row above is the exact failure-isolation text.
+tech-stack 6 additionally: "Notifications cover the WRITING phase as well as turns and judging, and the game ending; an episode (and so a `reminderDueAt`) exists in WRITING." The tech-stack 6 dead-token row above is the exact failure-isolation text.
 
 ## 10. Tests
 
@@ -589,12 +599,12 @@ Runner and harness follow LLD 0: unit tests in `functions/src/notify/*.test.ts` 
 
 | Subject | Cases |
 |---|---|
-| `planVersion` recipients | Every row of section 3.2, including: `RoundOpened` excludes the judge, inactive and departed; `WinnerPicked` + `RoundOpened` merges to `turn_after_result` for non-judges and `result` for the new judge; `WinnerPicked` + `GameFinished` yields `game_over` only; void pass yields `turn` and no `owe_card`; `WritingStarted` yields `write` for `writing` players only (not `ready`); `JudgeChanged` in `JUDGING` yields `judge_now`, in `SUBMITTING` yields `judge_assigned` to the new judge and `owe_card` to the old judge for `passed` only (left/removed: no `owe_card`); row `round` for another round number yields none; `PausedChanged{false}` yields `resumed` for exactly `row.waitingOn` (active and writing), `{true}` and any `paused` row yield none; precedence merges (`turn`+`result`, `write` never merged away); no function reads Firestore (`planVersion` takes rows only) |
+| `planVersion` recipients | Every row of section 3.2, including: `RoundOpened` excludes the judge, inactive and departed; `WinnerPicked` + `RoundOpened` merges to `turn_after_result` for non-judges and `result` for the new judge; `WinnerPicked` + `GameFinished` yields `game_over` only, including for a late joiner still writing; `WinnerPicked` alone reaches `ready` and `writing` roster members (`result`); `GameEnded` yields `game_ended` for every seated roster member, also from a `paused: true` row, and nobody departed; void pass yields `turn` and no `owe_card`; `WritingStarted` yields `write` for `writing` players only (not `ready`); `JudgeChanged` in `JUDGING` yields `judge_now`, in `SUBMITTING` yields `judge_assigned` to the new judge and `owe_card` to the old judge for `passed` only (left/removed: no `owe_card`); row `round` for another round number yields none; `PausedChanged{false}` yields `resumed` for exactly `row.waitingOn` (active and writing), `{true}` and any `paused` row yield none; precedence merges (`turn`+`result`, `write` never merged away); no function reads Firestore (`planVersion` takes rows only) |
 | Property (fast-check) | Over `planVersion` inputs: at most one plan per `uid` (NT3); every `uid` is a seated roster member; the winning `rowId` belongs to the input rows; deterministic |
-| `planReminder` | Intersect with live `waitingOn`; episode mismatch yields none; judge in JUDGING gets `reminder_judge`; SUBMITTING players `reminder_play`; row without `round` (WRITING) yields `reminder_write` for `writing` players including a late joiner; paused yields none |
+| `planReminder` | Intersect with live `waitingOn`; episode mismatch yields none; same episode kind but different `episodeGen` (WRITING before and after a pause) yields none; a late joiner in status `writing` during SUBMITTING or JUDGING gets `reminder_write`; judge in JUDGING gets `reminder_judge`; SUBMITTING players `reminder_play`; row without `round` (WRITING) yields `reminder_write` for `writing` players including a late joiner; paused yields none |
 | `buildMessage`, copy | `data` keys exactly the allowed set; every `title`/`body` equals the table; header values (`TTL`, `Urgency`, `Topic` of at most 32 URL-safe chars); `url` is `/g/{gameId}` with no `#`; every `NotifKind` has a copy entry |
-| `claim` transitions | Table over (log absent, `pending` fresh, `pending` stale, `retry`, `done`) x (devices present or absent) x (superseded or not) x (min gap) |
-| Error mapping | Each `messaging/*` code to `PushErrorCode`; the 4.4 `invalid-argument` resolution table (all bad, one bad among good, single token) |
+| `claim` transitions | Table over (log absent, `pending` fresh, `pending` stale, `retry`, `done`) x (devices present or absent) x (superseded or not) x (min gap); a superseded `retry`/stale log is finalized `done` and sends nothing; `pending` fresh yields `dedupe_inflight` and `deliver` returns `inflight` (row not marked); a reminder claimed 23 h 59 m after the previous reminder claim is `min_gap`, at 24 h it proceeds |
+| Error mapping | Each `messaging/*` code to `PushErrorCode`; `invalid-argument` never prunes in any case (all bad, one bad among good, single token, only device), logs `invalid_argument`, and all-bad (at least 2) also logs `notify.payload_invalid` |
 | `registerSub` guard logic | Device cap eviction; token dedupe across seats; `deviceId` default derivation |
 
 ### 10.2 Emulator integration
@@ -603,30 +613,33 @@ Runner and harness follow LLD 0: unit tests in `functions/src/notify/*.test.ts` 
 |---|---|---|
 | Outbox to FCM | Play a 4-player game from `startGame` through `command` | Fake sender receives, per version: at `WritingStarted` every writer gets `write`; judge-less players get `turn`; after the last submission the judge gets `judge`; after `pickWinner` merged kinds per 10.1; each message has its own `tag`, `Topic`, `TTL` |
 | Duplicate trigger | Invoke `handleNotifyRow` twice, sequentially and with `Promise.all` | Exactly one message per device; the second run logs `notify.dedupe`; `notifLog` has one doc per recipient (N1) |
-| Retry after failure | Script device B of one recipient `["transient","ok"]`, device A `["ok"]` | Handler throws first; platform-style rerun sends only B; A receives exactly one message; final log `done`; no duplicate (NT5) |
-| Crash window | Insert a `pending` log older than 120 s with one device `ok` | Resend only the other devices; fresh `pending` (under 120 s) is skipped as in-flight |
+| Retry after failure | Script device B of one recipient `["transient","transient","transient","ok"]` (one transient per in-process attempt, `1 + BACKOFF_MS.length` = 3, before success), device A `["ok"]` | First invocation exhausts its in-process attempts and the handler throws; platform-style rerun sends only B, which succeeds; A receives exactly one message; final log `done`; no duplicate (NT5) |
+| Crash window | Insert a `pending` log older than 120 s with one device `ok` | Resend only the other devices; fresh `pending` (under 120 s) is skipped as in-flight, the row keeps `processedAt == null`, and after the claim goes stale a `housekeeping` run delivers the rest and marks the row |
 | Dead-token pruning | Script `not-registered` for one of three devices; then the only device | That device is removed, others kept; empty doc deleted; later fan-out skips (`no_devices`) |
-| `invalid-argument` | (a) one of three tokens, others ok; (b) all tokens | (a) the one token pruned; (b) nothing pruned, `notify.payload_invalid` logged, row reaches poison after the attempt limit (NT7) |
+| `invalid-argument` | (a) one of three tokens, others ok; (b) all tokens; (c) a recipient's only token | Nothing pruned in any case; the devices stay in `pushSubs`; `push.result invalid_argument` logged per device; (b) also logs `notify.payload_invalid`; the row completes (`lost` devices are not retried) |
 | Poison | Script a persistent infrastructure error | After 5 invocations the row has `poisonedAt` and `processedAt`; the trigger stops (NT7); commands in the same time window are unaffected (N4) |
 | Judge change and unpause | `passJudging` in SUBMITTING and in JUDGING; drop below 3 active players and recover (unpause) in SUBMITTING, JUDGING and WRITING | SUBMITTING: new judge `judge_assigned`, old judge `owe_card`, nobody else; JUDGING: new judge `judge_now` only; pause sends nothing; unpause sends `resumed` to exactly the waited-on players, none to others |
-| Superseded and stale | Deliver a version 14 notice, then a delayed version 13 row; an outbox row aged 25 h | Version 13 skipped (`superseded`); the aged row marked `stale` and never sent (NT4, NT6) |
+| Superseded and stale | Deliver a version 14 notice, then a delayed version 13 row; a version 13 log left in `retry` before version 14 was claimed, then retried; an outbox row aged 25 h | Version 13 skipped (`superseded`) both as a new claim and as a retry (log finalized `done`, no send); the aged row marked `stale` and never sent (NT4, NT6) |
+| Game end and results reach everyone seated | 4 active players and one late joiner still writing in PLAYING; `pickWinner`; then `endGame`, once unpaused and once while paused | The late joiner gets `result` (or `game_over`); `endGame` sends `game_ended` with copy "The host ended the game." to all five, paused or not; departed players get nothing (K-D) |
+| Late joiner reminders | A player joins during PLAYING and leaves writing unfinished; others are waited on in SUBMITTING | The joiner enters `waitingOn` without changing others' `waitingSince`; the next due `Reminder` gives them `reminder_write` and the others `reminder_play` |
+| Delayed reminder gap | Deliver one `Reminder` row 2 h late (redrive); the next sweep's `Reminder` row of the same episode arrives on time, 23 h after that claim | The second is skipped `min_gap` (no two reminder claims under 24 h apart); the following one is sent (N3, NT9) |
 | Registration | Seat, host-with-seat, host without a seat, spectator, removed seat; two seats register the same token; sixth device | Only seated principals succeed; the token moves to the later seat and leaves the earlier doc; the sixth evicts the oldest (NT8) |
 | Cleanup | `leave`, `removePlayer`, `deleteGame`; reissue calling `clearSeatPush` | The `pushSubs` doc is gone after the identity row is processed; the cascade leaves no `pushSubs` or `notifLog` for the game |
 | Failure isolation (N4) | Script FCM to always fail while a game plays on | Every command succeeds with unchanged latency; only outbox rows fail |
 | Sweep idempotency | 250 games due, 50 future, 50 null (LLD 3 fixture); run the sweep twice, and two sweeps in `Promise.all` | One `Reminder` row per due game, `reminderDueAt` advanced once, second run `noop`/`replayed` (T2, NT10) |
 | Time travel | Run once for each phase WRITING (two writers unfinished, one late joiner), SUBMITTING and JUDGING. Injected clock: phase starts at `t0`; sweeps at `t0+23h59m`, `t0+24h01m`, same instant again, `t0+25h`, `t0+49h08m`; a submission (or finished writing) by one waited player; pause and unpause; finish; clock jump of 5 days with one sweep | No reminder before 24 h; one at 24 h (`reminder_write`, `reminder_play` or `reminder_judge` by phase); none on the repeat; the next about 24 h after; the submitter or finished writer is excluded; none while paused, `resumed` on unpause and a new episode; none after finish; the 5-day jump yields exactly one reminder (T1, T2, T3, N3) |
-| Redrive | Create an unprocessed `notify` row aged 11 min; run `housekeeping` | It is delivered once; an identity row calls the `handleIdentityRow` stub, then the push cleanup, which sets `notifDoneAt` and never `processedAt`; a deletion job stuck at `running` is resumed |
+| Redrive | Create an unprocessed `notify` row aged 11 min; run `housekeeping` | It is delivered once; an identity row calls the `handleIdentityRow` stub, then the push cleanup, which sets `notifDoneAt` and never `processedAt`; an identity row with `processedAt` set but `notifDoneAt == null` gets the push cleanup only; a deletion job stuck at `running` is resumed |
 | Log sentinel (P19) | Full game with sentinel names, card texts, tokens | No sentinel, token or `deviceId` appears in Functions emulator logs |
 | Rules | none new | LLD 3's denial matrix rows 12 and 13 already cover `notifLog` and `pushSubs` (ST7 keeps the names in sync) |
 
 ### 10.3 Anonymity tests (R1, N2)
 
-Reuses LLD 2's forbidden-values oracle approach (section 11.2 there): scenarios from LLD 1's legal-command generator with unique fixed-width sentinels for names, card texts and drafts, all variants on, 3 to 10 players, membership churn. After every accepted command the harness runs the real `buildOutbox`, `planVersion`/`planReminder`, and `buildMessage`, and captures every `PushMessage`. For each message the oracle asserts that `JSON.stringify(message)` contains:
+Reuses LLD 2's forbidden-values oracle approach (section 11.2 there): scenarios from LLD 1's legal-command generator with unique fixed-width sentinels for names, card texts and drafts, all variants on, 3 to 10 players, membership churn. After every accepted command the harness runs the real `buildOutbox`, `planVersion`/`planReminder`, and `buildMessage`, and captures every `PushMessage`. The oracle inspects the notification payload and every recipient-visible field, `JSON.stringify({ data: message.data, webpush: message.webpush })`, **excluding the transport `token`** (it is the address, never delivered to the device or shown; it is covered by the log sentinel scan instead). It asserts that this contains:
 
 - no card id or text from the registry, no draft text, no display name sentinel;
-- no uid, `hostId`, `seat:`, `#k=`, token-like string, room code, or any `playerId`;
+- no uid, `hostId`, `seat:`, `#k=`, FCM token or other token-like string, room code, or any `playerId`;
 - only the allowed `data` keys, and a `title`/`body` pair that is exactly a `COPY` entry (so no dynamic content can enter);
-- (visibility oracle) the kind is derivable from the recipient's own `project(game, viewer)` at that version: `write` implies phase `WRITING` and the recipient has unfinished writing; `resumed` implies the recipient is in `waitingOn`; `judge_assigned` implies the recipient is the judge and the round is `SUBMITTING`; `turn` implies the recipient is a non-judge `waitingOn` in an open round; `judge` implies the recipient is the judge and `round.phase == "JUDGING"`; `result` and `turn_after_result` imply a resolved round in `history`; `game_over` implies `phase == "FINISHED"`.
+- (visibility oracle) the kind is derivable from the recipient's own `project(game, viewer)` at that version: `write` implies phase `WRITING` and the recipient has unfinished writing; `resumed` implies the recipient is in `waitingOn`; `judge_assigned` implies the recipient is the judge and the round is `SUBMITTING`; `turn` implies the recipient is a non-judge `waitingOn` in an open round; `judge` implies the recipient is the judge and `round.phase == "JUDGING"`; `result` and `turn_after_result` imply a resolved round in `history`; `game_over` implies `phase == "FINISHED"`; `game_ended` implies `phase == "ENDED"`; `reminder_write` implies the recipient has unfinished writing.
 
 Additionally, for every captured outbox row (including those from `finishWriting`, `importDeck` and write-in commands), assert the row has no `seed`, `actorPlayerId`, `commandType` or card-id field, and that no such command produces a row that identifies the author (NT13).
 
@@ -657,7 +670,7 @@ HLD invariants, restated testably:
 |---|---|---|---|
 | N1 | At most one visible notification per `(row, recipient)` (a rare duplicate alert is possible) | `notifLog/{rowId}_{uid}` created in `claim` before send; stale-claim resend collapses by `tag` and `Topic` | Duplicate trigger, crash window |
 | N2 | No card text or hidden data in any notification | Closed payload key set, copy table with no interpolation, ids and counts only in rows | Anonymity tests 10.3, sentinel log scan |
-| N3 | Reminders only to players currently waited on (WRITING, SUBMITTING, JUDGING), at most one per 24 h per `(player, game)`, stopping on pause, finish or end | Engine `reminderDueAt` null outside an unpaused wait episode; `markReminded` +24 h; live `waitingOn` intersection; 20 h claim guard | Time-travel, sweep tests |
+| N3 | Reminders only to players currently waited on (WRITING, SUBMITTING, JUDGING), at most one per 24 h per `(player, game)`, stopping on pause, finish or end | Engine `reminderDueAt` null outside an unpaused wait episode; `markReminded` +24 h; live `waitingOn` intersection (same `episodeGen`); 24 h delivery-time claim guard | Time-travel, sweep tests |
 | N4 | Push failure never fails or delays a command | Separate trigger and schedule functions; no push call on the command path; per-recipient isolation | Failure-isolation test |
 | N5 | Email only for host sign-in | No email channel built | Code scan: no mail import in `notify/` |
 | T1 | Scheduler holds no game logic; writes only via `markReminded` | `sweep.ts` imports only `listWaitingOn` and `runCommand` | Lint rule: `notify/sweep.ts` may not import `firebase-admin/firestore` write APIs; code scan |
@@ -669,19 +682,19 @@ New invariants (NT):
 | Inv | Statement | Mechanism | Tests |
 |---|---|---|---|
 | NT1 | A push `data` payload has exactly the keys `v, kind, gameId, round?, title, body, tag, url`, and `title`/`body` are a `COPY` entry | `buildMessage` is the only constructor; a type forbids extra keys | Unit, anonymity mutants |
-| NT2 | Recipients are seated roster members at row time; no notice from a `paused` row | `planVersion` roster and `paused` filters | Property test 10.1 |
+| NT2 | Recipients are seated roster members at row time; no notice from a `paused` row except `game_ended` | `planVersion` roster and `paused` filters | Property test 10.1 |
 | NT3 | Spectators, unseated hosts, departed and removed players never receive a push | `registerPush` rejects them; plan filters by roster; identity cleanup | Registration and cleanup tests |
 | NT4 | A recipient is never notified of a version older than one already claimed for that seat and game | `lastNotifiedVersion` checked and set in the claim transaction | Superseded test |
 | NT5 | A device that returned `ok` is never resent the same `(row, recipient)` | Per-device status map in `notifLog` | Retry test |
 | NT6 | No notice is sent for a row older than 24 h (reminders 6 h) | Age check in `handleNotifyRow` | Stale test |
 | NT7 | A row triggers at most 5 handler attempts, then is poisoned | `notifAttempts` on the row | Poison test |
 | NT8 | A token belongs to at most one seat per game; at most 5 devices per seat | `registerSub` transaction | Registration tests |
-| NT9 | No two reminder claims for one `(uid, game)` are less than 20 h apart | `lastReminderAt` in `claim` | `claim` table test |
-| NT10 | A reminder goes only to recipients in live `waitingOn` of the same episode | `planReminder` | Unit and time-travel |
-| NT11 | Every device pruned for `not-registered`/`invalid-token` is removed in the invocation that observed it, and a rotated token is never removed by a stale failure | `pruneDead` compares the stored token | Prune and rotation tests |
+| NT9 | No two reminder claims for one `(uid, game)` are less than 24 h apart, delayed rows included | `lastReminderAt` (previous reminder claim time) checked at delivery in `claim` | `claim` table test, delayed reminder gap test |
+| NT10 | A reminder goes only to recipients in live `waitingOn` of the same episode (same `episode` and `episodeGen`) | `planReminder` | Unit and time-travel |
+| NT11 | Every device pruned for `not-registered`/`invalid-token` is removed in the invocation that observed it, a rotated token is never removed by a stale failure, and no token is ever pruned for `invalid-argument` | `pruneDead` compares the stored token; `invalid-argument` maps to `lost` | Prune, rotation and `invalid-argument` tests |
 | NT12 | Notification data is server-only and removed with the game | Rules rows 12 and 13; cascade stages `push` and `history` | LLD 3 rules and deletion tests |
 | NT13 | Outbox rows and push payloads carry no `seed`, `actorPlayerId`, `commandType` or card id, and card-minting commands produce no notify row identifying an author | `buildOutbox` row shape (LLD 3 2.3); `NOTIFY_EVENTS` excludes minting events; closed payload keys | Anonymity tests 10.3 |
-| NT14 | A player becomes newly waited-on only with a push: every transition into `waitingOn` (writing start, round open, submissions closed, judge change, unpause) yields a plan for that player unless they are in the app by construction (late joiner in WRITING) | Event map 3.2 | `planVersion` unit and integration tests |
+| NT14 | A player becomes newly waited-on only with a push: every transition into `waitingOn` (writing start, round open, submissions closed, judge change, unpause) yields a plan for that player unless they are in the app by construction (late joiner, any phase); the game ending (`GameEnded`, `GameFinished`) notifies every seated player | Event map 3.2 | `planVersion` unit and integration tests |
 | NT15 | `planVersion` and `planReminder` input is the row (plus live `episode`/`waitingOn` for `Reminder` only); no live read for any other row | `OutboxRow.round`, `waitingOn` | Unit (pure signature) |
 | NT16 | L6 writes `processedAt` only on `notify` rows and uses `notifDoneAt` on `identity` rows | Handler code path | Redrive test |
 
@@ -697,14 +710,14 @@ New invariants (NT):
 8. **Quiet hours and time zones.** None in v1. A reminder can land at night if the original notice did; a fix needs a per-device time zone offset (new optional field on `registerPush`) and a defer path in `deliver`.
 9. **N3 is per `(player, game)`.** A player in several games can receive several reminders in one hour. A global per-player cap would need a per-uid document across games (uids differ per game for seats, so a cap is only possible for a host's own uid). Accepted.
 10. **Web Push `Topic` through FCM.** Support for the `Topic` header in `webpush.headers` via FCM HTTP v1 is assumed; verify at the first staging deploy (device test 8). `tag` replacement works regardless.
-11. **FCM `invalid-argument` ambiguity.** The breaker in 4.4 is a heuristic. Alternative: dry-run the token at registration; rejected for the extra latency and because validity can change later.
+11. **RESOLVED (review CR): FCM `invalid-argument` ambiguity.** `invalid-argument` never prunes a token (the earlier single-token/one-of-many pruning heuristic is removed); it is counted and alerted (4.4, 7.3), and only `registration-token-not-registered` and equivalents prune. A genuinely bad token keeps costing one failed send per notice until FCM reports it unregistered; accepted. Alternative: dry-run the token at registration; rejected for the extra latency and because validity can change later.
 12. **Firestore-trigger retry semantics.** `retry: true` is assumed to retry with backoff for a bounded period on the pinned `firebase-functions` 6.x; the `notifAttempts` counter and hourly redrive make the design correct even if the platform retries less.
 13. **Host push on iOS.** The host's email-link sign-in opens in Safari (LLD 4 conflict 10), so the host's `pushSubs` belong to the browser context they registered from; a host who plays from the installed PWA must register there. Their seat uid is `hostId`.
 14. **RESOLVED by U1: unpause is no longer silent.** `PausedChanged{paused:false}` sends `resumed` to the waited-on players and starts a new episode. Pausing itself stays silent.
 15. **Cleanup race on `deleteGame`.** A fan-out in flight at delete time may recreate one `notifLog` doc after the `history` stage; it expires by TTL. Accepted (ids only).
 16. **Engine `markReminded` drift.** LLD 1 sets `reminderDueAt = now + 24 h`, giving a cadence of 24 h plus sweep lag. Setting it to `dueAt + 24 h` would remove the drift but cause a catch-up burst after an outage, so it is not requested.
 
-17. **Late joiner reminder timing.** A late joiner in WRITING is added to the running episode's `waitingOn` (no push; they are in the app), so their first reminder follows the episode's `reminderDueAt` and may come sooner than 24 h after joining. Accepted; if LLD 1 instead gives each writer their own due time, the sweep needs no change but N3 needs a per-player check.
+17. **Late joiner reminder timing.** A late joiner in status `writing` (WRITING or PLAYING, K-E) is added to the running episode's `waitingOn` without changing the episode or others' `waitingSince` (no push; they are in the app), so their first reminder follows the episode's `reminderDueAt` and may come sooner than 24 h after joining. Accepted; if LLD 1 instead gives each writer their own due time, the sweep needs no change but N3 needs a per-player check.
 18. **`JudgeChanged` in SUBMITTING and the old judge.** U1 says nobody besides the new judge is told when judging moves during SUBMITTING, and also that every newly waited-on transition notifies. This LLD reads the first as "no broadcast" and keeps the `owe_card` push to the old judge, since they become newly waited-on. Drop the `owe_card` row if the product owner meant otherwise.
 19. **`PausedChanged` outbox rows.** Both directions create a `notify` row (the pause row is inert, `paused: true`), so one extra row per flip. Accepted for simplicity of `NOTIFY_EVENTS`.
 
@@ -713,9 +726,9 @@ New invariants (NT):
 | LLD | This LLD provides | This LLD expects |
 |---|---|---|
 | 0 Platform | Exports for `exports.json`: `notifyOutbox`, `reminderSweep`, `housekeeping`, plus the bodies of `registerPush`/`unregisterPush`; log events and metrics of section 7; `PUSH_SENDER=fake` emulator gate; params `REMINDER_SWEEP_CRON`; Cloud Scheduler needs (two jobs); no new secrets | `fn-runtime` FCM admin role and enabled FCM APIs; metric and alert definitions applied by `ops-apply`; the emulator-only clock override; Scheduler API enabled; extra logger fields |
-| 1 Engine | Reads only: event catalog (section 11), `expected`, `waitingOn`, `episode`, `reminderDueAt`; the sweep's `markReminded` invocation | `markReminded` kept with the episode and due checks; an episode (`waitingOn`, `waitingSince`, `reminderDueAt` +24 h) in WRITING as well as SUBMITTING and JUDGING; `waitingOn` and `episode` exposed on the aggregate; no event payload carries card text, seed or actor; a paused game's `reminderDueAt` is `null` |
+| 1 Engine | Reads only: event catalog (section 11), `expected`, `waitingOn`, `episode`, `episodeGen`, `reminderDueAt`; the sweep's `markReminded` invocation (with `episode` and `episodeGen`) | `markReminded` kept with the episode, `episodeGen` and due checks; `episodeGen` incremented at every episode start, including unpause; late joiners in status `writing` added to `waitingOn` in any phase without resetting the episode (LLD 1 4.2); an episode (`waitingOn`, `waitingSince`, `reminderDueAt` +24 h) in WRITING as well as SUBMITTING and JUDGING; `waitingOn` and `episode` exposed on the aggregate; no event payload carries card text, seed or actor; a paused game's `reminderDueAt` is `null` |
 | 2 Projector | Nothing at runtime; the visibility oracle uses `project` in tests | Views carry no push data; `project` usable from `functions` tests |
-| 3 Store | `processedAt` and consumer fields (`notifAttempts`, `poisonedAt`, `notifSkipped`, `notifDoneAt`) on `notify` rows, `notifDoneAt` on `identity` rows, `notifLog` (TTL `expiresAt`), `pushSubs` with `uid`, `gameId`; the hourly redrive and the `deletions` stuck-job sweep (`housekeeping`) | `OutboxRow` with `id`, `roster`, `judgeId`, `paused`, `round?`, `waitingOn`, the consumer fields above, stable `v{n}_{i}` ids, and no seed, actor or command type; `buildOutbox(prev, next, cmd, a, now)`; `NOTIFY_EVENTS` including `WritingStarted` and `PausedChanged`; `Reminder` row written inside `markReminded`; `listWaitingOn`, `runCommand`, `runDeletion`; the redrive index; cascade stages `push` and `history`; `where version ==` query registered in `queries.ts` |
+| 3 Store | `processedAt` and consumer fields (`notifAttempts`, `poisonedAt`, `notifSkipped`, `notifDoneAt`) on `notify` rows, `notifDoneAt` on `identity` rows, `notifLog` (TTL `expiresAt`), `pushSubs` with `uid`, `gameId`; the hourly redrive and the `deletions` stuck-job sweep (`housekeeping`) | `OutboxRow` with `id`, `roster`, `judgeId`, `paused`, `round?`, `waitingOn`, the consumer fields above, stable `v{n}_{i}` ids, and no seed, actor or command type; `buildOutbox(prev, next, cmd, a, now)`; `NOTIFY_EVENTS` including `WritingStarted`, `PausedChanged` and `GameEnded`; `Reminder` row written inside `markReminded`, its event carrying `episodeGen`; `listWaitingOn` items carrying `episodeGen`; `notifDoneAt: null` written at row creation and the index for the identity `notifDoneAt == null` redrive query; `listWaitingOn`, `runCommand`, `runDeletion`; the redrive index; cascade stages `push` and `history`; `where version ==` query registered in `queries.ts` |
 | 4 Identity | Exports `clearSeatPush(db, gameId, uid)` from `subs.ts`; push cleanup on `PlayerLeft`/`PlayerRemoved` rows, recorded in `notifDoneAt`, never `processedAt` | `handleIdentityRow(db, gameId, rowId)` export (called by the redrive); `reissueRejoinLink` calls `clearSeatPush` after commit; sole writer of `processedAt` on `identity` rows; no other use of `pushSubs` |
 | 5 Command API | Bodies and Firestore effects of `registerPush`/`unregisterPush`; membership validation inside them; the zod constraints for `fcmToken` and `deviceId` (section 2.2 is the source; LLD 5 copies them exactly) | `defineCallable` wrapper, principals seat and host, `assertSeatLive`, `push_uid` bucket; no system actor path other than `markReminded` |
 | 7 Web Client | The push contract of section 2.1: data-only payload keys, `tag`, `renotify`, relative deep link, always-show rule, token rotation and re-registration rules, unregister-before-sign-out, permission and iOS status machine and "not reaching you" heuristic (section 6) | The single `/sw.js` worker (`push` and `notificationclick` handlers, receipts), with no Firebase SDK or config inside it; `VITE_FCM_VAPID_KEY`; install prompt on iOS; the local receipt log and the "since `lastSeenAt`" miss rule (section 6) |

@@ -10,7 +10,7 @@ Status: draft v0.1. Companion to [gameplay.md](../gameplay.md), [high-level-desi
 | Creating and deleting games | Separate callables `createGame` and `deleteGame`; `command` rejects `createGame`, `join`, `deleteGame`, `importDeck`, `markReminded` at the schema | They need no aggregate to exist, a host-only principal, an extra Auth check (`deleteGame`), their own limits and ledgers (LLD 3 6.1, 6.4) |
 | Wire names | `idempotencyKey` everywhere on the wire (HLD 4.2); `idemKey` stays the internal Store name (LLD 3) | One client helper, one name; conflict 2 |
 | Request schemas | Non-strict (`z.object`: unknown keys stripped). **Response and view schemas are strict on the server** (`z.strictObject`, PJ2) and lenient on the client | Forward-compat during deploy skew vs. fail-closed redaction |
-| Version signal | Integer `v` in every request, `sv` in every response, `ViewDoc.schema`/`rev` for documents | Section 2.5 |
+| Version signal | Integer `v` in every request, `sv` in every response, `ViewDoc.schema`/`viewsRev` for documents | Section 2.5 |
 | Rate limiter | Fixed window, transactional counter per bucket, hashed keys, lockout, TTL | Section 7 |
 | `consumeAppCheckToken` | Not adopted; `enforceAppCheck: true` on every callable | LLD 4 conflict 13 resolved: accept |
 | Deck callables | Names and schemas **reserved** in `contracts`; nothing deployed in v1 | Deck Library is a later phase |
@@ -99,7 +99,7 @@ export const RejectionSchema = z.strictObject({
 });
 ```
 
-`RATE_LIMITED` is produced only by the API layer (LLD 1: never by the Engine). `CLIENT_OUTDATED` is deliberately not an `ErrorCode`: it is a gate answer (2.5) that must work even when the client cannot parse the current body shape.
+`version` is required in every rejection body, from every callable. The identity callables (`joinGame`, `rejoin`, `lobbyInfo`, `spectate`, `reissueRejoinLink`, and the rest of LLD 4) send the decision version of the game they read when one was read (for example a `joinGame` rejected by the Engine), and `version: 0` when no game state was read (rate limits, unresolved codes, uniform `rejoin` `NOT_FOUND`, principal refusals). `RATE_LIMITED` is produced only by the API layer (LLD 1: never by the Engine). `CLIENT_OUTDATED` is deliberately not an `ErrorCode`: it is a gate answer (2.5) that must work even when the client cannot parse the current body shape.
 
 ### 2.4 Command envelope and payloads
 
@@ -165,20 +165,21 @@ LLD 2 section 4.2 and 7.1 are normative for every field name, nullability and me
 // view.ts
 export const makeViewSchemas = (mode: "strict" | "loose") => {
   const obj = mode === "strict" ? z.strictObject : z.looseObject;
+  const en = <S extends z.ZodTypeAny>(e: S) => (mode === "strict" ? e : z.string());   // loose: any string in enum positions (forward compatibility)
   const Counts = obj({ red: z.number().int().nonnegative(), green: z.number().int().nonnegative() });
-  const Settings = obj({ targetOverride: z.number().int().min(2).max(10).nullable(), profanity: z.enum(["on", "off"]),
+  const Settings = obj({ targetOverride: z.number().int().min(2).max(10).nullable(), profanity: en(z.enum(["on", "off"])),
     variants: obj({ pitch: z.boolean(), writeIn: z.boolean(), redraw: z.boolean(), peoplesChoice: z.boolean() }),
     spectators: obj({ enabled: z.boolean(), vote: z.boolean() }) });
-  const PlayerPublic = obj({ id: PlayerIdSchema, name: z.string(), joinOrder: z.number().int(), status: PlayerStatusSchema,
+  const PlayerPublic = obj({ id: PlayerIdSchema, name: z.string(), joinOrder: z.number().int(), status: en(PlayerStatusSchema),
     isHost: z.boolean(), score: z.number().int().nonnegative(), cardsLeft: Counts.nullable() });
-  const RoundPublic = obj({ number: z.number().int().positive(), judgeId: PlayerIdSchema, phase: RoundPhaseSchema,
+  const RoundPublic = obj({ number: z.number().int().positive(), judgeId: PlayerIdSchema.nullable() /* null only while paused, LLD 1 8.3 */, phase: en(RoundPhaseSchema),
     green: obj({ id: CardIdSchema, text: z.string() }), expected: z.array(PlayerIdSchema), submittedBy: z.array(PlayerIdSchema),
     reveal: z.array(obj({ submissionId: CardIdSchema, text: z.string(), pitch: z.string().nullable() })).nullable() });
-  const YouView = obj({ /* playerId, status, isHost, isJudge, turn: YouTurnSchema, score, roomCode, hand[], writeTarget, cardsLeft,
+  const YouView = obj({ /* playerId, status, isHost, isJudge, turn: en(YouTurnSchema), score, roomCode, hand[], writeTarget, cardsLeft,
                           powerUsage, yourSubmission, myVotes: z.record(z.string(), CardIdSchema): LLD 2 4.2, field for field */ });
   const HostPanel = obj({ /* roomCode, playability{...}, writeCountsOverride: LLD 2 4.2 */ });
   const AwardsView = obj({ /* peoplesChoice[], podium[]: LLD 2 4.2 */ });
-  const Live = { kind: z.literal("live"), gameId: GameIdSchema, version: Int, phase: PhaseSchema, paused: z.boolean(), settings: Settings,
+  const Live = { kind: z.literal("live"), gameId: GameIdSchema, version: Int, phase: en(PhaseSchema), paused: z.boolean(), settings: Settings,
     target: Int, targetFrozen: z.boolean(), writeCounts: Counts.nullable(), players: z.array(PlayerPublic), waitingOn: z.array(PlayerIdSchema),
     round: RoundPublic.nullable(), resolved: Int, winnerId: PlayerIdSchema.nullable(), awards: AwardsView.nullable() };
   const GameView = z.discriminatedUnion("audience", [
@@ -186,9 +187,10 @@ export const makeViewSchemas = (mode: "strict" | "loose") => {
     obj({ ...Live, audience: z.literal("host"), host: HostPanel }),
     obj({ ...Live, audience: z.literal("player"), you: YouView, host: HostPanel.optional() }),
     obj({ kind: z.literal("departed"), audience: z.literal("departed"), gameId: GameIdSchema, version: Int,
-          reason: z.enum(["left", "removed", "gone"]) }),
+          reason: en(z.enum(["left", "removed", "gone"])) }),
   ]);
-  const ViewDoc = obj({ schema: z.literal(VIEW_SCHEMA), rev: Int, gameId: GameIdSchema, enabled: z.boolean(), version: Int, generatedAt: Int,
+  // viewsRev: clients order snapshots by (version, viewsRev) lexicographically, so a rebuild at the same version wins (LLD 2)
+  const ViewDoc = obj({ schema: z.literal(VIEW_SCHEMA), viewsRev: Int, gameId: GameIdSchema, enabled: z.boolean(), version: Int, generatedAt: Int,
     view: GameView.nullable(), draftSeq: Int.optional(), draft: obj({ red: z.array(z.string()), green: z.array(z.string()) }).nullable().optional() });
   const RoundDoc = obj({ /* schema, round, judgeId, winnerId, winnerCardId, green{id,text|null}, plays[], absent[], resolvedAt, redacted: LLD 2 7.1 */ });
   return { GameView, ViewDoc, RoundDoc };
@@ -196,6 +198,8 @@ export const makeViewSchemas = (mode: "strict" | "loose") => {
 export const { GameView: GameViewSchema, ViewDoc: ViewDocSchema, RoundDoc: RoundDocSchema } = makeViewSchemas("strict");  // server only: PJ2
 export const { GameView: GameViewLooseSchema, ViewDoc: ViewDocLooseSchema, RoundDoc: RoundDocLooseSchema } = makeViewSchemas("loose");  // web
 ```
+
+**Loose-schema rule (forward compatibility, LLD 7 open question 21).** The loose variant differs from the strict one in exactly two ways: objects accept unknown keys (`looseObject`), and every enum position (`phase`, `status`, `turn`, `profanity`, departed `reason`, and any enum added later, through `en()`) is parsed as `z.string()`, so an additive enum member (for example a new `YouTurn`) reaches the client's default branch instead of failing the parse. The strict server schemas stay closed. The `audience` discriminator and the `schema` literal stay exact: the client checks the raw envelope `schema` before parsing and treats any loose parse failure as "Update needed" (LLD 7 section 4.1).
 
 - Enumerations (`Phase`, `PlayerStatus`, `RoundPhase`, `YouTurn`, `ERROR_CODES`) are declared here as `as const` tuples. The Engine's types must equal them (type test in `packages/engine/test`, LLD 2 11.6 `_d`); the Engine imports `ErrorCode` from here, so that one cannot drift.
 - `project()` is declared to return the contracts `GameView` type, so a Projector field that is not in the schema is a compile error; the strict parse (PJ2) is the runtime half. The contracts tests also assert that `JSON.parse(JSON.stringify(game))` fails `GameViewSchema` (LLD 2 11.6).
@@ -228,9 +232,9 @@ All callables: region `us-central1`, service account `fn-runtime` (both from `se
 | `command` | Every in-game command (2.4) | seat, host, spectator (`castVote` only) | `CommandEnvelope` | `{ok:true, version, view, draftSeq?, replay}` | all `ErrorCode` except none excluded; `RATE_LIMITED` | ledger `(uid, idempotencyKey)` per game, LLD 3 5.4; required | `cmd_uid`; `draft_uid` for `saveDraft`; `vote_uid` for spectator `castVote` |
 | `createGame` | Create a game, allocate room code, host seat | host | `{v, idempotencyKey, hostName, settings?}` | `{ok:true, gameId, roomCode, inviteUrl, replay}` | `CONTENT_REJECTED`, `INVALID_ARGUMENT`, `RATE_LIMITED` | ledger `hosts/{uid}/idem`; replay returns same ids | `create_uid`, `create_ip` |
 | `deleteGame` | Phase 0 of S5, cascade follows | host | `{v, gameId, idempotencyKey}` | `{ok:true, deleting:true}` (no `replay`) | `NOT_AUTHORIZED`, `NOT_FOUND` (already deleting or absent: client treats as success), `RATE_LIMITED` | none in the body: a replay of `deleteGame` returns `NOT_FOUND`, never `replay:true`; the client helper maps it to success | `delete_uid` |
-| `joinGame` | Join by code or invite; mint seat | guest, spectator, host, seat | LLD 4 4.1 (`target`, `displayName`, `idempotencyKey`) | `{ok:true, gameId, playerId, customToken, rejoinUrl, version, replay}` | `NOT_FOUND`, `NAME_TAKEN`, `ROOM_FULL`, `CONTENT_REJECTED`, `WRONG_PHASE`, `RATE_LIMITED` | game ledger; deterministic minting (LLD 4 4.2) | by code: `code_ip`, `join_ip`, `join_game_code`; by id: `invite_ip`, `join_ip`, `join_game_invite` |
+| `joinGame` | Join by code or invite; mint seat | guest, spectator, host, seat | LLD 4 4.1 (`target`, `displayName`, `idempotencyKey`) | `{ok:true, gameId, playerId, customToken, rejoinUrl, version, replay}` | `NOT_FOUND`, `NAME_TAKEN`, `ROOM_FULL`, `CONTENT_REJECTED`, `WRONG_PHASE`, `RATE_LIMITED` | `joinIdem/{sha256(idempotencyKey)}` checked before the code is resolved, so a same-key retry recovers the seat after the code expired; replay returns credentials only while `seats/{uid}.firstSignInAt == null`, else `NOT_FOUND` (LLD 4 4.2, 6.3 below) | by code: `code_ip`, `join_ip`, `join_game_code`; by id: `invite_ip`, `join_ip`, `join_game_invite` |
 | `lobbyInfo` | Pre-join peek, never returns `gameId` | guest, spectator, host, seat | `{v, target:{code}\|{gameId}}` | `{ok:true, joinable:false}` or `{ok:true, joinable:true, playerCount}` | `RATE_LIMITED` | read-only | by code: `code_ip`, `code_code`; by id: `invite_ip` |
-| `rejoin` | New-device seat recovery | guest, spectator, host, seat | `{v, gameId, secret}` | `{ok:true, playerId, customToken}` | `NOT_FOUND` (uniform), `RATE_LIMITED` | none (token mint only) | `rejoin_fail_ip`, `rejoin_fail_game` (failure-counted) |
+| `rejoin` | New-device seat recovery | guest, spectator, host, seat | `{v, gameId, secret}`, both permissive (3.3): a malformed value is `NOT_FOUND`, never `invalid-argument` | `{ok:true, playerId, customToken}` | `NOT_FOUND` (uniform), `RATE_LIMITED` | none (token mint only) | `rejoin_fail_ip`, `rejoin_fail_game` (failure-counted) |
 | `spectate` | Is the spectator doc available; spectator voting? | spectator, host, seat | `{v, gameId}` | `{ok:true, available, vote}` | `RATE_LIMITED` | read-only | `spectate_ip` |
 | `registerPush` | Store an FCM token for a seat or host | seat, host | `{v, gameId, fcmToken, deviceId?}` (constraints in 3.3) | `{ok:true}` | `NOT_AUTHORIZED`, `NOT_FOUND`, `RATE_LIMITED` | natural upsert on `pushSubs/{uid}_{gameId}` | `push_uid` |
 | `unregisterPush` | Remove it | seat, host | `{v, gameId, fcmToken}` | `{ok:true}` | as above | natural | `push_uid` |
@@ -274,6 +278,10 @@ export const LobbyResponseSchema = z.union([
   z.strictObject({ ok: z.literal(true), joinable: z.literal(false), sv: Int }),
   z.strictObject({ ok: z.literal(true), joinable: z.literal(true), playerCount: Int, sv: Int }),   // never a gameId (ID14)
   RejectionSchema]);
+// rejoin: deliberately permissive so a malformed secret or gameId is indistinguishable from a wrong one (LLD 4). Any value, including a
+// missing one, parses (`.catch("")`); the handler checks the GameId/secret shape itself and answers the uniform NOT_FOUND (version 0),
+// counting a failure in rejoin_fail_ip/rejoin_fail_game like any bad secret. Only `v` is still gated (CLIENT_OUTDATED).
+export const RejoinRequestSchema = z.object({ ...V, gameId: z.string().max(WIRE_TEXT_MAX).catch(""), secret: z.string().max(WIRE_TEXT_MAX).catch("") });
 export const CommandResponseSchema = z.union([
   z.strictObject({ ok: z.literal(true), version: Int, view: GameViewSchema, draftSeq: Int.optional(), replay: z.boolean(), sv: Int }),
   RejectionSchema]);
@@ -303,7 +311,7 @@ The typed client helper in `apps/web` is generated from `CALLABLES`: `call<K ext
 | 2 | **Auth presence** | wrapper | no `request.auth` and `guest` not in `allow`: `HttpsError("unauthenticated")` |
 | 3 | **Version gate, parse, validate** | wrapper: `{v}` pre-parse, then `spec.input.safeParse` | `CLIENT_OUTDATED` or `invalid-argument` (fixed messages, input never echoed) |
 | 4 | **Rate limit** | `limits.consume(specs)` using `req.auth?.uid`, provider kind, `ipHash`, parsed input | `RATE_LIMITED` body |
-| 5 | **Principal resolve** | `principalOf(req.auth)` (pure), `allow` check, then `assertSeatLive` for seats when `gameIdOf` is declared | `NOT_AUTHORIZED` body |
+| 5 | **Principal resolve** | `principalOf(req.auth)` (pure), `allow` check, then `assertSeatLive` for seats when `gameIdOf` is declared (refuses when the token's `ep` claim differs from `seats/{uid}.epoch` or `authTime <= notBefore`, LLD 4) | `NOT_AUTHORIZED` body |
 | 6 | **Handler** | spec-specific; calls `runCommand` and friends | `Rejection` becomes a body; failures throw |
 | 7 | **Response mapping** | wrapper: strict `output.parse`, `detail` allowlist, add `sv`, log | see section 5 |
 
@@ -409,7 +417,7 @@ export const command = defineCallable({
 
 - **Envelope validation** is step 3 (zod, discriminated on `type`). A type outside the 15 client types fails the schema; `createGame`, `join`, `deleteGame`, `importDeck` and `markReminded` are therefore unreachable through `command` (API4).
 - **Principal to actor.** `toActor(principal)` yields `{kind:"user", uid}` (LLD 4 2.2). No role, `playerId` or `isHost` from the client is read anywhere: the envelope has no such field, and the Engine resolves roles from `uid` through `game.players[].uid` (A2). `markReminded` is reachable only from the Scheduler with `{kind:"system"}`.
-- **Seat freshness.** `assertSeatLive` has already run (step 5): one `seats/{playerId}` read, outside the transaction, rejecting revoked or reissued sessions immediately (ID3). The host principal and spectators have no seats doc and skip it.
+- **Seat freshness.** `assertSeatLive` has already run (step 5): one `seats/{playerId}` read, outside the transaction, rejecting revoked or reissued sessions immediately (ID3): a token whose `ep` claim (the one developer claim on seat custom tokens; no other custom claims) is not the seat's current `epoch`, or whose `authTime` is not strictly after `notBefore`, gets `NOT_AUTHORIZED`/`seat_revoked`. The host principal and spectators have no seats doc and skip it.
 - **Store call.** One `runCommand` (LLD 3 5.2). `expectedVersion` is never interpreted here (LLD 3 5.4).
 - **What `ok:true` returns.** `view` is the caller's own `GameView`, produced in the transaction by `makeProjector(next)(viewerFor(next, uid))` (LLD 2 8.5): for a spectator caller the spectator content; for a caller who has just left or been removed, the tombstone. `version` is the aggregate version the command produced. For a text-only `saveDraft` there is no new aggregate version: `version` and `view` are the unchanged ones and `draftSeq` is the new draft counter. The wrapper strict-parses the response with `GameViewSchema` (API8).
 - **Replay (resolves the replay-returns-current-view question).** A ledger hit returns `{ok:true, replay:true, version: <original committed version>, view: <caller's current view>}` (LLD 3 5.4, conflict 8). The contract states: **on a replay `version` can be lower than `view.version`**, and the client must order by `view.version` (LLD 2 8.4) and treat `version` only as "my command was applied at or before this point". Returning the original view was rejected: it is not stored (up to 64 KiB) and is stale by definition.
@@ -427,6 +435,7 @@ export const command = defineCallable({
 - **Format.** Lowercase UUIDv4 from `crypto.randomUUID()`, generated **per user intent** when the action is first attempted and persisted (in memory plus `sessionStorage`) until a definitive answer arrives. A new tap on the same button after a definitive answer is a new key.
 - **Scope.** `(gameId, actor uid, key)`: the Store hashes `actor \0 key` into `games/{g}/idem/{hash}` (LLD 3 2.4), so two players cannot collide and a key is meaningless in another game. `createGame` is scoped to the host (`hosts/{uid}/idem`). Retention 7 days.
 - **Reuse with a different command.** The ledger stores `meta.fp` (12 hex characters of a SHA-256 over `type` and canonical payload). A replay whose fingerprint differs is `invalid-argument`, which turns a client bug into a loud error instead of silently returning another command's result (API5). The fingerprint is a hash of possibly low-entropy card ids; it lives only in the server-only ledger doc and is never logged.
+- **`joinGame` key is a credential.** A same-key replay can return a custom token and rejoin secret (while the seat has never been signed in, LLD 4 4.2), so the join key is treated like a secret: the client keeps it only in `sessionStorage` until the join response is persisted, then deletes it (LLD 7); the handler hashes it at the boundary (`keyHash = sha256(idempotencyKey)`, the id of `joinIdem/{keyHash}` and of the join ledger doc) and uses only the hash afterwards. Neither the raw key nor the hash is logged; `log.ts` has no field for either and redacts any `idempotencyKey` key (API10).
 - Only accepted commands are recorded (LLD 3 5.4), so a rejected command may be retried with the same key after state changes; clients still mint a new key for a new intent.
 
 ### 6.4 Timeouts
@@ -610,7 +619,7 @@ Extends LLD 0 section 9. The wrapper emits one line per call through the typed l
 | Command table | A fixture per client command parses with `CommandEnvelopeSchema`; `toEngineCommand` output deep-equals the Engine command of LLD 1 section 7; required-`expectedVersion` set equals `{confirmSubmission, writeIn, closeSubmissions, pickWinner, passJudging}` |
 | Engine round trip (in `engine/test`, since contracts cannot import the Engine) | For every `legalCommands` entry of random scenarios (LLD 1 15.1) that is a client command: wrap in an envelope, JSON round trip, parse, `toEngineCommand`, deep-equal the original (G1-style) |
 | Type equality | `ClientCommandType \| ServerOnly` equals `Command["type"]`; `ErrorCode`, `Phase`, `PlayerStatus`, `RoundPhase`, `YouTurn` equal the Engine's; `project` returns the contracts `GameView` (LLD 2 11.6) |
-| View schemas | Every golden snapshot of LLD 2 11.5 parses with the strict and the loose schema; the strict schema rejects an extra key, a missing key, `uid`, `scorePile`, and `JSON.parse(JSON.stringify(game))`; loose accepts extra keys |
+| View schemas | Every golden snapshot of LLD 2 11.5 parses with the strict and the loose schema; the strict schema rejects an extra key, a missing key, `uid`, `scorePile`, and `JSON.parse(JSON.stringify(game))`; loose accepts extra keys and unknown strings in every enum position (a snapshot with `turn: "future_turn"` parses loose, fails strict) |
 | Limits export | `MAX_SEATED`, `MAX_TOTAL_JOINS` (50), `MAX_VOTES` (1500) and `TEXT_LIMITS` (`{name:24, card:80, pitch:140}`) are exported from the index; `WIRE_TEXT_MAX` exceeds every `TEXT_LIMITS` value; `DETAIL_BY_CODE.ROOM_FULL` is `["join_cap"]`, `VARIANT_UNAVAILABLE` is `["vote_cap"]`, `NOT_AUTHORIZED` contains `seat_revoked`; the Engine imports the constants (no literal 50 or 1500 in its `join`/`castVote`) |
 | Push schemas | `RegisterPushRequestSchema` accepts and rejects at the exact boundaries of the LLD 6 regexes (`deviceId` 8 and 40 chars; `fcmToken` 50 and 4096) |
 | Error closure | Every `DETAIL_BY_CODE` value is in the `RejectionSchema` enum; every Engine `Rejection.detail` string appears in `DETAIL_BY_CODE[code]` (scan of the Engine's `reject()` call sites) |
@@ -645,6 +654,9 @@ Extends LLD 0 section 9. The wrapper emits one line per call through the typed l
 | `deleteGame` | host with a revoked session; repeat call | `NOT_AUTHORIZED`-class refusal for the revoked session (LLD 4 ID12); repeat returns `NOT_FOUND` (never `replay:true`; no `replay` field in the success body) which the helper maps to success |
 | `registerPush` shape | `deviceId` of 7 or 41 chars or containing `.`; `fcmToken` of 49 or 4097 chars or containing a space; omitted `deviceId` | `invalid-argument` for each violation; omitted `deviceId` accepted |
 | Seat revoked detail | removed seat calls `command` | body `NOT_AUTHORIZED`, `detail: "seat_revoked"`, `version: 0` |
+| `rejoin` malformed input | `secret` missing, a number, 10 KB, or a non-GameId `gameId` | body `NOT_FOUND`, `version: 0`, byte-identical to a wrong secret; one failure counted; never `invalid-argument` |
+| Join key replay | `joinGame` commits; room code then released; retry same key before any sign-in; then sign in and retry again | first retry `ok:true, replay:true` with the same seat; second `NOT_FOUND`; no log line contains the key or its hash |
+| Rejection `version` | identity-callable rejections with and without a game read (rate limit, unknown code, `NAME_TAKEN`) | every body has `version`; `0` without a game read, the decision version with one |
 | `rejoin_fail_game` lock | 30 bad-secret `rejoin` calls (distinct IPs) for one gameId, then a correct secret | 31st call `RATE_LIMITED`; the correct secret is also `RATE_LIMITED` until 15 min pass; signed-in seats still work (API13) |
 
 ### 10.3 Registry tests (unit, `bun test functions/src/api`)
@@ -686,7 +698,7 @@ Extends LLD 0 section 9. The wrapper emits one line per call through the typed l
 | **API7** | Limits are consumed before any lookup that differentiates cases; multi-bucket consumption is atomic; counters hold only keyed hashes and expire; a locked bucket denies without incrementing | Limiter tests (7.4); no-raw-values scan |
 | **API8** | Every success body is strict-parsed before it leaves; an unparseable body is an `internal` failure, never sent | Output-strictness row |
 | **API9** | Within a `CONTRACT_V` changes are additive; `v < MIN_V` yields `CLIENT_OUTDATED` before body parsing; every body carries `sv`; a view schema above the client's is detected client-side | Compat gate, outdated-client and view-skew tests |
-| **API10** | Logs and errors never contain bodies, idempotency keys, command payload ids, tokens, secrets, raw IPs, emails, room codes, names or card text | Sentinel scan (LLD 0 P19) extended with idempotency keys and fingerprints |
+| **API10** | Logs and errors never contain bodies, idempotency keys (nor the join key hash), command payload ids, tokens, secrets, raw IPs, emails, room codes, names or card text | Sentinel scan (LLD 0 P19) extended with idempotency keys and fingerprints |
 | **API11** | Rejections are never thrown or classified as failures; failures never carry an `ErrorCode` body; retryable failures are distinguishable from definitive ones by `HttpsError` code | Outcome-mapping row; classification test on logs |
 | **API12** | `@dc/contracts` depends only on zod and runs in Node and browsers with no Node, Bun or Firebase import | Isolation test; lint P5 |
 | **API13** | `rejoin_fail_game` is a deliberate, bounded DoS: an invite holder can lock new-device rejoin for one game for 15 min, never affecting signed-in seats or other games; the lock expires by itself | `rejoin_fail_game` lock row |
@@ -724,4 +736,4 @@ Extends LLD 0 section 9. The wrapper emits one line per call through the typed l
 | 3 Store | A single caller of `runCommand` per command, with `meta.fp`; `createGame` and `deleteGame` callables around LLD 3 6.1 and 6.4; `listGamesByHost` handler over the declared query; the `StoreError` to `HttpsError` table; limiter stored under `rateLimits` | `CommandOutcome` as in 5.1 (including `meta` echo and `replay`); `StoreError` kinds and `fp`-compatible `meta` (<= 1 KiB); ledger-before-`STALE`; `listGamesByHost` query and index; `rateLimits` TTL (ST11); `AGGREGATE_TOO_LARGE`/`TOO_MANY_WRITES` kept as failures |
 | 4 Identity | Pipeline calling `principalOf` then `assertSeatLive`; `allow` lists per callable (3.1); schemas and callables for `joinGame`, `lobbyInfo`, `rejoin`, `spectate`, `reissueRejoinLink`, `signOutEverywhere`; `limits.consume/refund/fail`; section 7.3 buckets including LLD 4's numbers; `beforeEmailSent` | `principalOf`, `toActor`, `assertSeatLive`, `ensureHostProfile`, deterministic join minting, handlers that return bodies or throw `RejectionError` (`reject()` is the throwing form of a body); LLD 4's acceptance of conflicts 2 and 4; `deleteGame` session recheck (ID12) called from the `deleteGame` handler |
 | 6 Notifications & Scheduler | `registerPush`/`unregisterPush` request and response schemas, auth (seat or host), limits (`push_uid`); the Scheduler is not a client and uses `{kind:"system"}` with `markReminded`, which is not in the client envelope | Storage and membership validation behind `registerPush` (device model, conflict 13); `Notifications.registerSubscription`/`unregisterSubscription` signatures taking `(uid, gameId, fcmToken, deviceId?)`; no card text in push (N2) |
-| 7 Web Client | Typed `call()` helper generated from `CALLABLES`; `CONTRACT_V`/`sv`/`VIEW_SCHEMA` handling rules (2.6); retry table (6.5); key generation rules (6.3); `expectedVersion = view.version` rule (6.2); loose view schemas; default branches for unknown enums; error rendering per code and `detail` | Sends `v` on every call; serializes and debounces `saveDraft`; persists keys until a definitive answer; hard-block screen for `CLIENT_OUTDATED` and unknown `ViewDoc.schema`; soft banner on `sv` above its own; submits code and name together to `joinGame`; treats `deleteGame` `NOT_FOUND` as success; orders by `view.version`; initializes App Check before any call or listener |
+| 7 Web Client | Typed `call()` helper generated from `CALLABLES`; `CONTRACT_V`/`sv`/`VIEW_SCHEMA` handling rules (2.6); retry table (6.5); key generation rules (6.3); `expectedVersion = view.version` rule (6.2); loose view schemas; default branches for unknown enums; error rendering per code and `detail` | Sends `v` on every call; serializes and debounces `saveDraft`; persists keys until a definitive answer; hard-block screen for `CLIENT_OUTDATED` and unknown `ViewDoc.schema`; soft banner on `sv` above its own; submits code and name together to `joinGame`; treats `deleteGame` `NOT_FOUND` as success; orders view snapshots by `(version, viewsRev)` and command responses by `view.version`; keeps the `joinGame` key only in `sessionStorage` until the response is persisted, never logged (6.3); initializes App Check before any call or listener |

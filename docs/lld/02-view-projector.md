@@ -99,7 +99,7 @@ interface ViewTarget { docId: string; viewer: Viewer }
 // games/{gameId}/views/{docId}
 interface ViewDoc {
   schema: 1;                  // wire schema version
-  rev: number;                // PROJECTOR_REV that produced `view`
+  viewsRev: number;           // PROJECTOR_REV that produced `view` (K-F; was `rev`); orders same-version snapshots (8.4)
   gameId: GameId;
   enabled: boolean;           // spectator doc: settings.spectators.enabled; all other docs: true. Read by the spectator rule (tech-stack 5)
   version: number;            // == view.version (duplicated at top level for rules, queries, debugging)
@@ -155,7 +155,7 @@ interface PlayerPublic {
 }
 
 interface RoundPublic {
-  number: number; judgeId: PlayerId; phase: RoundPhase;
+  number: number; judgeId: PlayerId | null; phase: RoundPhase;   // null only while paused after the last active judge was evicted (LLD 1 8.3, oq 19)
   green: { id: CardId; text: string };
   expected: PlayerId[];                         // non-judge active roster members (who may submit), by joinOrder
   submittedBy: PlayerId[];                      // who has submitted, never what; sorted by joinOrder, NOT by time (PJ6)
@@ -231,7 +231,7 @@ Legend: **Y** visible; **own** the viewer's own value only; **-** absent (key om
 | `round` | Y | Y | Y | Y | Y | - | null outside PLAYING |
 | `round.green`, `number`, `judgeId`, `phase`, `expected` | Y | Y | Y | Y | Y | - | public by gameplay.md (the green card is revealed to all) |
 | `round.submittedBy` | Y | Y | Y | Y | Y | - | SUBMITTING and JUDGING; who, never what (V3). A player removed while JUDGING drops out of the list (open question 8) |
-| `round.reveal` | - | Y | Y | Y | Y | - | JUDGING only, same list in the same order for everyone (PJ6); includes `pitch` when the variant is on |
+| `round.reveal` | Y | Y | Y | Y | Y | - | JUDGING only, same list in the same order for everyone (PJ6); includes `pitch` when the variant is on; no owner and no write-in marker (PJ5) |
 | `resolved`, `winnerId` | Y | Y | Y | Y | Y | - | `resolved` = number of immutable round docs; `winnerId` FINISHED only |
 | `awards` | Y | Y | Y | Y | Y | - | FINISHED or ENDED with `peoplesChoice` on; null before. Votes are never tallied in any earlier view (PJ5) |
 
@@ -244,7 +244,7 @@ Legend: **Y** visible; **own** the viewer's own value only; **-** absent (key om
 | `you` | own | own | own | - | - | - | any phase with a seat |
 | `you.hand` | own | own | own | - | - | - | only PLAYING and status `active`; `[]` in every other phase, including FINISHED and ENDED (PJ9) |
 | `you.yourSubmission` | own | - | own | - | - | - | SUBMITTING and JUDGING for a non-judge who submitted; null once the round resolves. The card also appears in `reveal`, which is fine because the owner knows it |
-| `you.powerUsage` | own | own | own | - | - | - | never shown for other players: a visible write-in flag would identify the owner of the write-in card among the reveals (PJ5) |
+| `you.powerUsage` | own | own | own | - | - | - | never shown for other players: a visible write-in flag would identify the owner of the write-in card among the reveals (PJ5). It is the only place write-in or redraw usage appears; no `reveal` entry, `players[]` entry, `RoundDoc` or other viewer's doc marks a card or submission as a write-in (K-A) |
 | `you.writeTarget`, `cardsLeft` | own | own | own | - | - | - | status `writing` only (late joiners included) |
 | `you.myVotes` | own | own | own | - | - | - | only with `peoplesChoice`; a spectator's votes are held by the client (open question 5) |
 | `you.roomCode` | own | own | own | - | - | - | not in the spectator doc (R2) |
@@ -260,7 +260,7 @@ Legend: **Y** visible; **own** the viewer's own value only; **-** absent (key om
 | WRITING | `cardsLeft` per writer, `waitingOn` = unfinished writers, own `draft` region. Others' drafts, and every card in the pools, are absent (V4, E8). After `finishWriting` the player sees only `ready`; their own cards are not shown back to them (they are anonymous now) |
 | PLAYING / SUBMITTING | Green card, `expected`, `submittedBy`, own hand and own `yourSubmission`. No texts of anyone else's submission, and no owner/card pairing in any view |
 | PLAYING / JUDGING | `reveal[]` for everyone in `revealOrder` order, `submittedBy`, own hand. No owners (E9) |
-| PLAYING and `paused` | Same data as the underlying phase plus `paused: true`; `you.turn = paused` for active players. Hands stay visible |
+| PLAYING and `paused` | Same data as the underlying phase plus `paused: true`; `you.turn = paused` for active players. Hands stay visible. `round.judgeId` may be `null` (judge evicted with no one to take over, LLD 1 8.3); then `isJudge` is false for everyone and `turn` is `paused` as usual. On resume the Engine assigns a judge (`JudgeChanged{from: null, reason: "resumed"}`) |
 | Round resolves | The same commit that finishes the round writes `rounds/{n}` (owners, texts) and rewrites every view with the next round (or FINISHED). Views carry `resolved = n` |
 | FINISHED | `winnerId`, `awards`, `round: null`, `you.hand: []`, `turn = over`; all history in round docs |
 | ENDED | As FINISHED without `winnerId`; `round: null`. Views remain readable until `deleteGame` (Q10) |
@@ -280,15 +280,15 @@ The HLD's V1 to V7 stand. They are refined as follows; each new rule has a test 
 | **PJ2** | **Closed allowlist, fail closed.** A view is assembled field by field. Before any view is written or returned, the app parses it with the strict contracts schema (`z.strictObject`); an unknown key, a missing key or a size over the hard cap (PJ14) throws, aborting the command transaction (nothing commits). | V1 |
 | **PJ3** | **Card exposure allowlist.** In a viewer's doc (view and draft regions), a card id or card text may appear only if it is: in the viewer's own hand; the viewer's own submission; the current green card; in `reveal` (JUDGING); in `awards.podium` (id only); or the viewer's own draft text. Every other card, including all of the pools, other hands, and other drafts, is absent. | V2, V4 |
 | **PJ4** | **No owner/card association.** Before `WinnerPicked`, a pending submission's `cardId` appears in a doc only at the paths `view.round.reveal[*].submissionId` and `view.you.yourSubmission.cardId`, and no object holding a pending `cardId` also holds a `playerId`. `submissionOwner` is never called by the Projector. | V3, E9 |
-| **PJ5** | **Own-only data.** `hand`, `yourSubmission`, `draft`, `powerUsage`, `myVotes`, `writeTarget`, `roomCode` (outside the host panel) are projected only from the viewer's own player record. Vote tallies are not exposed before FINISHED or ENDED. | V2, V4 |
+| **PJ5** | **Own-only data.** `hand`, `yourSubmission`, `draft`, `powerUsage`, `myVotes`, `writeTarget`, `roomCode` (outside the host panel) are projected only from the viewer's own player record. Vote tallies are not exposed before FINISHED or ENDED. **Write-ins are indistinguishable (K-A):** `powerUsage` is the only projected trace of write-in or redraw usage and appears only in its owner's doc; no other path in any doc (reveal, `yourSubmission`, `players[]`, `RoundDoc`) carries a write-in marker, so from another viewer's docs a write-in card cannot be told from a hand card. | V2, V4, E8 |
 | **PJ6** | **Reveal stability and non-correlation.** `reveal` equals `round.revealOrder` order exactly and is identical for every non-departed viewer in the same state. `submittedBy` and `expected` are sorted by `joinOrder`, never by submission time, so neither correlates with `revealOrder`. Across commands inside one JUDGING round, the order of the surviving cards never changes (E10). | V3, E10 |
 | **PJ7** | **No identity or internal fields.** No doc contains a `uid` (own or others), `hostId`, any token or secret, a seed, `episode`, `waitingSince`, `reminderDueAt`, `changedAtVersion`, `openedAt`, event data or the Auth-derived `seat:` prefix. Host-ness is exposed only as `isHost` booleans. | V4 |
 | **PJ8** | **Subset chain.** The spectator view's JSON is a subset (same path, same value) of every player view's JSON from the same state, apart from `audience`; the unseated-host view is a subset of the seated host's view (apart from `audience`). | V5 |
 | **PJ9** | **Minimal terminal and departed views.** `DepartedView` contains no game state. FINISHED and ENDED views have `round: null` and `hand: []`. The host rule beats the tombstone rule (3.2). | V7 |
-| **PJ10** | **Versioning.** `view.version` is the aggregate `version` of the state it was projected from; per doc it never decreases; `ViewDoc.version === view.version`; a rejoin or link reissue writes nothing. `draftSeq` increases by 1 per draft write. | V6 |
+| **PJ10** | **Versioning.** `view.version` is the aggregate `version` of the state it was projected from; per doc the pair `(version, viewsRev)` never decreases lexicographically (a rebuild at the same `version` raises `viewsRev`); `ViewDoc.version === view.version`; a rejoin or link reissue writes nothing. `draftSeq` increases by 1 per draft write. | V6 |
 | **PJ11** | **Fan-out completeness.** After every committed command, for every `ViewTarget` of `viewersOf(next)`, the stored doc's `view` equals `project(next, viewer)` ignoring `version` and `generatedAt`; every docId in `viewersOf(prev)` but not `viewersOf(next)` holds a tombstone; no other doc changed. Skipping unchanged views never breaks this. | V6 |
 | **PJ12** | **Atomic with state.** `fanOut` output is written in the same transaction as the aggregate, events and round docs (S2); no committed state exists whose views are not written. | S2 |
-| **PJ13** | **History safety.** A `RoundDoc` is written once, only for resolved rounds, contains no votes, hands, drafts or other rounds' data, and is identical for every reader. | V7, S3 |
+| **PJ13** | **History safety.** A `RoundDoc` is written once, only for resolved rounds, contains no votes, hands, drafts, write-in markers or other rounds' data, and is identical for every reader. | V7, S3, E8 |
 | **PJ14** | **Size.** Test budget: each view doc at most 64 KiB serialized at the worst case (10 players, 80-code-point cards in UTF-8 worst case, 140-character pitches). Runtime hard cap: 512 KiB, enforced with PJ2. The Firestore limit is 1 MiB. | tech-stack 5 |
 | **PJ15** | **Canonical shape.** Objects are built with a fixed key order and `Record` keys inserted ascending, so `JSON.stringify` is canonical; arrays are ordered (by `joinOrder`, `revealOrder`, round number). | PJ1 |
 
@@ -332,7 +332,7 @@ function projectFeed(records: readonly RoundRecord[], sinceRound?: number): Roun
 ### 7.2 Why a round doc is safe for any signed-in user (PJ13)
 
 - Everything in it became public at the instant the result was committed (gameplay.md "Result: ... everyone sees who played what"; HLD V3 last sentence; E9). Nothing in it is hidden for a still-open round: it is created in the transaction that resolves the round and never before.
-- It contains ids, card texts and pitches, but not names (names are in `players[]` of the view, so a name is not duplicated into an immutable doc), not hands, not drafts, not authorship (which does not exist after E8; a player's own authored text is not recorded anywhere).
+- It contains ids, card texts and pitches, but no write-in marker (a write-in play looks like any other play, K-A), not names (names are in `players[]` of the view, so a name is not duplicated into an immutable doc), not hands, not drafts, not authorship (which does not exist after E8; a player's own authored text is not recorded anywhere).
 - Spectators and players see the same history (V5, V7), so "readable by any signed-in user who knows the game id" adds no exposure beyond what both audiences already have, subject to open question 2 (spectators can be disabled).
 
 ### 7.3 What must not go in it
@@ -340,6 +340,7 @@ function projectFeed(records: readonly RoundRecord[], sinceRound?: number): Roun
 - **Votes.** Voting is allowed on any resolved round later (LLD 1 8.8), so a vote tally would make the doc mutable, violating S3. Tallies appear only in `awards` at the end. gameplay.md creates no conflict: it shows only the final award and podium.
 - **Pitch text: in.** A pitch is part of what was played ("a short written justification ... with their card"); the history feed shows "every card played and who played it". Excluding it would hide the funniest part of a round. It is moderated at write time (M1). No conflict with gameplay.md; note that a pitch is shown to the judge before the result (section 5.1) and writing style may hint at an author. That is inherent to the variant (open question 10).
 - Anything keyed to a viewer (`myVotes`, own hand at the time).
+- **Write-in markers.** Neither `plays[]` nor any other field says a card was written in (K-A; `RoundRecord` carries none, LLD 1). Accepted residual: a reader may guess from unfamiliar text.
 
 ## 8. Fan-out and the store boundary
 
@@ -368,7 +369,7 @@ function fanOut(prev: Game | null, next: Game, o: { now: number; skipUnchanged: 
 - The set is computed from the **states**, never from events. Events could narrow it (a `SubmissionConfirmed` obviously changes every view; a `PausedChanged` changes all), but an event-to-viewer table is a second source of truth that can silently disagree with `project`, and a missed viewer is a stale-secret or stale-state bug. Correctness therefore never depends on events (PJ11). Events are not an input.
 - The projections of `prev` and `next` are both computed in memory (PJ1): there are no extra Firestore reads for the comparison.
 - `prev === null` (createGame) writes every target. `deleteGame` writes nothing (LLD 1 7.3).
-- `aggregateChanged: false` commands (draft-only `saveDraft`, no-op `markReminded`) skip `fanOut` entirely; the Store writes only the draft region (8.4).
+- `aggregateChanged: false` commands (draft-only `saveDraft`, no-op `markReminded`) skip `fanOut` when the stored `store.viewsRev` equals `PROJECTOR_REV`; the Store writes only the draft region (8.4). When `store.viewsRev` is behind, the Store calls `fanOut(game, game, {now, skipUnchanged: false})` anyway (K-F), writes every view at the unchanged `version` with the new `viewsRev`, and sets `store.viewsRev`. The rebuild decision is independent of `aggregateChanged`; the one exception is a no-op system `markReminded`, which stays zero-write (LLD 3 5.6; the next user command or `rebuildViews` refreshes the views).
 - Output order is `viewersOf` order (joinOrder, then host, spectator, departed) so transactions are deterministic and diffable in tests.
 
 ### 8.2 Skip-unchanged: worth it, with a guard
@@ -384,7 +385,7 @@ Decision: on by default. Rationale: it is cheap (the equality is one `JSON.strin
 
 At the game's scale the money is negligible either way (tech-stack section 10); the stated value is fewer snapshots and the `markReminded` case, which would otherwise rewrite every doc each day for every waiting game. The one hazard is a stale stored doc that no longer equals `project(prev, v)` (the projector code changed in a deploy). Guards:
 
-- The aggregate carries a field `viewsRev` (the Store maintains it next to the Game fields; it is not part of the Engine's `Game`). While `viewsRev !== PROJECTOR_REV`, the Store passes `skipUnchanged: false` and writes `viewsRev = PROJECTOR_REV` in the same transaction, so the first command after a projector deploy rewrites every doc once.
+- The aggregate document carries `store.viewsRev` (LLD 3 2.2; it is not part of the Engine's `Game`). **Store contract (K-F, implemented by LLD 3):** on every user command, accepted with or without an aggregate change (and every aggregate-changing system command; a no-op `markReminded` writes nothing), if `store.viewsRev < PROJECTOR_REV` the Store runs `fanOut` with `skipUnchanged: false` and writes `store.viewsRev = PROJECTOR_REV` in the same transaction, so the first command of any kind after a projector deploy (a draft-only `saveDraft` included) rewrites every doc once. Each written `ViewDoc` carries `viewsRev = PROJECTOR_REV`. `PROJECTOR_REV` only increases; a rollback of projector code ships with a higher constant so clients do not discard its docs.
 - Any change to the golden snapshots (section 11.5) must bump `PROJECTOR_REV`; CI compares `git diff` on `__snapshots__` with `rev.ts` and fails if the snapshots changed and the constant did not.
 - `skipUnchanged` is an option, so an incident can disable it with a function parameter.
 
@@ -394,10 +395,10 @@ A view stays far below 1 MiB. Worst case at 10 players: hand 7 cards, reveal 9 c
 
 ### 8.4 `version`, drafts and staleness
 
-- V6 is realized as `view.version` (PJ10). A client keeps the highest-version view it has seen for its doc and applies a snapshot or a command response only if its `version` is greater or equal. Equal means identical content; lower means older.
+- V6 is realized as `view.version` plus `ViewDoc.viewsRev` (PJ10, K-F). A client keeps the highest view it has seen for its doc, ordered by the pair `(version, viewsRev)` lexicographically, and applies a snapshot only if its pair is greater or equal. Equal means identical content; lower means older, including an older-projector snapshot at the same `version`, which is discarded in favor of a rebuilt one. A command response carries only `version`: the client applies it if `version` is at least the held `version`; a stale snapshot at the same version that arrives after it is followed by the rebuilt snapshot the same transaction wrote, so the doc converges.
 - Because of skip-unchanged, a doc's `version` can lag the aggregate: it is the version at which that viewer's content last changed, not the latest commit. This is safe in both directions: a command response carrying version 10 and content identical to the stored version-8 doc makes the later arrival of the v8 snapshot harmless (it is ignored, equal content), and a real later change arrives with a higher version. The client must never infer "I am behind" from `view.version < aggregate version` on its own doc; the response `version` of its own command is the freshness signal.
-- **Draft region.** A draft save changes only `draft` and `draftSeq` and must not bump the aggregate (LLD 1 4.1). It cannot share `version` for ordering, so the draft region has its own counter: the Store keeps `seq` in the draft doc (it already reads that doc in the transaction), increments it per save and writes `draftSeq`. Clients order the draft region by `draftSeq`, the view region by `version`.
-- **Disjoint writes.** The Store writes the two regions with `set(..., {mergeFields: [...]})`: fan-out writes use `["schema","rev","gameId","enabled","version","generatedAt","view"]` (so the `draft` fields are untouched by anyone else's command, and another player's `finishWriting` can never wipe your draft), a draft save writes `["draftSeq","draft"]`, `finishWriting` writes both (a `clearDraft` write). This relies on top-level field replacement semantics of `mergeFields` (replaces the named top-level field wholesale, so a removed key inside `view` does not linger). LLD 3 owns the code; this LLD owns the region split.
+- **Draft region.** A draft save changes only `draft` and `draftSeq` and must not bump the aggregate (LLD 1 4.1). It cannot share `version` for ordering, so the draft region has its own counter: the Store keeps `seq` in the draft doc (it already reads that doc in the transaction), increments it per save and writes `draftSeq`. Clients order the draft region by `draftSeq`, the view region by `(version, viewsRev)`.
+- **Disjoint writes.** The Store writes the two regions with `set(..., {mergeFields: [...]})`: fan-out writes use `["schema","viewsRev","gameId","enabled","version","generatedAt","view"]` (so the `draft` fields are untouched by anyone else's command, and another player's `finishWriting` can never wipe your draft), a draft save writes `["draftSeq","draft"]`, `finishWriting` writes both (a `clearDraft` write). This relies on top-level field replacement semantics of `mergeFields` (replaces the named top-level field wholesale, so a removed key inside `view` does not linger). LLD 3 owns the code; this LLD owns the region split.
 
 ### 8.5 Command response `view` (HLD 4.2)
 
@@ -412,7 +413,7 @@ tech-stack section 2 already revises F1; this section restates the revised guara
 | # | Guarantee |
 |---|---|
 | **F1'** | The feed is the pair of read paths the Projector writes: the viewer's own `views/{uid}` doc (or `views/spectator`) and the `rounds/{n}` docs. These carry game data, but only data already redacted for exactly that audience (PJ3 to PJ9) or public by resolution (PJ13). No other channel carries game data; there is no SSE endpoint. |
-| **F2'** (F2 holds) | Lossy and unordered delivery is harmless. A snapshot is a complete document, never a delta, so any single snapshot is sufficient; coalesced or missed snapshots are repaired by the next one, and `version` (PJ10) orders them. |
+| **F2'** (F2 holds) | Lossy and unordered delivery is harmless. A snapshot is a complete document, never a delta, so any single snapshot is sufficient; coalesced or missed snapshots are repaired by the next one, and `(version, viewsRev)` (PJ10) orders them. |
 | **F3'** (F3 holds) | Correctness never depends on the listener. A one-shot `getDoc` of the viewer's doc (server source) on open, on focus and at a low polling rate gives the same content. |
 | **F4'** (F4 revised) | Who can read what: `views/{uid}` only when `request.auth.uid == uid`; `views/spectator` by any signed-in user while `enabled == true`; `rounds/*` by any signed-in user. Spectator access is therefore capability-by-game-id, not membership of the game; HLD F4 ("subscribing requires a valid principal for that game, spectators included") is relaxed accordingly (open question 2). |
 | **F5'** (new) | Views and round docs change only inside the command transaction (PJ12), so a listener never sees a view that its own state has not committed. |
@@ -469,8 +470,9 @@ For each `t` in `impl.viewersOf(after)` the suite builds the full stored doc (`v
 | Internals | key names `uid`, `hostId`, `seed`, `episode`, `waitingSince`, `reminderDueAt`, `changedAtVersion`, `openedAt`, `submissions`, `revealOrder`, `pools`, `cards`, `scorePile` anywhere in the tree | key walk (also caught by the strict schema parse) |
 | Unknown shape | any key not in the strict schema | `GameViewSchema.parse` (PJ2) |
 | Others' data | `powerUsage`, `myVotes`, `hand`, `writeTarget`, `draft` of any player other than `t` | structural: those keys occur only under `you`, and only values of `t`'s player |
+| Write-in markers (K-A) | any key or value marking a card or submission as a write-in: key names `variant`, `writeIn`, `isWriteIn`, `writtenIn` anywhere except `settings.variants.writeIn` and `t`'s own `you.powerUsage.writeIn`; the same scan over every `RoundDoc` | key walk with path whitelist (PJ5, PJ13) |
 
-Cross-viewer checks per step: PJ6 (every non-departed viewer's `reveal` deep-equals `revealOrder` projected, same order), PJ8 (spectator JSON subset of each player's JSON; unseated host subset of seated host's), PJ9 (tombstones minimal), PJ10 (versions never decrease per doc across steps; draft-only steps leave `version` unchanged and raise `draftSeq` by 1), PJ14 (size budget). Cross-step: reveal order of surviving cards unchanged inside a JUDGING round (E10 at the view level).
+Cross-viewer checks per step: PJ6 (every non-departed viewer's `reveal` deep-equals `revealOrder` projected, same order), PJ8 (spectator JSON subset of each player's JSON; unseated host subset of seated host's), PJ9 (tombstones minimal), PJ10 (`(version, viewsRev)` never decreases per doc across steps; draft-only steps leave `version` unchanged and raise `draftSeq` by 1), PJ14 (size budget). Cross-step: reveal order of surviving cards unchanged inside a JUDGING round (E10 at the view level). Write-in indistinguishability (K-A, LLD 1 E8 clause): for every other viewer `u` and every `RoundDoc`, the JSON is unchanged when a write-in submission not owned by `u` is replaced by a hand card with the same id and text (the non-interference transformation (6) below).
 
 ### 11.3 Non-interference test (the strong form)
 
@@ -481,6 +483,7 @@ Substring oracles prove that known secrets are absent. The metamorphic test prov
 3. Replace the texts of every other player's draft; replace others' `uid` values and `powerUsage`; reorder `redDeck`, `redDiscard`, `greenDeck`.
 4. Change `hostId` for non-host viewers' `uid`-independent content only where `isHost` flags are unaffected; change `createdAt`, `openedAt`, `waitingSince`, `reminderDueAt`, `episode`, `changedAtVersion`.
 5. Change other players' votes while the game is not FINISHED or ENDED.
+6. Turn a pending or resolved write-in submission not owned by `t` into an ordinary hand-card submission with the same id and text (clear its owner's `powerUsage.writeIn`), or the reverse; applied to `RoundDoc`s too (K-A).
 
 Failures print the minimal transformation that changed the view. This is the test that proves E9 for the judge: permuting owners must not change the judge's view.
 
@@ -495,6 +498,7 @@ The suite must be shown to fail on leaks. `test/project/mutants.ts` exports leak
 | M-order | `reveal` in submission order | PJ6 / E10 check (shuffled order differs in most scenarios) |
 | M-time | `submittedBy` in submission time order | PJ6 ordering check, non-interference (2) |
 | M-power | `powerUsage` for all players | others' data check, non-interference (3) |
+| M-writein | `writeIn: true` on the matching `reveal` entry and `RoundDoc` play | write-in marker walk, strict schema, non-interference (6) |
 | M-draft | other players' draft texts in `players[].cardsLeft` | drafts oracle |
 | M-uid | `uid`/`hostId` in `players[]` | identity oracle |
 | M-spec | `you` block in the spectator view | PJ8 subset check, strict schema |
@@ -535,13 +539,13 @@ Plus the structure: view types live in `contracts`, which cannot import `Game` (
 | PJ2 | Strict parse of every doc each step; mutants M-owner, M-spec; hard-cap test with an inflated fixture |
 | PJ3 | Cards oracle (11.2); non-interference (1); mutants M-hands, M-deck, M-draft |
 | PJ4 | Path whitelist and co-occurrence walk each step; non-interference (2) for judge, host, spectator; M-owner |
-| PJ5 | Others'-data check; non-interference (3), (5); M-power; unit: tallies absent until FINISHED |
+| PJ5 | Others'-data check; write-in marker walk; non-interference (3), (5), (6); M-power, M-writein; unit: tallies absent until FINISHED |
 | PJ6 | Cross-viewer reveal equality, `revealOrder` equality, ordering of `submittedBy`; across-step stability through `passJudging` and eviction; M-order, M-time |
 | PJ7 | Identity oracle and key walk; M-uid |
 | PJ8 | Subset checks (spectator in player; unseated host in seated host); M-spec |
 | PJ9 | Tombstone minimality; host-versus-tombstone snapshot; FINISHED hands empty |
 | PJ10 | Version monotonic per doc across a run; draft-only steps; rejoin and reissue produce zero writes (simulated store) |
-| PJ11 | **Store simulation**: an in-memory `Map<docId, ViewDoc>` driven by `fanOut` with `skipUnchanged` both on and off; after each step assert it equals the full rewrite `viewersOf(after).map(project)`; also with a simulated projector deploy (`viewsRev` mismatch) |
+| PJ11 | **Store simulation**: an in-memory `Map<docId, ViewDoc>` driven by `fanOut` with `skipUnchanged` both on and off; after each step assert it equals the full rewrite `viewersOf(after).map(project)`; also with a simulated projector deploy (`viewsRev` behind), including a draft-only (`aggregateChanged: false`) first command: every doc rewritten at the same `version` with the higher `viewsRev` |
 | PJ12 | Covered with LLD 3 (transaction test); here only that `fanOut` is a pure function returning every write |
 | PJ13 | `RoundDoc` built only from `roundRecords`; scanned for votes, hands and other rounds; identical for all readers; equals `toRoundDoc(record)`; M-resolve |
 | PJ14 | Maximal fixture size budget |
@@ -559,7 +563,7 @@ LLD 3 owns `rules-test`. It must cover, for this LLD's documents: another player
 4. **Host `removeCard` reach.** gameplay.md says the host can remove "any card", but anonymity (V2, E8) means the host cannot see pool or hand cards, so in practice only cards that have been shown are removable: the current green card, cards in `reveal`, and played cards (by `cardId` from round docs). A host cannot pre-emptively remove an offensive card sitting in a deck. Recommend accepting and stating it in gameplay.md; the alternative (a host-visible pool listing) would show texts but never authorship, yet would reveal upcoming hands and so break V2 for the host-as-player.
 5. **Spectator votes and the shared spectator doc.** The spectator doc is one doc for all spectators, so it cannot carry a spectator's own `myVotes`. The client keeps those locally (a repeat vote just replaces, LLD 1 8.8). The alternative is a per-spectator doc `views/{uid}` for spectator voters (added to `viewersOf` from `game.votes`), at the cost of fan-out growth. Chosen: client-local.
 6. **Own drafts live in the view document.** The draft text must come back to a returning player on a new device (HLD C2), but tech-stack 5 denies the drafts doc to clients. This LLD puts it in a second region of the viewer's own doc with its own counter `draftSeq` (section 8.4), written with `mergeFields`. LLD 3 must keep `seq` in the draft doc and implement the disjoint writes. If LLD 3 prefers a `getDraft` callable, the draft region and `draftSeq` are deleted with no other effect.
-7. **Skip-unchanged needs `viewsRev` on the aggregate document** (section 8.2). The Engine's `Game` does not carry it; LLD 3 adds it beside the Engine's fields.
+7. **Skip-unchanged needs `viewsRev` on the aggregate document** (section 8.2). Resolved by LLD 3: it is `store.viewsRev`; the envelope carries `viewsRev` too (K-F) and the rebuild runs regardless of `aggregateChanged`.
 8. **Eviction and `passJudging` reveal ownership of the vanishing card.** When a player is removed or leaves during JUDGING, or the host passes judging to a player who had submitted (E17, LLD 1 8.3), their card disappears from `reveal` and they disappear from `submittedBy` in the same view. Anyone who saw the earlier list can infer that card's owner. This follows from E17/gameplay.md ("that player's card goes back to their hand") and affects only a withdrawn card (the owner cannot win it), so it is accepted here, but it is a limit on V3 that should be acknowledged in the HLD.
 9. **Unbounded player records.** Departed players stay in `players[]` (needed for history names) and each has a tombstone doc. Total joins are unbounded by the Engine (only seated count is capped at 10). Recommend LLD 3/5 cap total joins per game (for example 50) to bound view size and fan-out.
 10. **Pitch text can hint at authorship.** The judge sees pitches before the result. The variant makes this inherent; no code mitigation is proposed. gameplay.md does not mention it.
@@ -572,8 +576,8 @@ LLD 3 owns `rules-test`. It must cover, for this LLD's documents: another player
 | LLD | This LLD provides | This LLD expects |
 |---|---|---|
 | 1 Engine | `project`, `makeProjector`, `viewerFor`, `viewersOf`, `fanOut`, `toRoundDoc`, `projectFeed`, `PROJECTOR_REV` exported from `packages/engine/src/project`; lint rules on `project/`; the test hooks `afterStep` and mutants | `Game`, `RoundRecord`, `Draft`, `actorRole`, `Roles`, the section 14 selectors; additions: `pitch` in `revealList`, `ownSubmission`; `Accepted.roundRecords` (full record) at `pickWinner`; E8 (no authorship) and E9 (owner not exposed) stay true; `legalCommands`, `runScenario`, `scriptedRng` reused |
-| 3 Store & command transaction | `fanOut(prev, next, {now, skipUnchanged})` returning every `ViewWrite` (incl. tombstones, `clearDraft`); `draftRegion`; the doc shapes `ViewDoc`, `RoundDoc`; region field lists for `mergeFields` (8.4); `PROJECTOR_REV` | In one transaction: write all `ViewWrite`s, round docs from `roundRecords`, state, events; pass `skipUnchanged = (aggregate.viewsRev === PROJECTOR_REV)` and update `viewsRev`; maintain `seq`/`draftSeq` and write the draft region on `saveDraft`; skip `fanOut` when `aggregateChanged` is false; strict-parse every doc before writing (PJ2); rules per 11.8 and open question 2; delete all docs under `views/` and `rounds/` on `deleteGame`; handle `removeCard` redaction of round docs (open question 3) |
+| 3 Store & command transaction | `fanOut(prev, next, {now, skipUnchanged})` returning every `ViewWrite` (incl. tombstones, `clearDraft`); `draftRegion`; the doc shapes `ViewDoc`, `RoundDoc`; region field lists for `mergeFields` (8.4); `PROJECTOR_REV` | In one transaction: write all `ViewWrite`s, round docs from `roundRecords`, state, events; pass `skipUnchanged = (store.viewsRev === PROJECTOR_REV)` and update `store.viewsRev`; maintain `seq`/`draftSeq` and write the draft region on `saveDraft`; skip `fanOut` when `aggregateChanged` is false unless `store.viewsRev < PROJECTOR_REV` (then rebuild all views, K-F); `viewsRev` in every `ViewDoc`; strict-parse every doc before writing (PJ2); rules per 11.8 and open question 2; delete all docs under `views/` and `rounds/` on `deleteGame`; handle `removeCard` redaction of round docs (open question 3) |
 | 4 Identity | `Viewer`/doc key rules: key = uid, stable across rejoin and reissue; host key = `hostId` | Seat uid format `seat:{gameId}:{playerId}` (LLD 1 `seatUid`); revoke on removal (the tombstone covers the ID-token window); anonymous spectator sign-in; `spectate` callable pointing at the shared doc |
 | 5 Command API & contracts | Normative content of `GameView`, `ViewDoc`, `RoundDoc`, `YouTurn`, `PublicSettings`; enumerations to keep equal to the Engine's (type test 11.6); size and nullability rules | Zod schemas as `z.strictObject` for all view types; export `GameViewSchema`, `ViewDocSchema`, `RoundDocSchema`; `CommandResult.view` is `GameView` produced by `makeProjector(next)(viewerFor(...))`; for `saveDraft` also returns `draftSeq` |
 | 6 Notifications & Scheduler | Nothing at runtime: views carry no push data; `waitingOn` is exposed for display only | Notification payloads stay ids and generic copy (N2); nothing reads view docs; `markReminded` produces no view writes under skip-unchanged |
-| 7 Web Client | Which docs to listen to (own `views/{uid}`, or `views/spectator`, and `rounds` ordered by `round`); `you.turn` so no rule logic is needed; the ordering rule (`version` for view, `draftSeq` for draft, apply if greater or equal); the `resolved` handshake (F6'); `DepartedView` handling and the fallback to the spectator doc | Initialize App Check before attaching listeners (LLD 0 open question 4); persistent local cache for round docs; render `reveal`, `submittedBy` and `awards` as given without reordering; keep spectator votes locally (open question 5); never assume `view.version` equals the latest aggregate version (8.4) |
+| 7 Web Client | Which docs to listen to (own `views/{uid}`, or `views/spectator`, and `rounds` ordered by `round`); `you.turn` so no rule logic is needed; the ordering rule (`(version, viewsRev)` lexicographic for view, `draftSeq` for draft, apply if greater or equal); the `resolved` handshake (F6'); `DepartedView` handling and the fallback to the spectator doc | Initialize App Check before attaching listeners (LLD 0 open question 4); persistent local cache for round docs; render `reveal`, `submittedBy` and `awards` as given without reordering; keep spectator votes locally (open question 5); never assume `view.version` equals the latest aggregate version (8.4) |
