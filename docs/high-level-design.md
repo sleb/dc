@@ -15,6 +15,8 @@ Status: draft v0.2 (amended after LLD review). Companion to [gameplay.md](./game
 | 6 | [06-notifications-scheduler.md](./lld/06-notifications-scheduler.md) | FCM push, fan-out, dedupe, reminder sweep, notification fallback |
 | 7 | [07-web-client.md](./lld/07-web-client.md) | PWA screens, session handling, drafts, service worker |
 
+Milestones and steps for building all of this: [execution-plan.md](./execution-plan.md).
+
 ## 1. Design drivers
 
 These properties of the game shape almost every decision below.
