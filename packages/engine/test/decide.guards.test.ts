@@ -62,6 +62,10 @@ describe("V1 guard order (LLD 1 section 5.3)", () => {
     expect(rejected(g, cmd({ ...ALL_FAIL, expectedVersion: 4 }), seat1)).toStrictEqual({ code: "STALE" });
   });
 
+  test("step 3: STALE also beats the phase list itself (a stale command in a phase the command does not allow)", () => {
+    expect(rejected(playing({ phase: "FINISHED" }, { changedAtVersion: 5 }), cmd({ ...ALL_FAIL, expectedVersion: 4 }), seat1)).toStrictEqual({ code: "STALE" });
+  });
+
   test("step 4: WRONG_PHASE beats PAUSED and every later failure (list of phases, then the round-phase predicate)", () => {
     expect(rejected(playing({ paused: true }, { phase: "JUDGING" }), cmd({ ...ALL_FAIL, expectedVersion: 5 }), seat1)).toStrictEqual({ code: "WRONG_PHASE" });
     expect(rejected(playing({ phase: "LOBBY", paused: true, round: null }), cmd(ALL_FAIL), seat1)).toStrictEqual({ code: "WRONG_PHASE" });
