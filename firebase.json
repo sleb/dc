@@ -8,6 +8,7 @@
       "predeploy": ["bun run build:functions"]
     }
   ],
+  "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
   "hosting": {
     "public": "apps/web/dist",
     "rewrites": [{ "source": "**", "destination": "/index.html" }],
