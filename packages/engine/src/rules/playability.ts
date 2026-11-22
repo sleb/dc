@@ -1,4 +1,4 @@
-// Playability (LLD 1 section 9): pure functions over counts. `startGame` (#21), `removeCard` and settle step 1 (#22) and the late-join
+// Playability (LLD 1 section 9): pure functions over counts. `startGame` and settle slot 1 (#21), `removeCard` (#25) and the late-join
 // requirement (#23, section 9.4, not here) call them.
 import type { Game } from "../types";
 

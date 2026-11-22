@@ -1,9 +1,9 @@
+import { CardIdSchema } from "@dc/contracts";
 import { EngineInvariantError } from "../errors";
 import type { Card, CardId, Ctx, Pools, Rng } from "../types";
 import { HAND } from "./playability";
 
 export const MINT_ATTEMPTS = 16;
-const CARD_ID = /^c_[a-z0-9]{10}$/;
 
 /**
  * A fresh card id from the `mintId` port (a CSPRNG in production, never derived from the replayable rng seed).
@@ -13,7 +13,7 @@ const CARD_ID = /^c_[a-z0-9]{10}$/;
 export function mintCardId(ctx: Pick<Ctx, "mintId">, cards: Readonly<Record<CardId, Card>>): CardId {
   for (let attempt = 0; attempt < MINT_ATTEMPTS; attempt++) {
     const id = ctx.mintId();
-    if (!CARD_ID.test(id)) throw new EngineInvariantError(`mintId returned a malformed card id`);
+    if (!CardIdSchema.safeParse(id).success) throw new EngineInvariantError(`mintId returned a malformed card id`);
     if (!Object.hasOwn(cards, id)) return id;
   }
   throw new EngineInvariantError(`mintId collided ${MINT_ATTEMPTS} times in a row`);

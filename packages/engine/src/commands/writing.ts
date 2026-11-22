@@ -3,7 +3,7 @@
 // non-empty or profanity rule here (the contracts' wire cap is the only limit). `finishWriting` does not re-run moderation (M2), so what `saveDraft`
 // stored goes straight into the pool.
 import type { Command } from "@dc/contracts";
-import { reject } from "../errors";
+import { EngineInvariantError, reject } from "../errors";
 import type { CommandSpec, Input } from "../registry";
 import { mintCardId } from "../rules/cards";
 import { defaultTarget, MIN_PLAYERS, totals, writeCounts } from "../rules/playability";
@@ -42,7 +42,7 @@ export const startGame: CommandSpec<Of<"startGame">> = {
   },
   handle: ({ state }) => {
     const { target, counts } = plan(state);
-    if (typeof counts === "string") throw new Error("startGame: preconditions passed but the plan is unresolved"); // unreachable: guards 7 and 9
+    if (typeof counts === "string") throw new EngineInvariantError("startGame: preconditions passed but the plan is unresolved"); // unreachable: guards 7 and 9
     const none = counts.red === 0 && counts.green === 0;
     const players = state.players.map((p): Player =>
       p.status === "writing" || p.status === "ready" || p.status === "active"

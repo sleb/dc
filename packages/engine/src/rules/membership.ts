@@ -4,7 +4,7 @@ import { draw } from "./cards";
 
 /**
  * Activate every `ready` player, in `joinOrder` (LLD 1 section 8.5): deal 7 with `draw`, set `active`, emit `PlayerActivated`.
- * Called by `openRound` step 1 (the round boundary, E18) and by `beginPlay`; settle step 3 (paused recovery) is #22's.
+ * Called by `openRound` step 1 (the round boundary, E18) and by `beginPlay`; settle slot 3 (paused recovery) is #23's.
  * The deal is in `joinOrder`, not list order, so which player gets which cards is a function of the join sequence (E18).
  * Pure; `rng` is consumed only if the red deck runs dry mid-deal.
  */

@@ -7,9 +7,9 @@ import type { DomainEvent, Game, Rng } from "./types";
 
 /**
  * `settle` runs after every aggregate-changing command, before `version` is bumped (LLD 1 section 8.2).
- * The slots are named and ordered here. Slot 2 (pause flag) and slot 5 (waiting fields) are real in 1.2, slot 1 (begin play) in 1.4 (#21).
- * Slots 3, 3a and 4 are no-ops that #22 fills: 3 recovery activation, 3a judge assignment, 4 auto-advance;
- * their helpers (reassignJudge, closeRound, voidRound) arrive with them (activateReady, openRound and beginPlay are #21's).
+ * The slots are named and ordered here. Slot 2 (pause flag) and slot 5 (waiting fields) are real in 1.2, slot 1 (begin play) in 1.4 (#21),
+ * slot 4 (auto-advance) in 1.5 (#22, with closeRound and voidRound). Slots 3 (recovery activation) and 3a (judge assignment) are no-ops
+ * until #23, which also brings reassignJudge (activateReady, openRound and beginPlay are #21's).
  */
 export type SlotId = "1" | "2" | "3" | "3a" | "4" | "5";
 
@@ -18,7 +18,7 @@ export interface SettleEnv {
   readonly now: number;
   /** True once the command or an earlier slot started a new waiting episode; slot 5 reads it. */
   readonly episodeStarted: boolean;
-  /** Slot 4's iteration cap; defaults to MAX_ADVANCE_STEPS. A test seam: real states settle in at most two steps. */
+  /** Slot 4's iteration cap; defaults to MAX_ADVANCE_STEPS. Real states settle in at most two steps, so the cap is exercised by calling the slot directly with a small value; `settle` does not plumb it. */
   readonly maxAdvanceSteps?: number;
 }
 
@@ -39,7 +39,8 @@ export interface SettleSlot {
 
 const noop = (id: SlotId): SettleSlot => ({ id, run: (state) => ({ state, events: [] }) });
 
-/** Slot 1 (8.2): WRITING, at least 3 seated, every seated player ready and the minimums met at the frozen target: begin play. A null target or writeCounts never begins play. */
+/** Slot 1 (8.2): WRITING, at least 3 seated, every seated player ready and the minimums met at the frozen target: begin play. A null target or writeCounts never begins play.
+ * When every seated player is ready but the minimums fail, nothing happens: the game stays in WRITING (LLD 1 sections 8.2 and 9.4). #23 owns the test. */
 const beginPlaySlot: SettleSlot = {
   id: "1",
   run: (state, env) => {
