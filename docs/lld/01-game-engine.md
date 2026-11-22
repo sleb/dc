@@ -26,9 +26,9 @@ packages/engine/
     decide.ts               # makeDecide(registry), decide = makeDecide(REGISTRY): dispatch and guards 0 to 9
     settle.ts               # settle: the named, ordered slots of section 8.2
     roles.ts                # actorRole, seatUid
-    commands/               # one module per command (lifecycle.ts, writing.ts, round.ts, membership.ts, variants.ts, host.ts)
+    commands/               # command modules; lobby.ts (1.3: createGame, updateSettings, join, leave, removePlayer) holds the lobby rows, #21 and #22 add writing.ts and round.ts
     rules/
-      playability.ts        # rMin, gMin, write counts, lateJoinerRequirement (section 9)
+      playability.ts        # rMin, gMin, defaultTarget, totals, meetsMinimums, writeCounts (1.3); lateJoinerRequirement arrives with #23 (section 9)
       rounds.ts             # openRound, closeRound, resolveRound, voidRound, nextJudge
       cards.ts              # mintCardId, draw, topUp, reshuffle, zone helpers
       membership.ts         # evictPlayer, activateReady
@@ -64,7 +64,7 @@ export { REMINDER_INTERVAL_MS } from "./rules/waiting";
 // MAX_TOTAL_JOINS and MAX_VOTES come from @dc/contracts (section 9.1)
 ```
 
-As of 1.2 (#19) `index.ts` exports `decide`, `EngineInvariantError`, `makeRng`, `actorRole`, `seatUid`, `REMINDER_INTERVAL_MS`, the `seated` and `activePlayers` selectors and the types above that exist; the rest arrive with the steps that implement them, and `src/index.test.ts` pins the list.
+As of 1.3 (#20) `index.ts` exports `decide`, `EngineInvariantError`, `makeRng`, `actorRole`, `seatUid`, `REMINDER_INTERVAL_MS`, `playability` (`MIN_PLAYERS`, `HAND`, `NEW_DECK_RED`, `rMin`, `gMin`, `defaultTarget`, `totals`, `meetsMinimums`, `writeCounts`), the `seated` and `activePlayers` selectors and the types above that exist; the rest arrive with the steps that implement them, and `src/index.test.ts` pins the list.
 
 ## 3. Domain model
 
@@ -292,7 +292,7 @@ This `Rejection` is the Engine's own and is not the wire `Rejection` of `@dc/con
 
 ### 5.5 Registry and `CommandSpec` (1.2)
 
-`decide = makeDecide(REGISTRY)`. `registry.ts` holds one row per command, added by the step that implements it; the registry is empty in 1.2 (the real commands are #20 to #22), so the pipeline is tested with fixture specs through `makeDecide(fixtureRegistry)`. A row maps the guard ladder of 5.3 to members: `actor` (2), `stale` (3, the round commands), `phases` and `phase` (4), `needsPlay` (5), `role` (6), `payload` (7), `moderation` (8), `preconditions` (9), and `handle`. `handle` returns `{state, events, draftChanges, roundRecords, redactEnvelope, aggregateChanged}` (optionally `deleteGame` and `episodeStarted`); `decide` then runs `settle` with `ctx.now` and `ctx.rng` and bumps `version` once, so handlers set `round.changedAtVersion = state.version + 1` and never touch `version`. Guard 2 runs before the payload is validated, so it reads `cmd` fields only defensively. `createGame` is a `CreateSpec` (no state, guards 2, 7 and 8; the handler returns `version: 0` and `decide` sets 1). There is no catch-all `try/catch` in `decide`: only `EngineInvariantError` may escape, from a handler or a port.
+`decide = makeDecide(REGISTRY)`. `registry.ts` holds one row per command, added by the step that implements it; the registry holds the five lobby commands since 1.3 (#20; the rest are #21 and #22), and the pipeline's ladder is also proved with fixture specs through `makeDecide(fixtureRegistry)`. A row maps the guard ladder of 5.3 to members: `actor` (2), `stale` (3, the round commands), `phases` and `phase` (4), `needsPlay` (5), `role` (6), `payload` (7), `moderation` (8), `preconditions` (9), and `handle`. `handle` returns `{state, events, draftChanges, roundRecords, redactEnvelope, aggregateChanged}` (optionally `deleteGame` and `episodeStarted`); `decide` then runs `settle` with `ctx.now` and `ctx.rng` and bumps `version` once, so handlers set `round.changedAtVersion = state.version + 1` and never touch `version`. Guard 2 runs before the payload is validated, so it reads `cmd` fields only defensively. `createGame` is a `CreateSpec` (no state, guards 2, 7 and 8; the handler returns `version: 0` and `decide` sets 1). There is no catch-all `try/catch` in `decide`: only `EngineInvariantError` may escape, from a handler or a port.
 
 ## 6. Roles
 
@@ -347,9 +347,9 @@ type Command =
 
 | Command | Actor | Phases | Extra preconditions and rejections |
 |---|---|---|---|
-| `createGame` | `uid === hostId` | (state null) | Host name passes Moderation (`CONTENT_REJECTED`); settings in range (`INVALID_ARGUMENT`). A non-null state: `WRONG_PHASE`, no detail (decided 1.2) |
+| `createGame` | `uid === hostId` | (state null) | Host name passes Moderation (`CONTENT_REJECTED`; not wired until #25); settings in range, ids well-formed, and no `writeCountsOverride` (no deck exists yet) (`INVALID_ARGUMENT`). A non-null state: `WRONG_PHASE`, no detail (decided 1.2) |
 | `updateSettings` | host | LOBBY: any key. WRITING, PLAYING: `profanity` only | Other keys outside LOBBY: `WRONG_PHASE`. Ranges: `INVALID_ARGUMENT`. `writeCountsOverride` requires an imported deck: `INVALID_ARGUMENT`. A patch that names `variants` or `spectators` replaces that nested object wholesale (not merged key by key), so the patch must carry the whole object |
-| `join` | uid = seatUid | LOBBY, WRITING, PLAYING | `ROOM_FULL` if seated >= 10, or (detail `join_cap`) if `totalJoins >= MAX_TOTAL_JOINS` (50, from `@dc/contracts`); `NAME_TAKEN` (case-insensitive after normalization, among seated); `CONTENT_REJECTED`; FINISHED: `WRONG_PHASE` |
+| `join` | uid = seatUid | LOBBY, WRITING, PLAYING | Guard 9 order: `NAME_TAKEN` (case-insensitive after normalization, among seated), then `ROOM_FULL` if seated >= 10 (no detail), then `ROOM_FULL` detail `join_cap` if `totalJoins >= MAX_TOTAL_JOINS` (50, from `@dc/contracts`); `CONTENT_REJECTED` (guard 8, #25); FINISHED: `WRONG_PHASE`. A `playerId` already seated, a malformed id or a non-string name: `INVALID_ARGUMENT` |
 | `leave` | seated player | LOBBY, WRITING, PLAYING | Evicts the actor (8.5). FINISHED: `WRONG_PHASE` |
 | `removePlayer` | host | LOBBY, WRITING, PLAYING | Target must be seated (`NOT_FOUND`); evicts (8.5). Host may remove their own seat |
 | `removeCard` | host | LOBBY, WRITING, PLAYING | Unknown id, or a card that has not been shown to the table (8.6): `NOT_FOUND`, no detail (the two cases are indistinguishable, so hidden cards are not probeable). Would drop totals below `G_min`/`R_min` at current N, once the game is past LOBBY: `NOT_PLAYABLE` (detail `below_minimum`) |
@@ -369,6 +369,7 @@ type Command =
 | `markReminded` | system | WRITING, PLAYING | `episode` must equal `state.episode`, `episodeGen` must equal `state.episodeGen`, and `now >= reminderDueAt`, else accepted as a no-op (`aggregateChanged: false`, nothing written) |
 
 Notes on the table:
+- **Interim, until #23 (1.3 as built):** `join`, `leave` and `removePlayer` are `phases: ["LOBBY"]` only; in WRITING and PLAYING they give `WRONG_PHASE` until #23 widens them and adds eviction and `lateJoinerRequirement`. In LOBBY the host may `leave` (the seat record is deleted; host powers rest on `hostId`) and may `removePlayer` their own seat. The name key behind `NAME_TAKEN` is a private lowercase, whitespace-stripped key that #25 replaces with the Moderation `normalize`; until #25 `createGame` and `join` have no guard 8 and store names trimmed. `updateSettings` enforces "`writeCountsOverride` requires an imported deck" as "the card registry is non-empty" (`importDeck` has no M1 owner); a patch with no keys is accepted as `SettingsUpdated{keys: []}`; unknown patch keys are ignored.
 - Event docs and versions (decided, P-E2/P-E3): every accepted command with `aggregateChanged: true` writes one `events/{version}` doc, including `markReminded` and a count-only `saveDraft`, whose `events` is `[]`. Versions are therefore contiguous with the aggregate version and `events/` has no gaps. Commands with `aggregateChanged: false` write no event doc and take no version.
 - `saveDraft` row: any player with status `writing` may save, in `WRITING` or (a late joiner) in `PLAYING`; a player with status `ready` calling `saveDraft` gets `WRONG_PHASE` (detail `finished`) in either phase. Finished writing is final for v1. `saveDraft` does not need play, so it works while paused.
 - E15: in FINISHED only `castVote`, `endGame`, `deleteGame` are accepted. `castVote` in FINISHED deviates from E15's literal text so the final round can be voted on (open question 4).
@@ -381,7 +382,7 @@ Events are named in section 11. "Settle" is the post-step in 8.2, run after ever
 |---|---|---|
 | `createGame` | Game in LOBBY, `version = 1`, host seated as `joinOrder 0`, status `writing`, `writeTarget: null`; defaults for `settings` (profanity `on`, all variants off, spectators off) | `GameCreated` |
 | `updateSettings` | Shallow merge of the patch: top-level keys replace, so nested `variants` and `spectators` objects are replaced, not merged (a `null` target override clears it) | `SettingsUpdated{keys}` |
-| `join` | `totalJoins += 1`. Append player, `joinOrder = max+1`, status `writing`. In LOBBY `writeTarget: null`. In WRITING or PLAYING `writeTarget = lateJoinerRequirement` (9.4) | `PlayerJoined{playerId}` |
+| `join` | `totalJoins += 1`. Append player, `joinOrder = max(totalJoins, every joinOrder so far) + 1` (so an order is never reused after a LOBBY leaver's record is deleted), status `writing`. In LOBBY `writeTarget: null`. In WRITING or PLAYING `writeTarget = lateJoinerRequirement` (9.4) | `PlayerJoined{playerId}` |
 | `leave`, `removePlayer` | `evictPlayer` (8.5); in LOBBY the player record is deleted instead | `PlayerLeft{playerId}` or `PlayerRemoved{playerId}`, then the evict side-effect events |
 | `removeCard` | Only for a card shown to the table (8.6). Delete from registry and from whichever zone holds it; special cases in 8.6 | `CardRemoved{cardId, kind}` (+ `RoundVoided`/`JudgeChanged` side effects) |
 | `importDeck` | Mint ids, add to `redDeck`/`greenDeck`, shuffle | `DeckImported{red, green}` (counts) |
@@ -515,7 +516,7 @@ In order: shuffle `redDeck` and `greenDeck` with `rng`; deal 7 to every `ready` 
 ### 9.1 Formulas (HLD section 3.4, Q9)
 
 ```ts
-const MAX_PLAYERS = 10, MIN_PLAYERS = 3, HAND = 7, NEW_DECK_RED = 10;
+const MIN_PLAYERS = 3, HAND = 7, NEW_DECK_RED = 10;   // the room size is MAX_SEATED (10) from @dc/contracts
 // From @dc/contracts (shared with LLD 5): MAX_TOTAL_JOINS = 50 (joins ever, seated or not), MAX_VOTES = 1500 (votes[] length)
 const gMin = (n: number, t: number) => n * t;
 const rMin = (n: number) => HAND * n + Math.max(2 * n, HAND);
@@ -536,11 +537,11 @@ meetsMinimums(totals, n, t): boolean   // totals.red >= rMin(n) && totals.green 
 ```ts
 interface Existing { red: number; green: number }       // cards from importDeck, i.e. pool sizes at startGame
 function writeCounts(n: number, t: number, existing: Existing, override: {red:number; green:number} | null)
-  : { red: number; green: number } | "unmet"
+  : { red: number; green: number } | "unmet" | "invalid"
 ```
-- No imported cards (`existing = {0,0}`): `override` must be null (`INVALID_ARGUMENT` otherwise); result `{red: 10, green: t}` (new deck).
+- No imported cards (`existing = {0,0}`): `override` must be null (`"invalid"`, which `startGame` maps to `INVALID_ARGUMENT`, otherwise); result `{red: 10, green: t}` (new deck).
 - Imported cards, no override: `{ red: ceil(max(0, rMin(n) - existing.red) / n), green: ceil(max(0, gMin(n,t) - existing.green) / n) }`. Both are at most the new-deck counts (HLD).
-- Imported cards with override: accepted if `0 <= red <= 10`, `0 <= green <= t` and `existing.red + n*red >= rMin(n)` and `existing.green + n*green >= gMin(n,t)`; else `NOT_PLAYABLE` (detail `minimums`). This is how "if the deck already meets both minimums the host may choose" is enforced, and it also covers partial reductions.
+- Imported cards with override: accepted if `0 <= red <= 10`, `0 <= green <= t` and `existing.red + n*red >= rMin(n)` and `existing.green + n*green >= gMin(n,t)`; else `"unmet"` (`NOT_PLAYABLE`, detail `minimums`; an override out of range is unmet too). This is how "if the deck already meets both minimums the host may choose" is enforced, and it also covers partial reductions.
 - The check runs at `startGame` (when `n` is known), not in `updateSettings`.
 
 **Worked examples**
@@ -697,7 +698,7 @@ Test stack: `bun test` + fast-check (LLD 0 section 6). `FC_SEED` is read from th
 
 ### 15.1 Shared harness (`test/support/`)
 
-- Built in 1.2 (`test/support/`): `scriptedRng`, `counterMintId`, `makeGame`, `makePlayer`, `makeRound`, `addCard`, `deepFreeze`, `ctxFor`, `checkAll` over the append-only `checkers` array (`checkSerializable` and `checkVersion` so far), the per-command `enumerators` table and `exemptions` (a meta-test fails a registered command with neither), `junkCommands`, `runScenario`, and fixture command specs (`fixtures.ts`) with their own enumerators. A playing-phase builder against the real commands arrives with #22.
+- Built in 1.2 (`test/support/`): `scriptedRng`, `counterMintId`, `makeGame`, `makePlayer`, `makeRound`, `addCard`, `deepFreeze`, `ctxFor`, `checkAll` over the append-only `checkers` array (`checkSerializable` and `checkVersion` so far), the per-command `enumerators` table and `exemptions` (a meta-test fails a registered command with neither), `junkCommands`, `runScenario`, and fixture command specs (`fixtures.ts`) with their own enumerators. 1.3 (#20) added the lobby enumerators and the `createGame` exemption, widened `pid` to 1024 ids (the 50-join loop needs more than 32; `pid(n)` for n < 32 is unchanged), and runs X2 to X5 and G1 over both the fixture and the real registry. A playing-phase builder against the real commands arrives with #22.
 - `deepFreeze` on every input to `decide`; assert no mutation (X4).
 - `legalCommands(game, drafts): Array<{actor, cmd}>` enumerates every command a given state accepts: for each seated player and the host, each applicable command with concrete payloads (hand cards, reveal ids, valid drafts built from a text arbitrary that passes Moderation). It is written independently of `decide` (from gameplay.md), so it cross-checks the Engine; a property asserts every enumerated command is accepted (G1).
 - `junkCommands(game)`: well-typed but illegal commands (wrong phase, wrong actor, bogus ids, oversized payloads), plus fully arbitrary JSON payloads for X1.
@@ -742,6 +743,8 @@ Test stack: `bun test` + fast-check (LLD 0 section 6). `FC_SEED` is read from th
 | **X9** caps | `join` with `totalJoins = 50` -> `ROOM_FULL`/`join_cap` even with few seated (LOBBY leavers count); `join`/`leave` x 50 in LOBBY ends refused; `castVote` at `votes.length = 1500` -> `VARIANT_UNAVAILABLE`/`vote_cap`, but replacing an existing vote still accepted | P-X9: `totalJoins` never decreases and equals accepted `join` count; `votes.length <= MAX_VOTES` after every command |
 | **X10** removeCard reach | Remove a green card of a resolved round, a played red card now in discard, a current-round green card: accepted; a deck card, an unplayed hand card, an unrevealed `SUBMITTING` card: `NOT_FOUND`, same as an unknown id; below-minimum removal -> `NOT_PLAYABLE`; `updateSettings{variants}` replaces the nested object | P-X10: `removeCard` accepted iff `shownToTable` and the guard passes; rejection for an unshown id is deep-equal to the rejection for a random unknown id |
 | **G1** generator sanity | Every `legalCommands` entry is accepted | P-G1: all commands emitted by `legalCommands` are accepted (guards the harness itself) |
+
+**Covered by 1.3 (#20), over the real `REGISTRY`** (`test/lobby.test.ts`, `test/playability.test.ts`, `test/decide.properties.test.ts`): E1 for `createGame`, `updateSettings`, `join`, `leave`, `removePlayer` (command x phase, command x role, guard order with combined failures, the junk list with per-guard expected codes, typed junk); E7, formula half only (`rules/playability.ts` pinned by the 9.3 examples and a property against an independent implementation; the `startGame` half is #21, the PLAYING half #22); X9, `join` half only (`join_cap`, 50 join and leave cycles, `totalJoins` monotonic and equal to accepted joins; the `castVote` half is its owner's); X1 to X5 and G1 re-run over the real rows with enumerators for `updateSettings`, `join`, `leave`, `removePlayer`, and `createGame` as an explicit exemption with its own property. Mid-game `join`, `leave`, `removePlayer` (E17, X7) are #23.
 
 Additional scripted scenario tests (unit): full 3-player game to a win using `scriptedRng`; stalled judge in `SUBMITTING` and `JUDGING` including the void case (judge + one submitter whose card is the new judge's); redraw with an exhausted deck; paused recovery; People's Choice awards with ties; `passJudging` guarded by stale `expectedVersion`.
 
