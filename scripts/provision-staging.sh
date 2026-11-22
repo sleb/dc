@@ -3,11 +3,12 @@
 # Every step is safe to re-run. Prove each step with scripts/verify-staging.sh.
 #
 #   BILLING_ACCOUNT=XXXXXX-XXXXXX-XXXXXX scripts/provision-staging.sh project
+#   ALERT_EMAIL=<address> scripts/provision-staging.sh channel
 #   scripts/provision-staging.sh apis firestore iam
 #   scripts/provision-staging.sh all          # every scripted step, in order
 #
-# BILLING_ACCOUNT is supplied at run time and never committed. Steps that cannot be
-# scripted (console only) are listed in scripts/README.md.
+# BILLING_ACCOUNT and ALERT_EMAIL are supplied at run time and never committed. Steps that
+# cannot be scripted (console only) are listed in scripts/README.md.
 
 set -euo pipefail
 export CLOUDSDK_CORE_DISABLE_PROMPTS=1
@@ -301,12 +302,50 @@ step_secrets() { # V11. Values are generated and piped; they are never printed o
   done
 }
 
+# Prints every page of the project's notification channels, one JSON document per line (`nextPageToken` followed).
+list_channels() {
+  local url="https://monitoring.googleapis.com/v3/projects/$PROJECT/notificationChannels" token="" page
+  while :; do
+    if [ -n "$token" ]; then page="$(api GET "$url?pageToken=$token")"; else page="$(api GET "$url")"; fi
+    printf '%s\n' "$page"
+    token="$(printf '%s' "$page" | jq -r '.nextPageToken // empty')"
+    [ -n "$token" ] || break
+  done
+}
+
+step_channel() { # LLD 0 section 9: the notification channel every alert policy in ops/alerts/ names.
+  local url="https://monitoring.googleapis.com/v3/projects/$PROJECT/notificationChannels"
+  local existing
+  # The listing is paginated: a channel past the first page must not read as absent, or this step creates a duplicate.
+  existing="$(list_channels | jq -s '[.[].notificationChannels[]? | select(.displayName == "dc-owner") | .name] | length')"
+  if [ "$existing" -gt 0 ]; then
+    log "notification channel dc-owner exists"
+    return 0
+  fi
+  if [ -z "${ALERT_EMAIL:-}" ]; then
+    echo "the channel step needs ALERT_EMAIL, the address the alert policies notify. Supply it at run time:" >&2
+    echo "  ALERT_EMAIL=<address> $0 channel" >&2
+    return 1
+  fi
+  local body
+  # The address is read from the environment by jq and travels to curl on stdin, so it never reaches an argv or a log.
+  body="$(jq -n '{type: "email", displayName: "dc-owner", labels: {email_address: env.ALERT_EMAIL}}')"
+  log "creating the dc-owner email notification channel"
+  api POST "$url" "$body" >/dev/null
+}
+
 # ---------------------------------------------------------------------------
-[ $# -gt 0 ] || { echo "usage: $0 <step...|all>   steps: project firebase apis firestore iam wif secrets webapp auth appcheck config" >&2; exit 2; }
+[ $# -gt 0 ] || { echo "usage: $0 <step...|all>   steps: project firebase apis firestore iam wif secrets webapp auth appcheck config channel" >&2; exit 2; }
 steps=("$@")
-[ "$1" = all ] && steps=(project firebase apis firestore iam wif secrets webapp auth appcheck config)
+[ "$1" = all ] && steps=(project firebase apis firestore iam wif secrets webapp auth appcheck config channel)
 for s in "${steps[@]}"; do
   declare -F "step_$s" >/dev/null || { echo "unknown step: $s" >&2; exit 2; }
+  # `all` stays runnable on a fresh project without ALERT_EMAIL: the channel needs the owner's address, which is
+  # supplied at run time, so an unattended `all` skips it and says how to run it. An explicit `channel` still fails.
+  if [ "$s" = channel ] && [ "$1" = all ] && [ -z "${ALERT_EMAIL:-}" ]; then
+    log "step: channel skipped: set ALERT_EMAIL and run: ALERT_EMAIL=<address> $0 channel"
+    continue
+  fi
   log "step: $s"
   "step_$s"
 done

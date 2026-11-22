@@ -1,0 +1,24 @@
+{
+  "displayName": "dc push health",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "More than half of push attempts failed over the last hour, with at least 20 attempts (LLD 0 section 9). A provider outage or a bad payload; `dc_push_pruned_total` separates dead tokens from failures."
+  },
+  "conditions": [
+    {
+      "displayName": "dc push health",
+      "conditionPrometheusQueryLanguage": {
+        "query": "sum(rate({\"logging.googleapis.com/user/dc_push_total\", monitored_resource=\"cloud_run_revision\", result=\"failed\"}[1h])) / sum(rate({\"logging.googleapis.com/user/dc_push_total\", monitored_resource=\"cloud_run_revision\", result=~\"sent|failed\"}[1h])) > 0.5 and sum(increase({\"logging.googleapis.com/user/dc_push_total\", monitored_resource=\"cloud_run_revision\", result=~\"sent|failed\"}[1h])) >= 20",
+        "duration": "0s",
+        "evaluationInterval": "60s"
+      }
+    }
+  ]
+}

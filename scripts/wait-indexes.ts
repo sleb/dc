@@ -7,16 +7,15 @@
 //
 // Exit codes: 0 ready, 1 not ready, 2 usage. Never prints credentials; `gcloud` uses the ambient ADC.
 
+import { makeGcloud } from "./gcloud";
+import type { Gcloud } from "./gcloud";
+
 /** The six TTL collection groups, on field `expiresAt` (LLD 3 section 2.1; the single list). */
 export const TTL_GROUPS = ["idem", "outbox", "notifLog", "rateLimits", "deletions", "joinIdem"];
 
 export const POLL_MS = 30_000;
 export const DEFAULT_TIMEOUT_MIN = 30;
 const TTL_FIELD = "expiresAt";
-
-export type GcloudResult = { code: number; stdout: string; stderr: string };
-/** Runs `gcloud <args>`; the tests replace it with a fake `gcloud` on PATH. */
-export type Gcloud = (args: string[]) => Promise<GcloudResult>;
 
 export interface WaitDeps {
   gcloud: Gcloud;
@@ -34,15 +33,6 @@ export interface WaitOptions {
 }
 
 export type WaitOutcome = { ok: true; polls: number } | { ok: false; reason: string };
-
-/** A `gcloud` that runs the real CLI, with the given environment. */
-export function makeGcloud(env: Record<string, string | undefined>): Gcloud {
-  return async (args) => {
-    const child = Bun.spawn(["gcloud", ...args], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    return { code, stdout, stderr };
-  };
-}
 
 /** One poll's verdict: everything ready, or why to retry, or why it will never be ready. */
 type Poll = { done: { composites: number; ttls: number } } | { retry: string[] } | { fail: string };

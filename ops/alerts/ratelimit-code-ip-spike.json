@@ -1,0 +1,35 @@
+{
+  "displayName": "dc ratelimit code ip spike",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "Code lookups from one IP are being rate limited above 20/min for 5 minutes (LLD 5 section 9, LLD 4's global miss alert): someone is guessing room codes."
+  },
+  "conditions": [
+    {
+      "displayName": "dc ratelimit code ip spike",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/dc_ratelimit_total\" resource.type=\"cloud_run_revision\" metric.label.bucket=\"code_ip\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0.333,
+        "duration": "300s",
+        "trigger": {
+          "count": 1
+        },
+        "aggregations": [
+          {
+            "alignmentPeriod": "60s",
+            "perSeriesAligner": "ALIGN_RATE",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ]
+      }
+    }
+  ]
+}

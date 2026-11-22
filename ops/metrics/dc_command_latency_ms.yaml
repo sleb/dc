@@ -1,0 +1,18 @@
+# dc_command_latency_ms (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Command latency in ms, from command.done (LLD 0 section 9)."
+filter: "jsonPayload.event=\"command.done\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: DISTRIBUTION
+  unit: ms
+  labels:
+    - key: commandType
+      valueType: STRING
+bucketOptions:
+  exponentialBuckets:
+    numFiniteBuckets: 18
+    growthFactor: 2
+    scale: 5
+valueExtractor: "EXTRACT(jsonPayload.latencyMs)"
+labelExtractors:
+  commandType: "EXTRACT(jsonPayload.commandType)"

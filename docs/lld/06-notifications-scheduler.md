@@ -545,8 +545,8 @@ Events: `notify.row.done`, `notify.dedupe`, `notify.payload_invalid`, `notify.po
 | `dc_push_total{result}` | `push.result` | Existing in LLD 0; delivery success rate is `sent / (sent + failed)` |
 | `dc_push_pruned_total` | `push.result` with `result=pruned` | Token prune count |
 | `dc_push_invalid_argument_total` | `push.result` with `result=invalid_argument` | New; such tokens are never pruned (4.4) |
-| `dc_reminder_sent_total` | `reminder.sweep.done` weighted by `sent` | Existing in LLD 0; an upper bound (5.2) |
-| `dc_reminder_push_total` | `notify.row.done` where row kind is `Reminder`, weighted by `sent` | New; exact reminder pushes |
+| `dc_reminder_sent_total` | distribution of `sent` on `reminder.sweep.done` | Existing in LLD 0; an upper bound (5.2). A distribution, not a counter weighted by `sent`: Cloud Logging cannot sum a field into a counter, so the value is a bucket count and a sweep reads as the distribution's mean |
+| `dc_reminder_push_total` | distribution of `sent` on `notify.row.done` where the row kind is `Reminder` | New; exact reminder pushes, same distribution caveat |
 | `dc_notify_dedupe_total{reason}` | `notify.dedupe` | New; duplicate triggers and supersedes |
 | `dc_notify_latency_ms` | distribution of `eventToFcmMs` on `notify.row.done` | New; event to FCM |
 | `dc_notify_poison_total` | `notify.poison` | New |

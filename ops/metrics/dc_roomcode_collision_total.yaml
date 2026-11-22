@@ -1,0 +1,7 @@
+# dc_roomcode_collision_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Room-code collisions and retries in createGame (LLD 0 section 9, LLD 3)."
+filter: "jsonPayload.event=\"roomcode.collision\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"

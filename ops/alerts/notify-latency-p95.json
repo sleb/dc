@@ -1,0 +1,35 @@
+{
+  "displayName": "dc notify latency p95",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "Event-to-FCM p95 above 60 s for 30 minutes (LLD 0 section 9, LLD 6 section 7.3): the outbox is not draining."
+  },
+  "conditions": [
+    {
+      "displayName": "dc notify latency p95",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/dc_notify_latency_ms\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 60000,
+        "duration": "1800s",
+        "trigger": {
+          "count": 1
+        },
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_PERCENTILE_95",
+            "crossSeriesReducer": "REDUCE_MAX"
+          }
+        ]
+      }
+    }
+  ]
+}

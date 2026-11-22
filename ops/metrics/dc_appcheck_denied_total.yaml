@@ -1,0 +1,12 @@
+# dc_appcheck_denied_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Edge 401s: every request Cloud Run refused with 401, labelled by its service. Not only App Check denials, so the alert that reads it is an aggregate edge-denial rate (LLD 5 section 9)."
+filter: "resource.type=\"cloud_run_revision\" AND httpRequest.status=401"
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"
+  labels:
+    - key: callable
+      valueType: STRING
+labelExtractors:
+  callable: "EXTRACT(resource.labels.service_name)"

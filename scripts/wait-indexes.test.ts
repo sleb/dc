@@ -2,8 +2,10 @@ import { chmod, copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { tmp } from "../functions/scripts/fixtures";
-import { makeGcloud, waitForIndexes } from "./wait-indexes";
-import type { Gcloud, WaitDeps } from "./wait-indexes";
+import { makeGcloud } from "./gcloud";
+import type { Gcloud } from "./gcloud";
+import { waitForIndexes } from "./wait-indexes";
+import type { WaitDeps } from "./wait-indexes";
 
 // V4 (issue #15): `wait-indexes` stands between the Firestore deploy and the functions deploy (LLD 0 P16). It must
 // not pass while an index or a TTL field config is still being created, and it must not retry a state that will

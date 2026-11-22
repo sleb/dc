@@ -1,0 +1,18 @@
+# dc_notify_latency_ms (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Event to FCM in ms at the end of the first send (LLD 6 section 7.3)."
+filter: "jsonPayload.event=\"notify.row.done\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: DISTRIBUTION
+  unit: ms
+  labels:
+    - key: kind
+      valueType: STRING
+bucketOptions:
+  exponentialBuckets:
+    numFiniteBuckets: 18
+    growthFactor: 2
+    scale: 50
+valueExtractor: "EXTRACT(jsonPayload.eventToFcmMs)"
+labelExtractors:
+  kind: "EXTRACT(jsonPayload.kind)"

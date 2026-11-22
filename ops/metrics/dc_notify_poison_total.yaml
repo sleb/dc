@@ -1,0 +1,7 @@
+# dc_notify_poison_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Outbox rows marked poisoned: delivery kept failing (LLD 6 section 7.3)."
+filter: "jsonPayload.event=\"notify.poison\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"

@@ -1,0 +1,35 @@
+{
+  "displayName": "dc appcheck denials",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "Cloud Run has refused more than 1 request/min with a 401 for 15 minutes (LLD 5 section 9). The metric counts every 401 at the edge, labelled by service, so this is an aggregate edge-denial rate: expired or missing ID tokens, a misconfigured App Check token, or a client whose reCAPTCHA key was rotated. Split it by `callable` on the dashboard before assuming App Check."
+  },
+  "conditions": [
+    {
+      "displayName": "dc appcheck denials",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/dc_appcheck_denied_total\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0.0167,
+        "duration": "900s",
+        "trigger": {
+          "count": 1
+        },
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_RATE",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ]
+      }
+    }
+  ]
+}

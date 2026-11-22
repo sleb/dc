@@ -1,0 +1,35 @@
+{
+  "displayName": "dc client outdated",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "Clients are still below `MIN_V` 24 hours after it was raised (LLD 5 section 9): the sum stays above 0 for 24 h, measured in 1 h windows. Informational: check whether the cached service worker is serving an old bundle."
+  },
+  "conditions": [
+    {
+      "displayName": "dc client outdated",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/dc_client_outdated_total\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "86400s",
+        "trigger": {
+          "count": 1
+        },
+        "aggregations": [
+          {
+            "alignmentPeriod": "3600s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ]
+      }
+    }
+  ]
+}

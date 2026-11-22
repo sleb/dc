@@ -1,0 +1,24 @@
+{
+  "displayName": "dc transaction contention",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "Retries are above 20% of commands for 15 minutes (LLD 0 section 9): one hot game or an index problem, not load."
+  },
+  "conditions": [
+    {
+      "displayName": "dc transaction contention",
+      "conditionPrometheusQueryLanguage": {
+        "query": "sum(rate({\"logging.googleapis.com/user/dc_txn_retry_total\", monitored_resource=\"cloud_run_revision\"}[15m])) / sum(rate({\"logging.googleapis.com/user/dc_command_total\", monitored_resource=\"cloud_run_revision\"}[15m])) > 0.2 and sum(rate({\"logging.googleapis.com/user/dc_command_total\", monitored_resource=\"cloud_run_revision\"}[15m])) >= 0.1",
+        "duration": "900s",
+        "evaluationInterval": "60s"
+      }
+    }
+  ]
+}

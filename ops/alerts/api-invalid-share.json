@@ -1,0 +1,24 @@
+{
+  "displayName": "dc api invalid share",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "More than 1% of calls were rejected as `INVALID_REQUEST` for 15 minutes (LLD 5 section 9): contract drift between the web client and the functions, or a broken client build."
+  },
+  "conditions": [
+    {
+      "displayName": "dc api invalid share",
+      "conditionPrometheusQueryLanguage": {
+        "query": "sum(rate({\"logging.googleapis.com/user/dc_api_invalid_total\", monitored_resource=\"cloud_run_revision\"}[15m])) / sum(rate({\"logging.googleapis.com/user/dc_api_total\", monitored_resource=\"cloud_run_revision\"}[15m])) > 0.01 and sum(rate({\"logging.googleapis.com/user/dc_api_total\", monitored_resource=\"cloud_run_revision\"}[15m])) >= 0.1",
+        "duration": "900s",
+        "evaluationInterval": "60s"
+      }
+    }
+  ]
+}

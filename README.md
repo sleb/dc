@@ -30,6 +30,7 @@ FC_SEED=<n> bun run test        # replay a failed property test; the seed is pri
 bun run build:functions         # bundle functions into functions/dist and check the bundle (see functions/README.md)
 bun run build:web               # vite build --mode staging into apps/web/dist (see apps/web/README.md)
 bun scripts/check-web-size.ts   # gzip budgets for the built apps/web/dist (run build:web first)
+bun scripts/ops-apply.ts --project <id>   # apply and verify the ops/ tree (metrics, dashboard, alert policies; LLD 0 section 9, P20)
 ```
 
 Dependencies are the latest stable at the time they were added, exact-pinned (`bunfig.toml` sets `exact = true`); `bun.lock` is committed.

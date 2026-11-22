@@ -1,0 +1,12 @@
+# dc_notify_dedupe_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Notifications suppressed or superseded by the dedupe record (LLD 6 section 7.3)."
+filter: "jsonPayload.event=\"notify.dedupe\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"
+  labels:
+    - key: reason
+      valueType: STRING
+labelExtractors:
+  reason: "EXTRACT(jsonPayload.reason)"

@@ -1,0 +1,12 @@
+# dc_api_invalid_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Rejected calls with reason INVALID_REQUEST: contract drift or a broken client (LLD 5 section 9)."
+filter: "jsonPayload.event=\"api.done\" AND jsonPayload.reason=\"INVALID_REQUEST\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"
+  labels:
+    - key: callable
+      valueType: STRING
+labelExtractors:
+  callable: "EXTRACT(jsonPayload.callable)"

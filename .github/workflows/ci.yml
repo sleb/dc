@@ -163,11 +163,14 @@ jobs:
           service_account: ${{ vars.DEPLOYER_SA_STAGING }}
       - run: bun run build:functions
       - run: bun run build:web
-      # Order matters (P16): rules and indexes, wait for READY, then functions, then hosting, then the smoke test.
+      # Order matters (P16): rules and indexes, wait for READY, then functions, then hosting, then the ops tree
+      # (dashboard, metrics, alert policies: LLD 0 section 9), then the smoke test.
       - run: bunx firebase deploy --only firestore --project deepcuts-staging --non-interactive
       - run: bun scripts/wait-indexes.ts --project deepcuts-staging --timeout-min 30
       - run: bunx firebase deploy --only functions --project deepcuts-staging --non-interactive
       - run: bunx firebase deploy --only hosting --project deepcuts-staging --non-interactive
+      # P20: applies ops/ idempotently and fails, naming it, if a declared item is missing afterwards.
+      - run: bun scripts/ops-apply.ts --project deepcuts-staging
       - run: bun scripts/smoke.ts --project deepcuts-staging
         env:
           APPCHECK_DEBUG_TOKEN: ${{ secrets.APPCHECK_DEBUG_TOKEN }}

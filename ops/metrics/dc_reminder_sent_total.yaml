@@ -1,0 +1,13 @@
+# dc_reminder_sent_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Reminders sent per sweep: distribution of `sent` on reminder.sweep.done (LLD 0 section 9)."
+filter: "jsonPayload.event=\"reminder.sweep.done\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: DISTRIBUTION
+  unit: "1"
+bucketOptions:
+  linearBuckets:
+    numFiniteBuckets: 20
+    width: 1
+    offset: 0
+valueExtractor: "EXTRACT(jsonPayload.sent)"
