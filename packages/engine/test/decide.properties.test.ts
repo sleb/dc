@@ -126,7 +126,7 @@ describe("X1 decide is total", () => {
 
   // The expected code per junk entry is written out from the guard ladder (5.3) and 7.1, not read off the handlers. Acceptances are not assumed away:
   // the host's updateSettings with an empty patch is legal in LOBBY, WRITING and PLAYING, and a seated player may leave in LOBBY.
-  const LOBBY_REAL = new Set(["createGame", "updateSettings", "join", "leave", "removePlayer", "startGame", "saveDraft", "finishWriting", "confirmSubmission", "closeSubmissions", "pickWinner"]); // independent of REGISTRY on purpose
+  const LOBBY_REAL = new Set(["createGame", "updateSettings", "join", "leave", "removePlayer", "startGame", "saveDraft", "finishWriting", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame"]); // independent of REGISTRY on purpose
   /** The round commands, from the guard ladder (5.3) and 7.1: 2 actor, 3 stale, 4 phase, 5 pause, 6 role, 9 preconditions 7 expectedVersion required as an integer (the junk bases carry none, so they stop here once past 6). */
   const expectedRound = (g: Game, actor: Actor, c: Command): Rejection | "accepted" => {
     const user = actor.kind === "user" ? actor.uid : null;
@@ -175,9 +175,17 @@ describe("X1 decide is total", () => {
     }
     if (c.type === "confirmSubmission" || c.type === "closeSubmissions" || c.type === "pickWinner") return expectedRound(g, actor, c);
     if (c.type === "join") return { code: "NOT_AUTHORIZED" }; // none of the junk actors holds the seat uid of pid(9)
-    if (c.type === "leave") return !seated ? { code: "NOT_AUTHORIZED" } : inLobby ? "accepted" : { code: "WRONG_PHASE" };
+    const midGame = g.phase === "LOBBY" || g.phase === "WRITING" || g.phase === "PLAYING"; // #23 widened leave and removePlayer from LOBBY-only
+    if (c.type === "leave") return !seated ? { code: "NOT_AUTHORIZED" } : midGame ? "accepted" : { code: "WRONG_PHASE" };
+    if (c.type === "endGame") return !isHost ? { code: "NOT_AUTHORIZED" } : g.phase === "ENDED" ? { code: "WRONG_PHASE" } : "accepted";
+    if (c.type === "passJudging") {
+      // host only; PLAYING with a round; the junk bases carry no expectedVersion, so an unpaused round ends at guard 7
+      if (!isHost) return { code: "NOT_AUTHORIZED" };
+      if (g.phase !== "PLAYING" || g.round === null) return { code: "WRONG_PHASE" };
+      return g.paused ? { code: "PAUSED" } : { code: "INVALID_ARGUMENT" };
+    }
     // removePlayer: the target pid(9) is not seated in these games
-    return !isHost ? { code: "NOT_AUTHORIZED" } : inLobby ? { code: "NOT_FOUND" } : { code: "WRONG_PHASE" };
+    return !isHost ? { code: "NOT_AUTHORIZED" } : midGame ? { code: "NOT_FOUND" } : { code: "WRONG_PHASE" };
   };
 
   test("the junkCommands list over the real registry: each entry gets its guard's code (or the lawful acceptance), the input is unchanged", () => {
@@ -272,12 +280,12 @@ describe("G1 generator sanity", () => {
     expect(legalCommands(g, {}, fixtureEnumerators).length).toBeGreaterThan(6);
   });
 
-  test("the real enumerators are not vacuous: a LOBBY of four offers settings, joins, leaves and removals; WRITING offers a profanity patch", () => {
+  test("the real enumerators are not vacuous: a LOBBY of four offers settings, joins, leaves, removals, start and end; WRITING offers drafts, joins, leaves, removals, end and a profanity patch", () => {
     const lobby = buildGame({ n: 4, phase: "LOBBY", ready: [], handSize: 0, judge: 0, submitted: [], paused: false });
     const types = new Set(legalCommands(lobby, {}, enumerators).map((e) => e.cmd.type));
-    expect([...types].sort()).toEqual(["join", "leave", "removePlayer", "startGame", "updateSettings"]);
+    expect([...types].sort()).toEqual(["endGame", "join", "leave", "removePlayer", "startGame", "updateSettings"]);
     const writing = buildGame({ n: 4, phase: "WRITING", ready: [false, false, false, false], handSize: 0, judge: 0, submitted: [], paused: false });
-    expect([...new Set(legalCommands(writing, {}, enumerators).map((e) => e.cmd.type))].sort()).toEqual(["saveDraft", "updateSettings"]);
+    expect([...new Set(legalCommands(writing, {}, enumerators).map((e) => e.cmd.type))].sort()).toEqual(["endGame", "join", "leave", "removePlayer", "saveDraft", "updateSettings"]);
     const full = { [pid(1)]: { red: Array.from({ length: 10 }, () => "r"), green: Array.from({ length: 8 }, () => "g") } };
     expect(legalCommands(writing, full, enumerators).filter((e) => e.cmd.type === "finishWriting").map((e) => e.actor)).toEqual([seatActor(1)]);
   });
@@ -292,7 +300,7 @@ describe("G1 generator sanity", () => {
   test("meta: every registered command in the real registry has an enumerator or an explicit exemption; createGame is the one exemption", () => {
     expect(missingEnumerators(REGISTRY, enumerators, exemptions)).toEqual([]);
     expect(Object.keys(exemptions)).toEqual(["createGame"]);
-    expect(Object.keys(enumerators).sort()).toEqual(["closeSubmissions", "confirmSubmission", "finishWriting", "join", "leave", "pickWinner", "removePlayer", "saveDraft", "startGame", "updateSettings"]);
+    expect(Object.keys(enumerators).sort()).toEqual(["closeSubmissions", "confirmSubmission", "endGame", "finishWriting", "join", "leave", "passJudging", "pickWinner", "removePlayer", "saveDraft", "startGame", "updateSettings"]);
   });
 
   test("meta: a registered lobby command with neither an enumerator nor an exemption fails the check (test the test)", () => {

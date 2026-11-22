@@ -184,3 +184,35 @@ export function progressDriver(seed: string, players: number, table: Readonly<Re
     return any(of("confirmSubmission")) ?? any(close);
   };
 }
+
+/**
+ * `progressDriver` with membership churn (#23): about one step in `rate` is a join, a leave or a removal (and about one in 300 an endGame); a late joiner writes and finishes;
+ * a paused table is recovered by joins. Randomness comes from `seed` and the step index, so a run replays.
+ */
+export function membershipDriver(seed: string, players: number, table: Readonly<Record<string, Enumerator>>, rate = 7): Driver {
+  const base = progressDriver(seed, players, table, true);
+  return (state, drafts, i) => {
+    if (state.phase !== "WRITING" && state.phase !== "PLAYING") return base(state, drafts, i);
+    const pool = legalCommands(state, drafts, table);
+    const of = (type: string): LegalEntry[] => pool.filter((e) => e.cmd.type === type);
+    const rng = makeRng(`${seed}:member:${i}`);
+    const any = (xs: LegalEntry[]): LegalEntry | undefined => xs[rng.int(Math.max(1, xs.length))];
+    if (state.phase === "PLAYING") {
+      const finish = of("finishWriting");
+      if (finish.length > 0) return any(finish);
+      const full = of("saveDraft").filter((e) => {
+        const c = e.cmd as { red: unknown[]; green: unknown[] };
+        const who = state.players.find((p) => e.actor.kind === "user" && p.uid === e.actor.uid);
+        return who?.writeTarget?.red === c.red.length && who.writeTarget.green === c.green.length && who.writeProgress.red !== c.red.length;
+      });
+      if (full.length > 0) return any(full);
+    }
+    if (state.paused && of("join").length > 0) return any(of("join"));
+    if (rng.int(300) === 0) return any(of("endGame"));
+    if (rng.int(rate) === 0) {
+      const ops = [...of("join"), ...of("leave"), ...of("removePlayer")];
+      if (ops.length > 0) return any(ops);
+    }
+    return base(state, drafts, i);
+  };
+}

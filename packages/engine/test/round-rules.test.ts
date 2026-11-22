@@ -297,7 +297,7 @@ describe("V1 voidRound (8.3)", () => {
 describe("S4 settle slot 4: auto-advance (8.2)", () => {
   const run = (g: Game, seed = "slot4") => { const rng = recordingRng(seed); return { out: settle(g, rng, 77, false), rng }; };
 
-  test("the slots are still 1, 2, 3, 3a, 4, 5 in that order; 3 and 3a stay no-ops (#23)", () => {
+  test("the slots are still 1, 2, 3, 3a, 4, 5 in that order; 3 and 3a do nothing for an unpaused round with a judge (real since #23)", () => {
     expect(SETTLE_SLOTS.map((s) => s.id)).toEqual(["1", "2", "3", "3a", "4", "5"]);
     const g = roundGame({ submitted: [1] });
     for (const id of ["3", "3a"] as const) {

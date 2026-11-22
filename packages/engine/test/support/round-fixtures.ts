@@ -1,5 +1,5 @@
 // A coherent PLAYING game with an open round, shared by the #22 unit tests.
-import type { CardId, Game } from "../../src/types";
+import type { CardId, Game, Player } from "../../src/types";
 import { addCard, cid, makeGame, makePlayer, makeRound, pid } from "./factories";
 
 export const ids = (from: number, n: number): CardId[] => Array.from({ length: n }, (_, i) => cid(from + i));
@@ -50,3 +50,14 @@ export function roundGame(o: RoundGameOptions = {}): Game {
   return { ...g, round, judgeCursor: judge, history: o.history ?? [] };
 }
 
+
+/** Player `i` has left the table in a fixture: the status is set and the hand and pile go back to the decks, so every card stays in exactly one zone (and a `ready` or `writing` seat holds nothing, E18). */
+export function park(g: Game, i: number, status: Player["status"]): Game {
+  const who = g.players[i];
+  if (who === undefined) throw new Error(`no player ${i}`);
+  return {
+    ...g,
+    players: g.players.map((p, k) => (k === i ? { ...p, status, hand: [], scorePile: [] } : p)),
+    pools: { ...g.pools, redDeck: [...g.pools.redDeck, ...who.hand], greenDeck: [...g.pools.greenDeck, ...who.scorePile] },
+  };
+}

@@ -178,7 +178,7 @@ export const checkNoAuthorship: Checker = ({ before, cmd, result, drafts }) => {
   for (const id of added) if (leaves.has(id)) throw new Error(`an event holds the new card id ${id}`);
   for (const text of [...(draft?.red ?? []), ...(draft?.green ?? [])]) if (leaves.has(text) || leaves.has(text.trim())) throw new Error("an event holds draft text");
   if (JSON.stringify(v.draftChanges).match(/c_[a-z0-9]{10}/) !== null) throw new Error("draftChanges holds a card id");
-  if (!v.events.some((e) => e.t === "PlayStarted")) {
+  if (!v.events.some((e) => e.t === "PlayStarted" || e.t === "PlayerActivated")) { // activation (begin play, or a paused recovery in the same command) deals from the freshly pooled decks
     const held = JSON.stringify(v.state.players);
     for (const id of added) if (held.includes(id)) throw new Error(`a player record holds the new card id ${id}`);
   }
@@ -216,20 +216,37 @@ export const checkRevealOrder: Checker = ({ before, result }) => {
   if (round.revealOrder === null) throw new Error("a JUDGING round has no revealOrder");
   if (sortedKey(round.revealOrder) !== sortedKey(round.submissions.map((s) => s.cardId))) throw new Error("revealOrder is not the submissions' card set");
   const was = before?.round;
-  if (was?.phase === "JUDGING" && was.number === round.number && !same(was.revealOrder, round.revealOrder)) throw new Error("revealOrder changed after the close");
+  // After the close only a removal may change it (the new judge's own entry, an evicted submitter's), and the rest keep their relative order (P-E10).
+  if (was?.phase === "JUDGING" && was.number === round.number && !isSubsequence(round.revealOrder, was.revealOrder ?? [])) throw new Error("revealOrder changed after the close");
 };
+
+/** True when `part` can be had from `whole` by deleting elements only. */
+function isSubsequence(part: readonly string[], whole: readonly string[]): boolean {
+  let at = 0;
+  for (const x of part) {
+    at = whole.indexOf(x, at);
+    if (at === -1) return false;
+    at++;
+  }
+  return true;
+}
 
 const reference = (players: readonly Player[], cursor: number | null): Player | undefined => {
   const active = players.filter((p) => p.status === "active").sort((a, b) => a.joinOrder - b.joinOrder);
   return cursor === null ? undefined : (active.find((p) => p.joinOrder > cursor) ?? active[0]);
 };
 
-/** E12: a round open has one judge who is active and on the roster; the judge never submits; an unpaused round has a judge; after the first round the judge is the next by joinOrder from the previous cursor (an independent model). */
+/**
+ * E12: a round open has one judge who is active and on the roster; the judge never submits; an unpaused round has a judge (a null judge only while paused);
+ * a judge that changed in this command is the one `JudgeChanged` names; and a round opened by this command has the judge an independent model gives:
+ * the reassigned judge when the round it replaces was voided after a reassignment (in this command or an earlier one) and they are still active, else the next by joinOrder from the previous cursor.
+ */
 export const checkJudges: Checker = ({ before, result }) => {
   const v = accepted(result);
   if (v === null) return;
   const after = v.state;
   const round = after.round;
+  const changed = v.events.filter((e): e is Extract<DomainEvent, { t: "JudgeChanged" }> => e.t === "JudgeChanged");
   if (round !== null) {
     if (round.submissions.some((s) => s.playerId === round.judgeId)) throw new Error("the judge has a submission");
     if (after.phase === "PLAYING" && !after.paused) {
@@ -237,10 +254,20 @@ export const checkJudges: Checker = ({ before, result }) => {
       if (judge === undefined) throw new Error("an unpaused round has no active judge");
       if (!round.roster.includes(judge.id)) throw new Error("the judge is not on the roster");
     }
+    if (round.judgeId === null && !after.paused) throw new Error("a round has no judge while the game is not paused");
   }
-  if (!v.events.some((e) => e.t === "RoundOpened") || round === null || before?.round == null || v.events.some((e) => e.t === "PlayStarted")) return;
-  const want = reference(after.players, before.judgeCursor);
-  if (want !== undefined && round.judgeId !== want.id) throw new Error(`the judge of round ${round.number} is ${String(round.judgeId)}, rotation says ${want.id}`);
+  if (!v.events.some((e) => e.t === "RoundOpened")) {
+    const last = changed.at(-1);
+    if (last !== undefined && round !== null && round.judgeId !== last.to) throw new Error(`JudgeChanged names ${last.to}, the round's judge is ${String(round.judgeId)}`);
+    return;
+  }
+  if (round === null || before?.round == null || v.events.some((e) => e.t === "PlayStarted")) return;
+  const voided = v.events.some((e) => e.t === "RoundVoided");
+  const handed = changed.at(-1)?.to ?? (voided && before.round.judgeReassigned ? before.round.judgeId : null);
+  const keep = voided && handed !== null && activeOf(after).some((p) => p.id === handed) ? handed : undefined;
+  const cursorBefore = changed.length > 0 ? (after.players.find((p) => p.id === changed.at(-1)?.to)?.joinOrder ?? null) : before.judgeCursor;
+  const want = keep !== undefined ? activeOf(after).find((p) => p.id === keep) : reference(after.players, cursorBefore);
+  if (want !== undefined && round.judgeId !== want.id) throw new Error(`the judge of round ${round.number} is ${String(round.judgeId)}, the model says ${want.id}`);
   if (round.number !== after.history.length + 1) throw new Error("round number is not history.length + 1");
 };
 
@@ -289,15 +316,22 @@ export const checkTopUp: Checker = ({ cmd, result }) => {
   for (const p of activeOf(v.state)) if (p.hand.length !== 7) throw new Error(`player ${p.id} holds ${p.hand.length} cards after a resolve`);
 };
 
-/** E7, PLAYING half: whenever a game with a target is PLAYING, the minimums hold at the seated count and the green deck is not empty (a round can open). */
+/**
+ * E7, PLAYING half: whenever a game with a target is PLAYING, the minimums hold at the seated count, counting what the pending writers (late joiners) are still to pool
+ * (their `writeTarget`, 9.4, X7), and the green deck is not empty (a round can open).
+ */
 export const checkPlayable: Checker = ({ result }) => {
   const v = accepted(result);
   const g = v?.state;
   if (g === undefined || g.phase !== "PLAYING" || g.target === null) return;
   const n = g.players.filter((p) => p.status === "writing" || p.status === "ready" || p.status === "active").length;
-  if (!meetsMinimums(totals(g), n, g.target)) throw new Error("PLAYING without the minimums");
+  const now = totals(g);
+  const owed = g.players.filter((p) => p.status === "writing" && p.writeTarget !== null).reduce((sum, p) => ({ red: sum.red + (p.writeTarget?.red ?? 0), green: sum.green + (p.writeTarget?.green ?? 0) }), { red: 0, green: 0 });
+  if (!meetsMinimums({ red: now.red + owed.red, green: now.green + owed.green }, n, g.target)) throw new Error("PLAYING without the minimums, even counting the pending writers");
   if (g.pools.greenDeck.length < 1) throw new Error("PLAYING with an empty green deck");
 };
+
+const EVICTIONS = new Set(["leave", "removePlayer"]);
 
 /** E14: at most one `WinnerPicked` per command and never the judge; `history` grows by exactly that count with contiguous round numbers; score piles sum to `history.length` (exact until evictions, #23). */
 export const checkScoring: Checker = ({ before, cmd, result }) => {
@@ -318,8 +352,15 @@ export const checkScoring: Checker = ({ before, cmd, result }) => {
     if (v.roundRecords.length !== 1) throw new Error(`a pick returned ${v.roundRecords.length} round records`);
   }
   after.history.forEach((h, i) => { if (h.round !== i + 1) throw new Error(`history[${i}] is round ${h.round}`); });
-  const points = after.players.reduce((n, p) => n + p.scorePile.length, 0);
-  if (points !== after.history.length) throw new Error(`score piles hold ${points} cards, history has ${after.history.length} rounds`);
+  const pile = (g: Game): number => g.players.reduce((n, p) => n + p.scorePile.length, 0);
+  // A leaver's pile goes back to the green deck (E17, U2), so points can only be fewer than rounds, and they change only by a pick or an eviction.
+  if (pile(after) > after.history.length) throw new Error(`score piles hold ${pile(after)} cards, history has ${after.history.length} rounds`);
+  if (before !== null && !EVICTIONS.has(cmdType(cmd)) && pile(after) - pile(before) !== grew) throw new Error(`score piles moved by ${pile(after) - pile(before)} in a ${cmdType(cmd)} that resolved ${grew} rounds`);
+  // Only the winner of a pick gains a point, and so never the judge of that round (E12).
+  for (const p of after.players) {
+    const was = before?.players.find((b) => b.id === p.id)?.scorePile.length ?? 0;
+    if (p.scorePile.length > was && !picks.some((w) => w.winnerId === p.id)) throw new Error(`player ${p.id} gained a point without winning`);
+  }
 };
 
 /** Commands that may be accepted in FINISHED (E15); fixture commands (`fx...`) are the harness's own. */
@@ -339,10 +380,70 @@ export const checkFinished: Checker = ({ before, cmd, result }) => {
   if (before?.phase === "FINISHED" && !FINISHED_OK.has(cmdType(cmd)) && !cmdType(cmd).startsWith("fx")) throw new Error(`${cmdType(cmd)} was accepted in FINISHED`);
 };
 
+// ---------------------------------------------------------------------------------------------------------------------
+// #23: E17 (removal) and E18 (late join).
+
+/** The seat a leave or removePlayer targeted, found in `before` from the command and the actor (not from the result under test). */
+const evictedOf = (before: Game, cmd: unknown, actor: Actor | undefined): Player | undefined => {
+  if (cmdType(cmd) === "leave") return actorPlayer(before, actor);
+  const id = (cmd as { playerId?: unknown }).playerId;
+  return before.players.find((p) => p.id === id && SEATED.has(p.status));
+};
+
+/**
+ * E17: after an accepted leave or removePlayer outside LOBBY the departed seat holds no hand, pile or submission, has the right status, is not in `waitingOn`,
+ * is not the judge, the round's judge is active (or null while paused), and the event order starts with the departure.
+ */
+export const checkEviction: Checker = ({ before, cmd, result, actor }) => {
+  const v = accepted(result);
+  const type = cmdType(cmd);
+  if (v === null || before === null || before.phase === "LOBBY" || !EVICTIONS.has(type)) return;
+  const gone = evictedOf(before, cmd, actor);
+  if (gone === undefined) throw new Error(`an accepted ${type} has no seated target`);
+  const after = v.state;
+  const now = after.players.find((p) => p.id === gone.id);
+  if (now === undefined) throw new Error("the departed seat's record disappeared outside LOBBY");
+  if (now.status !== (type === "leave" ? "left" : "removed")) throw new Error(`the departed seat is ${now.status}`);
+  if (now.hand.length > 0 || now.scorePile.length > 0) throw new Error("the departed seat still holds cards");
+  if (after.round?.submissions.some((s) => s.playerId === gone.id) === true) throw new Error("the departed seat still has a submission");
+  if (after.round?.judgeId === gone.id) throw new Error("the departed seat is still the judge");
+  if (after.waitingOn.includes(gone.id)) throw new Error("waitingOn holds the departed seat");
+  const first = v.events[0];
+  if (first?.t !== (type === "leave" ? "PlayerLeft" : "PlayerRemoved") || first.playerId !== gone.id) throw new Error("the first event is not the departure");
+  if (gone.status === "writing" && !v.draftChanges.some((d) => d.playerId === gone.id && d.draft === null)) throw new Error("a departed writer's draft was not deleted");
+  if (gone.status !== "writing" && v.draftChanges.length > 0) throw new Error("a departed player with no draft changed a draft");
+};
+
+/**
+ * E18: a `writing` or `ready` player never holds a card, a point or a submission; a newly active player holds 7 cards and 0 points; every activation comes with
+ * `RoundOpened`, `PlayStarted` or a paused-recovery activation (the game was PLAYING and paused); a seat that joined this command is `writing` with no points.
+ */
+export const checkLateJoin: Checker = ({ before, cmd, result }) => {
+  const v = accepted(result);
+  if (v === null) return;
+  const after = v.state;
+  for (const p of after.players) {
+    if (p.status !== "writing" && p.status !== "ready") continue;
+    if (p.hand.length > 0 || p.scorePile.length > 0) throw new Error(`${p.status} player ${p.id} holds cards or points`);
+    if (after.round?.submissions.some((s) => s.playerId === p.id) === true) throw new Error(`${p.status} player ${p.id} has a submission`);
+  }
+  const activated = v.events.filter((e): e is Extract<DomainEvent, { t: "PlayerActivated" }> => e.t === "PlayerActivated");
+  const recovery = before?.phase === "PLAYING" && before.paused;
+  if (activated.length > 0 && !recovery && !v.events.some((e) => e.t === "RoundOpened" || e.t === "PlayStarted")) throw new Error("PlayerActivated with no round boundary and no paused recovery");
+  for (const e of activated) {
+    const p = after.players.find((q) => q.id === e.playerId);
+    if (p?.status !== "active" || p.hand.length !== 7 || p.scorePile.length !== 0) throw new Error(`activated player ${e.playerId} is not active with 7 cards and 0 points`);
+  }
+  if (cmdType(cmd) === "join" && before !== null) {
+    const fresh = after.players.filter((p) => !before.players.some((b) => b.id === p.id));
+    if (fresh.length !== 1 || fresh[0]?.status !== "writing") throw new Error("a join must add exactly one writing seat");
+  }
+};
+
 /** Append-only: later steps push the E5 to E18 checkers here. */
 export const checkers: Checker[] = [
   checkSerializable, checkVersion, checkUnchangedWhenNotAggregate, checkConservation, checkHands, checkAggregateChanged, checkNoAuthorship,
-  checkOwnerHidden, checkRevealOrder, checkJudges, checkRoundMoves, checkTopUp, checkPlayable, checkScoring, checkFinished,
+  checkOwnerHidden, checkRevealOrder, checkJudges, checkRoundMoves, checkTopUp, checkPlayable, checkScoring, checkFinished, checkEviction, checkLateJoin,
 ];
 
 /** Run every checker on a step; a failure names the step index and seed so the run can be replayed. */

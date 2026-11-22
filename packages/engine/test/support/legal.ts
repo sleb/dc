@@ -11,6 +11,9 @@ export type Enumerator = (game: Game, drafts: GameDrafts) => LegalEntry[];
  * `legalCommands` is written independently of `decide`, from gameplay.md (LLD 1 section 15.1).
  * One enumerator per command type, added by the step that implements the command. Append-only.
  */
+const isSeated = (p: Game["players"][number]): boolean => p.status === "writing" || p.status === "ready" || p.status === "active";
+const inPlay = (g: Game): boolean => g.phase === "LOBBY" || g.phase === "WRITING" || g.phase === "PLAYING";
+
 export const enumerators: Record<string, Enumerator> = {
   // updateSettings: the host may change any setting in LOBBY, and the profanity filter in WRITING and PLAYING (gameplay.md, host controls).
   updateSettings: (g) => {
@@ -28,10 +31,10 @@ export const enumerators: Record<string, Enumerator> = {
     } else if (g.phase !== "WRITING" && g.phase !== "PLAYING") return [];
     return patches.map((patch) => ({ actor: host, cmd: { type: "updateSettings", patch } as Command }));
   },
-  // join: a LOBBY with room, under the join cap, for a player id and a name nobody has.
+  // join: a table with room (LOBBY, WRITING or PLAYING), under the join cap, for a player id and a name nobody has.
   join: (g) => {
     const seated = g.players.filter((p) => p.status === "writing" || p.status === "ready" || p.status === "active");
-    if (g.phase !== "LOBBY" || seated.length >= MAX_SEATED || g.totalJoins >= MAX_TOTAL_JOINS) return [];
+    if (!(g.phase === "LOBBY" || g.phase === "WRITING" || g.phase === "PLAYING") || seated.length >= MAX_SEATED || g.totalJoins >= MAX_TOTAL_JOINS) return [];
     let k = 20;
     while (g.players.some((p) => p.id === pid(k))) k++;
     const taken = new Set(seated.map((p) => p.name.toLowerCase().replace(/\s+/g, "")));
@@ -39,10 +42,18 @@ export const enumerators: Record<string, Enumerator> = {
     while (taken.has(`guest${n}`)) n++;
     return [{ actor: seat(k), cmd: { type: "join", playerId: pid(k), name: `Guest ${n}` } as Command }];
   },
-  // leave: every seated player may leave a LOBBY, the host's seat included.
-  leave: (g) => (g.phase !== "LOBBY" ? [] : g.players.filter((p) => p.status === "writing").map((p) => ({ actor: { kind: "user", uid: p.uid } as Actor, cmd: { type: "leave" } as Command }))),
-  // removePlayer: the host may remove any seated player from a LOBBY, their own seat included.
-  removePlayer: (g) => (g.phase !== "LOBBY" ? [] : g.players.filter((p) => p.status === "writing").map((p) => ({ actor: { kind: "user", uid: g.hostId } as Actor, cmd: { type: "removePlayer", playerId: p.id } as Command }))),
+  // leave: every seated player may leave a LOBBY, WRITING or PLAYING table, the host's seat included (#23).
+  leave: (g) => (!inPlay(g) ? [] : g.players.filter(isSeated).map((p) => ({ actor: { kind: "user", uid: p.uid } as Actor, cmd: { type: "leave" } as Command }))),
+  // removePlayer: the host may remove any seated player from a LOBBY, WRITING or PLAYING table, their own seat included.
+  removePlayer: (g) => (!inPlay(g) ? [] : g.players.filter(isSeated).map((p) => ({ actor: { kind: "user", uid: g.hostId } as Actor, cmd: { type: "removePlayer", playerId: p.id } as Command }))),
+  // passJudging: the host, in an unpaused PLAYING round that has a judge (gameplay.md "Stalled judge").
+  passJudging: (g) => {
+    const r = g.round;
+    if (g.phase !== "PLAYING" || g.paused || r === null || r.judgeId === null) return [];
+    return [{ actor: { kind: "user", uid: g.hostId }, cmd: { type: "passJudging", expectedVersion: r.changedAtVersion } as Command }];
+  },
+  // endGame: the host, from LOBBY, WRITING, PLAYING or FINISHED (7.1).
+  endGame: (g) => (g.phase === "LOBBY" || g.phase === "WRITING" || g.phase === "PLAYING" || g.phase === "FINISHED" ? [{ actor: { kind: "user", uid: g.hostId }, cmd: { type: "endGame" } as Command }] : []),
   // startGame: the host, from a LOBBY of at least three seated players with no imported deck (a new deck is always playable; gameplay.md "Starting a game").
   startGame: (g) => (g.phase === "LOBBY" && g.players.filter((p) => p.status === "writing").length >= 3 && Object.keys(g.cards).length === 0 ? [{ actor: { kind: "user", uid: g.hostId }, cmd: { type: "startGame" } as Command }] : []),
   // saveDraft: a player who has not finished writing, in WRITING or (a late joiner) in PLAYING: the full target, half of it, and a text-only rewrite of the saved counts.
