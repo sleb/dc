@@ -165,7 +165,7 @@ describe("B1 beginPlay and settle slot 1 (8.2 step 1, 8.7)", () => {
   const run = (g: Game) => settle(g, recordingRng("s"), 10, false);
 
   test("slot 1 fires iff WRITING, 3 or more seated, all ready and the minimums hold", () => {
-    const fired = (g: Game) => run(g).state.phase === "PLAYING";
+    const fired = (g: Game) => run(g).events.some((e) => e.t === "PlayStarted");
     expect(fired(readyGame(3))).toBe(true);
     expect(fired(readyGame(4))).toBe(true);
     expect(fired(readyGame(3, { phase: "LOBBY" }))).toBe(false);
@@ -178,7 +178,8 @@ describe("B1 beginPlay and settle slot 1 (8.2 step 1, 8.7)", () => {
 
   test("slot 1 does not fire when the minimums are unmet, or target or writeCounts is null", () => {
     const g = readyGame(3);
-    const fewerRed = { ...g, pools: { ...g.pools, redDeck: g.pools.redDeck.slice(1) }, cards: Object.fromEntries(Object.entries(g.cards).filter(([k]) => k !== g.pools.redDeck[0])) };
+    const dropped = g.pools.redDeck.slice(0, 3); // 30 red -> 27, one under rMin(3) = 28
+    const fewerRed = { ...g, pools: { ...g.pools, redDeck: g.pools.redDeck.slice(3) }, cards: Object.fromEntries(Object.entries(g.cards).filter(([k]) => !dropped.includes(k))) };
     expect(run(fewerRed).state.phase).toBe("WRITING");
     const fewerGreen = { ...g, pools: { ...g.pools, greenDeck: g.pools.greenDeck.slice(1) }, cards: Object.fromEntries(Object.entries(g.cards).filter(([k]) => k !== g.pools.greenDeck[0])) };
     expect(run(fewerGreen).state.phase).toBe("WRITING");

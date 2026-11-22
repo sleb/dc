@@ -1,12 +1,14 @@
+import { meetsMinimums, MIN_PLAYERS, totals } from "./rules/playability";
+import { beginPlay } from "./rules/rounds";
 import { waitingFields } from "./rules/waiting";
 import { activePlayers, seated } from "./selectors";
 import type { DomainEvent, Game, Rng } from "./types";
 
 /**
  * `settle` runs after every aggregate-changing command, before `version` is bumped (LLD 1 section 8.2).
- * The slots are named and ordered here. Slot 2 (pause flag) and slot 5 (waiting fields) are real in 1.2.
- * Slots 1, 3, 3a and 4 are no-ops that later steps fill: 1 begin play (#22), 3 recovery activation (#22),
- * 3a judge assignment (#22), 4 auto-advance (#22); their helpers (beginPlay, activateReady, reassignJudge, closeRound, voidRound) arrive with them.
+ * The slots are named and ordered here. Slot 2 (pause flag) and slot 5 (waiting fields) are real in 1.2, slot 1 (begin play) in 1.4 (#21).
+ * Slots 3, 3a and 4 are no-ops that #22 fills: 3 recovery activation, 3a judge assignment, 4 auto-advance;
+ * their helpers (reassignJudge, closeRound, voidRound) arrive with them (activateReady, openRound and beginPlay are #21's).
  */
 export type SlotId = "1" | "2" | "3" | "3a" | "4" | "5";
 
@@ -31,6 +33,18 @@ export interface SettleSlot {
 
 const noop = (id: SlotId): SettleSlot => ({ id, run: (state) => ({ state, events: [] }) });
 
+/** Slot 1 (8.2): WRITING, at least 3 seated, every seated player ready and the minimums met at the frozen target: begin play. A null target or writeCounts never begins play. */
+const beginPlaySlot: SettleSlot = {
+  id: "1",
+  run: (state, env) => {
+    const here = seated(state);
+    const ready = state.phase === "WRITING" && state.target !== null && state.writeCounts !== null && here.length >= MIN_PLAYERS && here.every((p) => p.status === "ready");
+    if (!ready || state.target === null || !meetsMinimums(totals(state), here.length, state.target)) return { state, events: [] };
+    const out = beginPlay(state, env.rng, env.now);
+    return { state: out.state, events: out.events, episodeStarted: true }; // a new round is a new episode
+  },
+};
+
 /** `paused` (LLD 1 section 8.1): PLAYING needs 3 active, WRITING needs 3 seated, any other phase is never paused. */
 export function computePaused(g: Game): boolean {
   if (g.phase === "PLAYING") return activePlayers(g).length < 3;
@@ -52,7 +66,7 @@ const waitingSlot: SettleSlot = {
   run: (state, env) => ({ state: { ...state, ...waitingFields(state, env.now, env.episodeStarted) }, events: [] }),
 };
 
-export const SETTLE_SLOTS: readonly SettleSlot[] = [noop("1"), pauseFlag, noop("3"), noop("3a"), noop("4"), waitingSlot];
+export const SETTLE_SLOTS: readonly SettleSlot[] = [beginPlaySlot, pauseFlag, noop("3"), noop("3a"), noop("4"), waitingSlot];
 
 export function runSlots(slots: readonly SettleSlot[], state: Game, rng: Rng, now: number, episodeStarted: boolean): { state: Game; events: DomainEvent[] } {
   let current = state;

@@ -137,7 +137,8 @@ export const checkAggregateChanged: Checker = ({ before, cmd, result, actor }) =
   if (me === undefined || !Array.isArray(c.red) || !Array.isArray(c.green)) return;
   const changed = c.red.length !== me.writeProgress.red || c.green.length !== me.writeProgress.green;
   if (result.value.aggregateChanged !== changed) throw new Error(`saveDraft aggregateChanged is ${result.value.aggregateChanged} but the counts ${changed ? "changed" : "did not change"}`);
-  if (result.value.events.length !== 0) throw new Error("saveDraft emitted events");
+  // The command itself emits nothing; settle may flip `paused` (a fixture can store a stale flag), which is the only event allowed.
+  if (result.value.events.some((e) => e.t !== "PausedChanged")) throw new Error("saveDraft emitted events");
   if (result.value.draftChanges.length !== 1) throw new Error("saveDraft must return exactly one draft change");
 };
 
@@ -152,7 +153,8 @@ export const checkNoAuthorship: Checker = ({ before, cmd, result, drafts }) => {
   if (keys.join() !== [...keys].sort().join()) throw new Error("cards keys are not in sorted order");
   const was = new Set(Object.keys(before.cards));
   const added = keys.filter((k) => !was.has(k));
-  const events = JSON.stringify(v.events);
+  // `RoundOpened.greenCardId` is the top of the freshly shuffled green deck, public by design and not tied to a writer (the envelope omits the actor), so it may be a just-pooled id.
+  const events = JSON.stringify(v.events.filter((e) => e.t !== "RoundOpened"));
   const who = finisher(before, v.state);
   const draft = who === undefined ? undefined : drafts?.[who.id];
   for (const id of added) if (events.includes(id)) throw new Error(`an event holds the new card id ${id}`);
