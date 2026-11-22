@@ -1,0 +1,27 @@
+{
+  "displayName": "dc identity purge partial",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "An identity purge left accounts behind (LLD 0 section 9, LLD 4). Any occurrence is worth a look; a repeat for the same game means the purge cannot complete."
+  },
+  "conditions": [
+    {
+      "displayName": "dc identity purge partial",
+      "conditionMatchedLog": {
+        "filter": "jsonPayload.event=\"auth.purge.partial\""
+      }
+    }
+  ],
+  "alertStrategy": {
+    "notificationRateLimit": {
+      "period": "300s"
+    }
+  }
+}

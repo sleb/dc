@@ -1,0 +1,18 @@
+# dc_api_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Callable API outcomes: one count per api.done line (LLD 5 section 9)."
+filter: "jsonPayload.event=\"api.done\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"
+  labels:
+    - key: callable
+      valueType: STRING
+    - key: outcome
+      valueType: STRING
+    - key: reason
+      valueType: STRING
+labelExtractors:
+  callable: "EXTRACT(jsonPayload.callable)"
+  outcome: "EXTRACT(jsonPayload.outcome)"
+  reason: "EXTRACT(jsonPayload.reason)"

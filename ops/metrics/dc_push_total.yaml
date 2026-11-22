@@ -1,0 +1,12 @@
+# dc_push_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Push attempts per result (LLD 0 section 9, LLD 6 section 7.3)."
+filter: "jsonPayload.event=\"push.result\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"
+  labels:
+    - key: result
+      valueType: STRING
+labelExtractors:
+  result: "EXTRACT(jsonPayload.result)"

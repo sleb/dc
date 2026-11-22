@@ -1,0 +1,7 @@
+# dc_api_error_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Unexpected failures: one count per api.error line, the line logError writes for a non-HttpsError throw (LLD 0 section 9, the function-failure alert)."
+filter: "jsonPayload.event=\"api.error\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"

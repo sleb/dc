@@ -1,0 +1,35 @@
+{
+  "displayName": "dc push invalid argument",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "More than 5 pushes in an hour were refused with `invalid-argument` (LLD 6 section 4.4, section 7.3). Those tokens are never pruned, so this is a payload bug, not a device problem."
+  },
+  "conditions": [
+    {
+      "displayName": "dc push invalid argument",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/dc_push_invalid_argument_total\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 5,
+        "duration": "0s",
+        "trigger": {
+          "count": 1
+        },
+        "aggregations": [
+          {
+            "alignmentPeriod": "3600s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ]
+      }
+    }
+  ]
+}

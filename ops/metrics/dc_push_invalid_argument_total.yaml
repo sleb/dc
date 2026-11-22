@@ -1,0 +1,7 @@
+# dc_push_invalid_argument_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Push attempts the provider refused with invalid-argument; such tokens are never pruned (LLD 6 sections 4.4 and 7.3)."
+filter: "jsonPayload.event=\"push.result\" AND jsonPayload.result=\"invalid_argument\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"

@@ -1,0 +1,12 @@
+# dc_client_outdated_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Calls refused because the client is below MIN_V (LLD 5 section 9)."
+filter: "jsonPayload.event=\"api.done\" AND jsonPayload.reason=\"CLIENT_OUTDATED\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"
+  labels:
+    - key: clientV
+      valueType: STRING
+labelExtractors:
+  clientV: "EXTRACT(jsonPayload.clientV)"

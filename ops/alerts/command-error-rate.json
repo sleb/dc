@@ -1,0 +1,24 @@
+{
+  "displayName": "dc command error rate",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "`outcome=error` has been above 2% of commands for 10 minutes (LLD 0 section 9); rejections are not errors. Start with the `txn.retry` and `api.error` lines for the game ids in the window."
+  },
+  "conditions": [
+    {
+      "displayName": "dc command error rate",
+      "conditionPrometheusQueryLanguage": {
+        "query": "sum(rate({\"logging.googleapis.com/user/dc_command_total\", monitored_resource=\"cloud_run_revision\", outcome=\"error\"}[10m])) / sum(rate({\"logging.googleapis.com/user/dc_command_total\", monitored_resource=\"cloud_run_revision\"}[10m])) > 0.02 and sum(rate({\"logging.googleapis.com/user/dc_command_total\", monitored_resource=\"cloud_run_revision\"}[10m])) >= 0.1",
+        "duration": "600s",
+        "evaluationInterval": "60s"
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "displayName": "dc command latency p95",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "Command p95 latency above 3 s for 15 minutes (LLD 0 section 9). Cold starts alone must not fire it; if they do, raise `COMMAND_MIN_INSTANCES` rather than the threshold."
+  },
+  "conditions": [
+    {
+      "displayName": "dc command latency p95",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/dc_command_latency_ms\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 3000,
+        "duration": "900s",
+        "trigger": {
+          "count": 1
+        },
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_PERCENTILE_95",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ]
+      }
+    }
+  ]
+}

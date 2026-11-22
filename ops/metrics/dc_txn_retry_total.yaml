@@ -1,0 +1,7 @@
+# dc_txn_retry_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Transaction retries: one count per txn.retry line (LLD 0 section 9)."
+filter: "jsonPayload.event=\"txn.retry\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"

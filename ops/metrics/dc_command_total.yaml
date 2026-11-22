@@ -1,0 +1,18 @@
+# dc_command_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Command outcomes: one count per command.done or command.rejected line (LLD 0 section 9)."
+filter: "jsonPayload.event=\"command.done\" OR jsonPayload.event=\"command.rejected\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"
+  labels:
+    - key: commandType
+      valueType: STRING
+    - key: outcome
+      valueType: STRING
+    - key: reason
+      valueType: STRING
+labelExtractors:
+  commandType: "EXTRACT(jsonPayload.commandType)"
+  outcome: "EXTRACT(jsonPayload.outcome)"
+  reason: "EXTRACT(jsonPayload.reason)"

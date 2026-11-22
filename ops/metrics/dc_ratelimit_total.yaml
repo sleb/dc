@@ -1,0 +1,12 @@
+# dc_ratelimit_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Rate-limit rejections per bucket (LLD 5 section 9)."
+filter: "jsonPayload.event=\"rate.limited\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"
+  labels:
+    - key: bucket
+      valueType: STRING
+labelExtractors:
+  bucket: "EXTRACT(jsonPayload.bucket)"

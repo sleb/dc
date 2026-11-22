@@ -1,0 +1,12 @@
+# dc_appcheck_denied_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Requests Cloud Run refused with 401, i.e. App Check or auth denial at the edge (LLD 5 section 9)."
+filter: "resource.type=\"cloud_run_revision\" AND httpRequest.status=401"
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"
+  labels:
+    - key: callable
+      valueType: STRING
+labelExtractors:
+  callable: "EXTRACT(resource.labels.service_name)"

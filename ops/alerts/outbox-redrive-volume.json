@@ -1,0 +1,27 @@
+{
+  "displayName": "dc outbox redrive volume",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "One redrive pass processed more than 20 rows (LLD 0 section 9, LLD 6 section 7.3): consumers are failing or slow."
+  },
+  "conditions": [
+    {
+      "displayName": "dc outbox redrive volume",
+      "conditionMatchedLog": {
+        "filter": "jsonPayload.event=\"outbox.redrive\" AND jsonPayload.count>20"
+      }
+    }
+  ],
+  "alertStrategy": {
+    "notificationRateLimit": {
+      "period": "300s"
+    }
+  }
+}

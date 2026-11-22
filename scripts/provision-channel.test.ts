@@ -72,6 +72,6 @@ test("OB11 the step is listed in the usage line and in the `all` order", async (
   expect(usage).toContain("channel");
   const allSteps = script.split("\n").find((line) => line.includes('[ "$1" = all ]'));
   expect(allSteps).toContain("channel");
-  // The channel must be created before the deploy that applies the policies (LLD 0 section 8, P20).
-  expect(allSteps?.indexOf("channel")).toBeLessThan(allSteps?.indexOf("config") ?? -1);
+  // It needs a project and APIs first, so it cannot be the first step.
+  expect(allSteps?.indexOf("channel")).toBeGreaterThan(allSteps?.indexOf("project") ?? -1);
 });

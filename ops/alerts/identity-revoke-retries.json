@@ -1,0 +1,30 @@
+{
+  "displayName": "dc identity revoke retries",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "A seat revocation retried more than 5 times (LLD 0 section 9, LLD 4). Auth admin calls are failing; check the `fn-runtime` roles and the Identity Platform quota."
+  },
+  "conditions": [
+    {
+      "displayName": "dc identity revoke retries",
+      "conditionMatchedLog": {
+        "filter": "jsonPayload.event=\"auth.revoke\" AND jsonPayload.attempts>5",
+        "labelExtractors": {
+          "gameId": "EXTRACT(jsonPayload.gameId)"
+        }
+      }
+    }
+  ],
+  "alertStrategy": {
+    "notificationRateLimit": {
+      "period": "300s"
+    }
+  }
+}

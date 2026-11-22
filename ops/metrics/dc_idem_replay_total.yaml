@@ -1,0 +1,12 @@
+# dc_idem_replay_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Calls served from the idempotency ledger (LLD 5 section 9)."
+filter: "jsonPayload.event=\"api.done\" AND jsonPayload.replay=true"
+metricDescriptor:
+  metricKind: DELTA
+  valueType: INT64
+  unit: "1"
+  labels:
+    - key: callable
+      valueType: STRING
+labelExtractors:
+  callable: "EXTRACT(jsonPayload.callable)"

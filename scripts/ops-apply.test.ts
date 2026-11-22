@@ -252,7 +252,7 @@ function fakeGcloud(state: State, hide: string[] = []): { gcloud: Gcloud; calls:
       return ok([...state.metrics].filter((id) => !hidden.has(id)).map((id) => ({ name: `projects/${PROJECT}/metrics/${id}` })));
     }
     if (family === "monitoring dashboards" && verb === "list") {
-      return ok([...state.dashboards].filter((d) => !hidden.has(d)).map(([displayName, etag], i) => ({ name: `projects/${PROJECT}/dashboards/${i + 1}`, displayName, etag })));
+      return ok([...state.dashboards].filter(([displayName]) => !hidden.has(displayName)).map(([displayName, etag], i) => ({ name: `projects/${PROJECT}/dashboards/${i + 1}`, displayName, etag })));
     }
     if (family === "monitoring policies" && verb === "list") {
       return ok([...state.policies.keys()].filter((d) => !hidden.has(d)).map((displayName, i) => ({ name: `projects/${PROJECT}/alertPolicies/${i + 1}`, displayName })));
@@ -281,7 +281,7 @@ function fakeGcloud(state: State, hide: string[] = []): { gcloud: Gcloud; calls:
 }
 
 /** The Monitoring REST surface ops-apply uses: only the notification-channel list. */
-const channelsRest = (channels = [{ name: CHANNEL, displayName: "dc-owner", type: "email" }]): Rest => async (method, url) => {
+const channelsRest = (channels = [{ name: CHANNEL, displayName: "dc-owner", type: "email" }]): Rest => async ({ method, url }) => {
   if (method === "GET" && url.endsWith(`/v3/projects/${PROJECT}/notificationChannels`)) return { notificationChannels: channels };
   throw new Error(`unexpected REST call ${method} ${url}`);
 };
@@ -341,10 +341,13 @@ test("OB6 a second run creates nothing and exits 0", async () => {
 
 test("OB7 a declared item missing after the run fails and names it (P20)", async () => {
   const missing = ["dc_push_total", "dc main", "dc push invalid argument"];
-  const out = await applyWith(emptyState(), { hide: missing }).run();
+  const { fake, run } = applyWith(emptyState(), { hide: missing });
+  const out = await run();
   expect(out.ok).toBe(false);
   const reason = out.ok ? "" : out.reason;
   for (const name of missing) expect([name, reason.includes(name)]).toEqual([name, true]);
+  // The verification re-lists instead of trusting what the run saw first: three lists before, three after.
+  expect(fake.calls.filter((c) => c[2] === "list").length).toBe(6);
 });
 
 test("OB8 no resolvable dc-owner channel exits 1 before any write, pointing at the provisioning step", async () => {
@@ -404,15 +407,24 @@ test("OB10 the real argv shapes, through the CLI against a fake gcloud on PATH",
     },
   });
   try {
-    const cli = (env: Record<string, string>) =>
-      Bun.spawnSync(["bun", "scripts/ops-apply.ts", "--project", PROJECT], { cwd: ROOT, env: { ...env, MONITORING_API_URL: `http://127.0.0.1:${server.port}` }, stdin: "ignore" });
-    const argvOf = async (state: string, kind: string): Promise<string[]> => (await readFile(join(state, `${kind}.argv`), "utf8")).trim().split("\n");
+    // Async spawn: the local Monitoring server answers in this same process, so a blocking spawn would deadlock.
+    const cli = async (env: Record<string, string>) => {
+      const child = Bun.spawn(["bun", "scripts/ops-apply.ts", "--project", PROJECT], { cwd: ROOT, env: { ...env, MONITORING_API_URL: `http://127.0.0.1:${server.port}` }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      return { code, out: `${stdout}${stderr}` };
+    };
+    const argvOf = async (state: string, kind: string): Promise<string[]> =>
+      (await readFile(join(state, `${kind}.argv`), "utf8").catch(() => ""))
+        .trim()
+        .split("\n")
+        .filter(Boolean);
 
     // An empty project: every item is created.
     const empty = await cliFixture("empty-then-present");
-    const created = cli(empty.env);
-    expect(created.exitCode).toBe(0);
-    expect(created.stdout.toString()).not.toContain("fake-access-token");
+    const created = await cli(empty.env);
+    expect(created.code).toBe(0);
+    expect(created.out).not.toContain("fake-access-token");
+    expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((header) => header === "Bearer fake-access-token")).toBe(true);
     const metricCreate = (await argvOf(empty.state, "metrics-create"))[0] ?? "";
     expect(metricCreate).toMatch(new RegExp(`^logging metrics create dc_[a-z0-9_]+ --config-from-file=\\S+ --project ${PROJECT}$`));
@@ -425,8 +437,8 @@ test("OB10 the real argv shapes, through the CLI against a fake gcloud on PATH",
 
     // A project that already has everything: every item is updated, in place.
     const present = await cliFixture("present");
-    const updated = cli(present.env);
-    expect(updated.exitCode).toBe(0);
+    const updated = await cli(present.env);
+    expect(updated.code).toBe(0);
     const metricUpdate = (await argvOf(present.state, "metrics-update"))[0] ?? "";
     expect(metricUpdate).toMatch(new RegExp(`^logging metrics update dc_[a-z0-9_]+ --config-from-file=\\S+ --project ${PROJECT}$`));
     const dashboardUpdate = (await argvOf(present.state, "dashboards-update"))[0] ?? "";
@@ -435,6 +447,6 @@ test("OB10 the real argv shapes, through the CLI against a fake gcloud on PATH",
     expect(policyUpdate).toMatch(new RegExp(`^monitoring policies update projects/${PROJECT}/alertPolicies/\\d+ --policy-from-file=\\S+ --project ${PROJECT}$`));
     expect((await argvOf(present.state, "metrics-create")).length).toBe(0);
   } finally {
-    server.stop(true);
+    await server.stop(true);
   }
 });

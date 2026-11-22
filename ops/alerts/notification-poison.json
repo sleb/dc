@@ -1,0 +1,30 @@
+{
+  "displayName": "dc notification poison",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "A notification was poisoned, or a payload failed validation (LLD 0 section 9, LLD 6 section 7.3). The line names the row id; poisoned rows stop retrying and need a redrive after the fix."
+  },
+  "conditions": [
+    {
+      "displayName": "dc notification poison",
+      "conditionMatchedLog": {
+        "filter": "(jsonPayload.event=\"notify.poison\" OR jsonPayload.event=\"notify.payload_invalid\")",
+        "labelExtractors": {
+          "rowId": "EXTRACT(jsonPayload.rowId)"
+        }
+      }
+    }
+  ],
+  "alertStrategy": {
+    "notificationRateLimit": {
+      "period": "300s"
+    }
+  }
+}

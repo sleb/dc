@@ -1,0 +1,23 @@
+{
+  "displayName": "dc reminder sweep missed",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "No `reminder.sweep.done` line for 3 hours; the sweep is hourly (LLD 0 section 9, LLD 6). Check the scheduler job and `reminder.sweep.game_failed` lines before expiry."
+  },
+  "conditions": [
+    {
+      "displayName": "dc reminder sweep missed",
+      "conditionAbsent": {
+        "filter": "metric.type=\"logging.googleapis.com/user/dc_reminder_sent_total\" resource.type=\"cloud_run_revision\"",
+        "duration": "10800s"
+      }
+    }
+  ]
+}

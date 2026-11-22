@@ -1,0 +1,13 @@
+# dc_reminder_push_total (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Exact reminder pushes: distribution of `sent` on notify.row.done for a Reminder row (LLD 6 section 7.3)."
+filter: "jsonPayload.event=\"notify.row.done\" AND jsonPayload.kind=\"Reminder\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: DISTRIBUTION
+  unit: "1"
+bucketOptions:
+  linearBuckets:
+    numFiniteBuckets: 20
+    width: 1
+    offset: 0
+valueExtractor: "EXTRACT(jsonPayload.sent)"

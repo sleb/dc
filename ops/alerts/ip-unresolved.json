@@ -1,0 +1,27 @@
+{
+  "displayName": "dc ip unresolved",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "A rate-limit decision could not resolve the client IP (LLD 5 section 9, LLD 4). `TRUSTED_HOPS` is wrong for the current front end, which makes every IP bucket share one key."
+  },
+  "conditions": [
+    {
+      "displayName": "dc ip unresolved",
+      "conditionMatchedLog": {
+        "filter": "jsonPayload.event=\"ip.unresolved\""
+      }
+    }
+  ],
+  "alertStrategy": {
+    "notificationRateLimit": {
+      "period": "300s"
+    }
+  }
+}

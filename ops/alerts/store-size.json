@@ -1,0 +1,30 @@
+{
+  "displayName": "dc store size",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "A game document has crossed the size threshold (LLD 0 section 9, LLD 3). Long games are the usual cause; check the `store.size.warn` line for the game id and its size."
+  },
+  "conditions": [
+    {
+      "displayName": "dc store size",
+      "conditionMatchedLog": {
+        "filter": "jsonPayload.event=\"store.size.warn\"",
+        "labelExtractors": {
+          "gameId": "EXTRACT(jsonPayload.gameId)"
+        }
+      }
+    }
+  ],
+  "alertStrategy": {
+    "notificationRateLimit": {
+      "period": "300s"
+    }
+  }
+}

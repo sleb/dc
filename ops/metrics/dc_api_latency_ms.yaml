@@ -1,0 +1,18 @@
+# dc_api_latency_ms (LLD 0 section 9). Applied by scripts/ops-apply.ts; the name is this file's name.
+description: "Callable latency in ms, end to end in the wrapper (LLD 5 section 9)."
+filter: "jsonPayload.event=\"api.done\""
+metricDescriptor:
+  metricKind: DELTA
+  valueType: DISTRIBUTION
+  unit: ms
+  labels:
+    - key: callable
+      valueType: STRING
+bucketOptions:
+  exponentialBuckets:
+    numFiniteBuckets: 18
+    growthFactor: 2
+    scale: 5
+valueExtractor: "EXTRACT(jsonPayload.latencyMs)"
+labelExtractors:
+  callable: "EXTRACT(jsonPayload.callable)"

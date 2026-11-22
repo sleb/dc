@@ -1,0 +1,27 @@
+{
+  "displayName": "dc api detail stripped",
+  "combiner": "OR",
+  "userLabels": {
+    "managed_by": "ops-apply"
+  },
+  "notificationChannels": [
+    "__NOTIFICATION_CHANNEL__"
+  ],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "A response field was stripped before it left the wrapper (LLD 5 section 9). Something is returning a field the contract does not declare; fix the producer, not the logger."
+  },
+  "conditions": [
+    {
+      "displayName": "dc api detail stripped",
+      "conditionMatchedLog": {
+        "filter": "jsonPayload.event=\"api.detail.stripped\""
+      }
+    }
+  ],
+  "alertStrategy": {
+    "notificationRateLimit": {
+      "period": "300s"
+    }
+  }
+}
