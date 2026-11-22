@@ -8,9 +8,10 @@ export async function tmp(prefix: string): Promise<string> {
   return mkdtemp(join(tmpdir(), `dc-${prefix}-`));
 }
 
-/** A functions-like root: package.json, src/index.ts, and any extra files (path -> content). */
+/** A functions-like root (a `functions` directory inside a fresh temp dir, so `../` is private to the test): package.json, src/index.ts, and any extra files (path -> content). */
 export async function makeRoot(files: Record<string, string> = {}, pkg: unknown = GOOD_PKG): Promise<string> {
-  const root = await tmp("root");
+  const base = await tmp("root");
+  const root = join(base, "functions");
   const all: Record<string, string> = { "package.json": JSON.stringify(pkg), "src/index.ts": "export const ping = 1;\n", ...files };
   for (const [path, content] of Object.entries(all)) {
     await mkdir(join(root, path, ".."), { recursive: true });

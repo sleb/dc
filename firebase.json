@@ -1,0 +1,11 @@
+{
+  "functions": [
+    {
+      "source": "functions/dist",
+      "codebase": "default",
+      "runtime": "nodejs22",
+      "ignore": ["node_modules", "*.log", ".install-ok"],
+      "predeploy": ["bun run build:functions"]
+    }
+  ]
+}

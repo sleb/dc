@@ -10,7 +10,8 @@
   "scripts": {
     "lint": "eslint . --max-warnings 0",
     "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json",
-    "test:lint": "bun test lint-test"
+    "test:lint": "bun test lint-test",
+    "build:functions": "bun run --cwd functions build"
   },
   "devDependencies": {
     "@types/bun": "1.4.5",

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { build } from "./build";
 import { GOOD_PKG, makeNpmShim, makeRoot } from "./fixtures";
@@ -51,8 +51,9 @@ describe("dist/package.json (B1, B2, B4)", () => {
 describe("bundle (B3, B8)", () => {
   test("B3 firebase packages and subpaths stay external; workspace imports are bundled", async () => {
     const root = await makeRoot({
-      "node_modules/@dc/contracts/package.json": JSON.stringify({ name: "@dc/contracts", main: "index.ts" }),
-      "node_modules/@dc/contracts/index.ts": "export const MARK = 'contracts-were-bundled';\n",
+      // The workspace package lives outside the root and is symlinked into node_modules, as bun install does.
+      "../pkgs/contracts/package.json": JSON.stringify({ name: "@dc/contracts", main: "index.ts" }),
+      "../pkgs/contracts/index.ts": "export const MARK = 'contracts-were-bundled';\n",
       "src/index.ts": [
         "import { initializeApp } from 'firebase-admin/app';",
         "import { getAuth } from 'firebase-admin/auth';",
@@ -64,6 +65,8 @@ describe("bundle (B3, B8)", () => {
         "",
       ].join("\n"),
     });
+    await mkdir(join(root, "node_modules/@dc"), { recursive: true });
+    await symlink(join(root, "../pkgs/contracts"), join(root, "node_modules/@dc/contracts"));
     await run(root);
     const bundle = await read(join(root, "dist/index.cjs"));
     for (const spec of ["firebase-admin/app", "firebase-admin/auth", "firebase-admin", "firebase-functions/v2/https", "firebase-functions"]) {
