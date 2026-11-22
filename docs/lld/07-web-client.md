@@ -27,12 +27,13 @@ Status: draft v0.1. Companion to [gameplay.md](../gameplay.md), [high-level-desi
 
 ```
 apps/web/
-  index.html  vite.config.ts  tsconfig.json  .env.staging  .env.production  .env.emulator   # Vite .env.<mode> names, LLD 0
+  index.html  vite.config.ts  tsconfig.json  tsconfig.test.json  tsconfig.node.json  .env.staging  .env.emulator  .env.production   # Vite .env.<mode> names, LLD 0; .env.production arrives with M8 (no prod project yet); tsconfig.node.json covers vite.config.ts
   public/icons/  (192, 512, maskable, badge-72, apple-touch-icon)
   src/
-    main.tsx                 # boot: capture #k, init App Check, render (section 2.4)
-    app/                     # App.tsx, routes.tsx, ErrorBoundary.tsx, UpdateBanner.tsx, BlockedScreen.tsx
-    firebase/                # config.ts (reads env), apps.ts (default + game apps), appcheck.ts, persistence.ts
+    main.tsx                 # boot: capture #k, init App Check, render (section 2.4). Today (#14): config, default app, App Check, render <App/>; #k and routing come with 5.1
+    vite-env.d.ts            # /// <reference types="vite/client" />, so tsconfig.json keeps `types: []`
+    app/                     # App.tsx (a placeholder heading today), routes.tsx, ErrorBoundary.tsx, UpdateBanner.tsx, BlockedScreen.tsx
+    firebase/                # config.ts (readConfig, built), apps.ts (default + game apps), appcheck.ts (initAppCheck, built), persistence.ts
     session/                 # resolve.ts, redeem.ts, registry.ts (remembered games), sessionStore.ts
     game/                    # GameSession.ts (listeners, poll), viewReducer.ts, rounds.ts, screenFor.ts, derived.ts
     commands/                # client.ts (typed call()), intent.ts, retry.ts, errorCopy.ts
@@ -44,8 +45,9 @@ apps/web/
     i18n/                    # en.ts, t.ts, prompts.ts (writing examples)
     lib/                     # idb.ts, storage.ts (try/catch wrappers), uuid.ts, platform.ts
     styles/index.css         # Tailwind @theme tokens (section 9.1)
-    test/                    # setup.ts (happy-dom), fixtures.ts, fakes
 ```
+
+Tests sit beside the code (`*.test.ts(x)` in `src`). The happy-dom preload and shared fixtures and fakes live in `apps/web/test/` (`setup.ts` exists from #13), outside `src`, so `tsconfig.json` never compiles them.
 
 Imports: `@dc/contracts` only among workspace packages (LLD 0 P5 lint). `console.*` is banned in `src` by lint so view content cannot reach a console (WC5).
 
@@ -114,7 +116,7 @@ export function gameApp(gameId: GameId): FirebaseApp {
 }
 ```
 
-- **App Check** (`firebase/appcheck.ts`): `initializeAppCheck(app, { provider: new ReCaptchaEnterpriseProvider(SITE_KEY), isTokenAutoRefreshEnabled: true })` on the default app and on every named app. Preview and staging builds set `self.FIREBASE_APPCHECK_DEBUG_TOKEN = VITE_APPCHECK_DEBUG_TOKEN` first (LLD 0 section 7); `VITE_APP_ENV=emulator` skips App Check entirely (the emulators do not enforce it, LLD 0 section 6). Production builds never contain a debug token.
+- **App Check** (`firebase/appcheck.ts`, built in #14): `initAppCheck(app, { appEnv, recaptchaSiteKey, debugToken }, deps?)` calls `initializeAppCheck(app, { provider: new ReCaptchaEnterpriseProvider(SITE_KEY), isTokenAutoRefreshEnabled: true })`; call it on the default app and on every named app. When `appEnv` is `staging` and `debugToken` is non-empty (`VITE_APPCHECK_DEBUG_TOKEN`), it first sets `globalThis.FIREBASE_APPCHECK_DEBUG_TOKEN` (LLD 0 section 7). `VITE_APP_ENV=emulator` skips App Check entirely and returns `undefined` (the emulators do not enforce it, LLD 0 section 6). Production never sets a debug token, and `vite.config.ts` fails any `vite build` whose mode is not `staging` (production or emulator) while `VITE_APPCHECK_DEBUG_TOKEN` is non-empty in its environment, so the token cannot reach a production or emulator bundle. `deps` (the global target, `initializeAppCheck`, the provider factory) is injectable, which is how the unit tests observe the order and the gating. `firebase/config.ts` `readConfig(import.meta.env)` validates the `VITE_*` keys and names the first missing one; the site key is required outside the emulator.
 - **Failure handling.** Firestore enforces App Check, so a failed token shows up as `permission-denied` on listeners and `unauthenticated` on callables, indistinguishable from a rules denial. On any such error the client calls `getToken(appCheck)` once as a probe: if it throws, show `BlockedScreen("appcheck")` ("We couldn't verify this browser. Turn off content blockers for this site and retry.") with a Retry button; if it succeeds, the denial is real and handled as a revoked seat or unavailable spectator doc (section 3.3).
 - A named app is kept for the lifetime of its route plus 30 s, then `deleteApp` (auth state persists in IndexedDB; re-entering recreates the app).
 
@@ -683,6 +685,8 @@ Gates and failures: `CLIENT_OUTDATED` "Update required" (reload); `unauthenticat
 | Service worker | 40 KB | same |
 | CSS | 20 KB | same |
 
+`check-web-size.ts` (built in #14) takes a KB as 1000 bytes and measures level-9 gzip. Entry is `index.html` plus every script, modulepreload and stylesheet it references; a lazy chunk is any other `.js` file; the service worker is `sw.js` (skipped while none exists); CSS is checked per file; a missing `dist/index.html` or a referenced file that is absent is a failure. Until the `/g/:id` route exists the entry is the placeholder shell, so the 300 KB budget is re-proven in 5.1 and 5.8.
+
 Lazy chunks: `messaging` (loaded when notifications are enabled), Host console, History, Settings editors, writing prompts, sign-in (email-link helpers). Firebase is imported by function only (`firebase/app`, `auth`, `firestore`, `functions`, `app-check`, `messaging`); no Analytics, Storage, Database or compat packages (lint bans `firebase/compat`). Contracts are imported through the package index so zod tree-shakes to the schemas used. Images are SVG or small PNG; fonts are the system stack (no web font blocking render).
 
 ### 10.2 Firestore persistence decision
@@ -807,9 +811,9 @@ Multiple browser contexts play one game against the Node bundle with `PUSH_SENDE
 7. **Functions web SDK reports a failed fetch as `internal`**, so LLD 5's "one retry on `internal`" would give up quickly on a flaky connection. The client checks `navigator.onLine` and treats an offline `internal` as transient (5.2). To confirm with an emulator test that blocks the network; if `unavailable` is reported instead, the special case goes away.
 8. **`CONTENT_REJECTED` on `saveDraft` does not identify the card.** The client flags cards changed since the last accepted save (6.3). A cleaner contract would be an optional `rejection.index` (requires an LLD 5 schema change and an Engine detail); not requested for v1.
 9. **Host who left their seat cannot sit again (LLD 4 oq 7).** No "sit down" action is offered; such a host sees the Board plus console. A host `takeSeat` command would change that.
-10. **LLD 0 test and CI wiring. Partly resolved (issue #13).** Done: `test:web` exists and runs under happy-dom (via `@happy-dom/global-registrator`, preloaded from `apps/web/test/setup.ts`), the root `test` does not include `apps/web/src`, and a leak-guard test proves the DOM is absent there; the CI step for `test:web` is #16. Still open (#14 onward): the other web devDependencies (`@testing-library/react`, `@testing-library/user-event`, `@axe-core/playwright`, `wouter`, `@tailwindcss/vite`, `workbox-*` via `vite-plugin-pwa`); Playwright installs only chromium in LLD 0 (the Pixel profile is Chromium, but WebKit and Firefox need `playwright install` for the nightly job); `scripts/check-web-size.ts` is new.
+10. **LLD 0 test and CI wiring. Partly resolved (issue #13).** Done: `test:web` exists and runs under happy-dom (via `@happy-dom/global-registrator`, preloaded from `apps/web/test/setup.ts`), the root `test` does not include `apps/web/src`, and a leak-guard test proves the DOM is absent there; the CI step for `test:web` is #16. **Further resolved (issue #14):** `vite`, `@vitejs/plugin-react`, `tailwindcss`, `@tailwindcss/vite`, `react`, `react-dom`, `firebase`, `@testing-library/react` and `@testing-library/dom` are added (exact-pinned) with a minimal DOM render test, and `scripts/check-web-size.ts` exists. Still open: `wouter` (5.1, with routes), `vite-plugin-pwa` with its `workbox-*` (5.8, with the service worker), `@testing-library/user-event` (with the first interaction test), `@playwright/test` and `@axe-core/playwright` (5.1, #45; the real `test:e2e` and the e2e CI job come with them, so `test:e2e` stays a placeholder until then). Playwright installs only chromium in LLD 0 (the Pixel profile is Chromium, but WebKit and Firefox need `playwright install` for the nightly job).
 11. **Fixture export.** `packages/contracts/fixtures/views/*.json` generated from the Projector goldens is a new requirement on LLD 2/5 (contracts cannot import the engine and the web cannot either).
-12. **Hosting headers.** LLD 4 asks for `Referrer-Policy: no-referrer`; LLD 0's `firebase.json` does not have it yet. A CSP (reCAPTCHA Enterprise, Firebase endpoints, `wss`/long-poll, inline style from Tailwind) is not specified anywhere; propose Report-Only first. `/__/auth/*` must stay outside the SPA rewrite and the worker's navigation route (denylist `^/__/`).
+12. **Hosting headers. Partly resolved (issue #14).** Done: `firebase.json` serves `Referrer-Policy: no-referrer` on `**` (and `index.html` carries the same as a meta tag), plus the no-cache and immutable cache headers; asserted under the Hosting emulator by `bun run test:hosting`. `/__/` needs no exclusion from the SPA rewrite: on the Hosting emulator a `**` rewrite does not swallow `/__/firebase/init.json` (Firebase documents `/__/*` as a reserved namespace that is served before rewrites, <https://firebase.google.com/docs/hosting/reserved-urls>); live Hosting is confirmed in #17. The worker's navigation route still needs its denylist `^/__/` (section 8.3), because the worker sits in front of Hosting. Still open: a CSP (reCAPTCHA Enterprise, Firebase endpoints, `wss`/long-poll, inline style from Tailwind) is not specified anywhere; propose Report-Only first, once there is something to measure (#17, M5).
 13. **Firestore cache clearing on sign-out** is a client duty LLD 4 does not mention ("Leave this device"); added in 3.3 and WC15.
 14. **Idempotency key persistence.** LLD 5 section 6.3 says memory plus `sessionStorage`; kept. `sessionStorage` does not survive an installed-app relaunch, so an unresolved intent after a kill is simply re-done with a new key; the ledger and `expectedVersion` make that safe, and WC4 prevents a false "submitted".
 15. **`lobbyInfo` is optional for the join form (LLD 5 section 7.3).** The client submits code and name together to `joinGame`; `lobbyInfo` is used only for the invite screen's "is it still joinable" hint.
@@ -825,7 +829,7 @@ Multiple browser contexts play one game against the Node bundle with `PUSH_SENDE
 
 | LLD | This LLD provides | This LLD expects |
 |---|---|---|
-| 0 Platform | `apps/web` layout, Vite modes and env consumption, `vite-plugin-pwa` config, `scripts/check-web-size.ts`, Playwright specs in `e2e/`, `test:web` invocation, preview-channel behavior (staging debug App Check token) | Hosting headers per conflict 12 (`Referrer-Policy`, no-cache for `/sw.js`), SPA rewrite excluding `/__/`; CI step for web tests and optional WebKit/Firefox nightly; App Check debug token plumbing; `web` imports only `@dc/contracts` (P5) |
+| 0 Platform | `apps/web` layout, Vite modes and env consumption, `vite-plugin-pwa` config, `scripts/check-web-size.ts`, Playwright specs in `e2e/`, `test:web` invocation, preview-channel behavior (staging debug App Check token) | Hosting headers per conflict 12 (`Referrer-Policy`, no-cache for `/sw.js`; built in #14), the `**` SPA rewrite (`/__/` is reserved and wins, conflict 12); CI step for web tests and optional WebKit/Firefox nightly; App Check debug token plumbing; `web` imports only `@dc/contracts` (P5) |
 | 1 Engine | Nothing (never imported). Renders `Rejection` codes and `detail` strings as copy; sends the 15 client commands unchanged | `ErrorCode`/`detail` stay inside `DETAIL_BY_CODE`; `TEXT_LIMITS` exported via contracts (conflict 5, resolved); `saveDraft` rejection semantics (conflict 8) |
 | 2 Projector | Consumption rules: own `views/{uid}` or `views/spectator`, `rounds` by `round`, `(version, viewsRev)` and `draftSeq` ordering, `resolved` handshake, `DepartedView` and spectator fallback, default branches for enums, cache and anonymity handling | `GameView` fields exactly as LLD 2 section 4.2; `viewsRev` in the `ViewDoc` envelope (K-F); `you.turn` and `cardsLeft` as the only derived UI inputs; golden fixtures exported (conflict 11); `reveal` order stable (PJ6) |
 | 3 Store | Single-document listeners only, no `list` on views; treats a missing own view doc as deleted; `permission-denied` on the spectator doc as unavailable; serialized `saveDraft`; `deleteGame` `NOT_FOUND` as success | Rules as in LLD 3 section 3; round-doc `redacted` rewrites visible to a collection listener; draft region and `draftSeq` as in LLD 2 section 8.4 |

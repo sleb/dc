@@ -6,5 +6,5 @@ useDefault = true
 
 [[allowlists]]
 description = "Public client config (Firebase web config, reCAPTCHA site key)"
-# Only files that exist. Add apps/web/.env.production (M8) and .env.emulator when they are created.
+# Only files that exist. Add apps/web/.env.production (M8) when it is created. apps/web/.env.emulator holds demo values and needs no entry.
 paths = ['''^apps/web/\.env\.staging$''']
