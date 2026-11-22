@@ -90,6 +90,14 @@ describe("L4 direction rule (P5, section 3)", () => {
   }
 });
 
+describe("L4b test files may use bun:test in every package (P7)", () => {
+  for (const file of ["packages/contracts/src/x.test.ts", "apps/web/src/x.test.ts"]) {
+    test(`allows bun:test in ${file}`, () => quiet(file, imp("bun:test")));
+  }
+  test("still reports bun:test in a shipped contracts file", () => reported(CONTRACTS, imp("bun:test"), "no-restricted-imports"));
+  test("still reports bun:test in a shipped web file", () => reported(WEB, imp("bun:test"), "no-restricted-imports"));
+});
+
 describe("L5 functions base rules (P7, P12)", () => {
   const API = "functions/src/api/handler.ts";
   test("reports onCall import", () => reported(API, `import { onCall } from "firebase-functions/v2/https";\nexport default onCall;\n`, "no-restricted-imports", /defineCallable/));

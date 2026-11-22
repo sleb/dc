@@ -1,7 +1,15 @@
 {
   "name": "deepcuts",
   "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "functions"
+  ],
   "scripts": {
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json",
     "test:lint": "bun test lint-test"
   },
   "devDependencies": {

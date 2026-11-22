@@ -1,0 +1,3 @@
+[install]
+# Dependencies are exact-pinned (LLD 0 section 3); `bun add` writes exact versions.
+exact = true

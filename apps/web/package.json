@@ -1,0 +1,11 @@
+{
+  "name": "@dc/web",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@dc/contracts": "workspace:*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json"
+  }
+}

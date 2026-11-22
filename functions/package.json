@@ -1,0 +1,17 @@
+{
+  "name": "@dc/functions",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "firebase-admin": "14.5.1",
+    "firebase-functions": "7.4.0"
+  },
+  "devDependencies": {
+    "@dc/contracts": "workspace:*",
+    "@dc/engine": "workspace:*",
+    "@types/node": "22.20.5"
+  }
+}

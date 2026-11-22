@@ -13,7 +13,7 @@ export const configPresent = existsSync(CONFIG);
 // Type-aware rules need a real file in a tsconfig, which virtual paths are not. The policy tests
 // (rules that only read syntax) switch them off; the type-aware tests use `lintTyped` instead.
 const SYNTAX_ONLY = {
-  languageOptions: { parserOptions: { projectService: false } },
+  languageOptions: { parserOptions: { project: null, projectService: false } },
   rules: {
     "@typescript-eslint/no-floating-promises": "off",
     "@typescript-eslint/no-misused-promises": "off",
