@@ -258,7 +258,9 @@ describe("M4 an accepted markReminded advances reminderDueAt and nothing else (7
 
   test("settle still runs, and keeps the advance: a stale waitingOn is recomputed in the same command while reminderDueAt stays now + 24 h", () => {
     const g = { ...writing4(), waitingOn: [pid(0)] };
-    const v = accepted(g, mark(g), system, { now: due });
+    const r = run(g, mark(g), system, { now: due }); // not through `accepted`: the hand-built waitingOn is inconsistent on purpose, which checkWaiting would (rightly) not take as "only reminderDueAt changed"
+    if (!r.ok) throw new Error("rejected");
+    const v = r.value;
     expect(v.state.waitingOn).toEqual([pid(0), pid(1), pid(2), pid(3)]);
     expect(v.state).toMatchObject({ reminderDueAt: due + DAY, waitingSince: T0, episode: "writing", episodeGen: 1, version: g.version + 1 });
   });

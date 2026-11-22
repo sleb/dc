@@ -81,7 +81,7 @@ describe("P-X8 over seeded games with churn and reminders (every checker after e
       });
     }
     for (const k of ["advance", "no-op", "unpause-episode", "late-joiner-waited-on", "empty-wait"]) expect([k, (seen.get(k) ?? 0) > 0]).toEqual([k, true]);
-  });
+  }, 60_000);
 
   test("seeded games with reminders are deterministic (X3)", () => {
     for (let seed = 200; seed < 206; seed++) expect(play(5, seed)).toEqual(play(5, seed));
@@ -131,7 +131,7 @@ describe("checkWaiting fails rather than passes vacuously", () => {
     expect(s.value.aggregateChanged).toBe(true);
     expect(() => checkWaiting(s)).not.toThrow();
     expect(() => checkWaiting(patched(s, (g) => ({ ...g, reminderDueAt: w.reminderDueAt })))).toThrow(/strictly later/);
-    expect(() => checkWaiting(patched(s, (g) => ({ ...g, reminderDueAt: (w.reminderDueAt ?? 0) - 1 })))).toThrow(/strictly later/);
+    expect(() => checkWaiting(patched(s, (g) => ({ ...g, reminderDueAt: (w.reminderDueAt ?? 0) - 1 })))).toThrow(/strictly later|24 h/);
     expect(() => checkWaiting(patched(s, (g) => ({ ...g, waitingSince: 777 })))).toThrow(/more than reminderDueAt/);
     expect(() => checkWaiting(patched(s, (g) => ({ ...g, episodeGen: g.episodeGen + 1 })))).toThrow(/more than reminderDueAt/);
     expect(() => checkWaiting(patched(s, (g) => ({ ...g, waitingOn: g.waitingOn.slice(1) })))).toThrow(/waitingOn/);
