@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [
+      "node",
+      "bun"
+    ]
+  },
+  "include": [
+    "src/**/*.test.ts",
+    "test-integration"
+  ],
+  "exclude": []
+}

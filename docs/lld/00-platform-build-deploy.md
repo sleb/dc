@@ -85,18 +85,19 @@ dc/
   .firebaserc
   .github/workflows/ci.yml
   bun.lock
-  bunfig.toml
+  bunfig.toml                  # exact = true: `bun add` pins exact versions
   eslint.config.js
   firebase.json
   firestore.indexes.json
   firestore.rules
   package.json
   tsconfig.base.json
+  lint-test/                   # policy tests: real eslint.config.js and tsc against snippets (`bun run test:lint`); own tsconfig.json
   apps/web/                    # @dc/web: React, Vite, PWA, Tailwind
     .env.staging  .env.production  .env.emulator   # public config, committed; Vite's .env.<mode> names, read for --mode <mode>
-    tsconfig.json  vite.config.ts  src/
+    package.json  tsconfig.json  tsconfig.test.json  vite.config.ts  src/
   functions/                   # @dc/functions
-    package.json  tsconfig.json
+    package.json  tsconfig.json  tsconfig.test.json
     src/index.ts               # exports every deployed function
     src/api/callable.ts        # defineCallable (alias callable): the only module allowed to import onCall (P12)
     src/store/  src/notify/    # lint-isolated trees (ST2, T3; section 5)
@@ -107,8 +108,8 @@ dc/
     .env.deepcuts-staging  .env.deepcuts-prod   # non-secret function params, committed; copied into dist by build.ts
     dist/                      # generated, gitignored: index.cjs, package.json, package-lock.json, node_modules, .env.* copies
   packages/
-    engine/                    # @dc/engine: pure core, Projector, Moderation
-    contracts/                 # @dc/contracts: zod schemas and types
+    engine/                    # @dc/engine: pure core, Projector, Moderation (package.json, tsconfig.json, tsconfig.test.json, src/)
+    contracts/                 # @dc/contracts: zod schemas and types (same shape)
   rules-test/                  # @firebase/rules-unit-testing suites
   e2e/                         # Playwright
   ops/                         # metrics, alert policies, dashboard JSON (section 9)
@@ -118,16 +119,18 @@ dc/
 
 Dependency direction, enforced by lint (P5): `contracts` imports no workspace package; `engine` imports only `contracts`; `functions` imports `engine` and `contracts`; `web` imports only `contracts` (the client holds no authority, HLD C1, so it never imports the engine; anything it needs to display comes in the `GameView`).
 
-Root `package.json`:
+Root `package.json` (the scripts marked "this step" exist now; the rest arrive with the step that owns them: `test*` and the `build:*` scripts with #13, #11 and #14, `dev` with #15):
 
-```json
+```jsonc
 {
   "name": "deepcuts",
   "private": true,
+  "type": "module",
   "workspaces": ["apps/*", "packages/*", "functions"],
   "scripts": {
-    "lint": "eslint . --max-warnings 0",
-    "typecheck": "bun run --filter '*' typecheck",
+    "lint": "eslint . --max-warnings 0",                                   // this step
+    "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json",  // this step
+    "test:lint": "bun test lint-test",                                    // this step; #13 folds it into `test`
     "test": "bun test packages functions/src",
     "test:web": "bun test --preload apps/web/test/setup.ts apps/web/src",
     "test:rules": "firebase emulators:exec --only firestore --project demo-deepcuts 'bun test rules-test'",
@@ -136,16 +139,11 @@ Root `package.json`:
     "build:functions": "bun run --cwd functions build",
     "build:web": "bun run --cwd apps/web build",
     "dev": "firebase emulators:start --project demo-deepcuts"
-  },
-  "devDependencies": {
-    "eslint": "9.x", "typescript-eslint": "8.x", "typescript": "5.x",
-    "firebase-tools": "14.x", "@firebase/rules-unit-testing": "4.x", "@playwright/test": "1.x",
-    "happy-dom": "x", "@testing-library/react": "x", "@testing-library/user-event": "x", "@axe-core/playwright": "x"
   }
 }
 ```
 
-Versions in the table are major lines for readability; the real file pins exact versions, and `bun.lock` is committed. The web workspace's own devDependencies (`wouter`, `@tailwindcss/vite`, `vite-plugin-pwa` with its `workbox-*`) are declared in `apps/web/package.json` per LLD 7. Test isolation: `happy-dom`'s global registration (the `--preload`) must not leak into engine and functions tests, so `test` excludes `apps/web/src` and `test:web` runs web tests in a separate Bun process (LLD 7 conflict 10).
+Dev dependencies are the latest stable at the time each step adds them, exact-pinned in `package.json` and `bun.lock` (`bunfig.toml` sets `exact = true`); this document carries no version numbers. This step adds `eslint`, `typescript-eslint`, `typescript`, `@types/bun` and `@types/node` (the Node 22 line, matching the functions runtime). Later steps add `firebase-tools`, `@firebase/rules-unit-testing`, `@playwright/test`, `happy-dom`, `@testing-library/*` and `@axe-core/playwright`. `typescript` stays on the newest release that typescript-eslint supports: TypeScript 7 is the native compiler and has no JavaScript API for typescript-eslint, so the repo stays on the latest 6.x until typescript-eslint supports 7. The web workspace's own devDependencies (`wouter`, `@tailwindcss/vite`, `vite-plugin-pwa` with its `workbox-*`) are declared in `apps/web/package.json` per LLD 7. Test isolation: `happy-dom`'s global registration (the `--preload`) must not leak into engine and functions tests, so `test` excludes `apps/web/src` and `test:web` runs web tests in a separate Bun process (LLD 7 conflict 10).
 
 Each workspace `package.json` uses `"name": "@dc/<dir>"`, internal deps as `"workspace:*"`, and (for `engine` and `contracts`) `"exports": { ".": "./src/index.ts" }`. Packages are consumed as TypeScript source and are never built on their own; Vite and the functions bundler compile them in place.
 
@@ -155,13 +153,13 @@ Each workspace `package.json` uses `"name": "@dc/<dir>"`, internal deps as `"wor
 {
   "name": "@dc/functions",
   "private": true,
-  "scripts": { "build": "bun scripts/build.ts", "typecheck": "tsc --noEmit -p tsconfig.json" },
-  "dependencies": { "firebase-admin": "13.0.0", "firebase-functions": "6.2.0" },
-  "devDependencies": { "@dc/engine": "workspace:*", "@dc/contracts": "workspace:*", "@types/node": "22.10.0" }
+  "scripts": { "build": "bun scripts/build.ts", "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json" },
+  "dependencies": { "firebase-admin": "<pinned>", "firebase-functions": "<pinned>" },
+  "devDependencies": { "@dc/engine": "workspace:*", "@dc/contracts": "workspace:*", "@types/node": "<pinned, 22 line>" }
 }
 ```
 
-`engine` and `contracts` are devDependencies on purpose: they are bundled, not installed in the cloud. `zod` is a dependency of `contracts` and is bundled too.
+`build` arrives with #11 (this step has only `typecheck`). `firebase-functions` stays on the latest stable until decision issue #7 says otherwise. `engine` and `contracts` are devDependencies on purpose: they are bundled, not installed in the cloud. `zod` is a dependency of `contracts` and is bundled too.
 
 ## 4. Functions bundling
 
@@ -281,56 +279,84 @@ The Functions emulator reads `source` from `firebase.json`, so it runs the same 
 **ESLint** (flat config, typescript-eslint). Chosen over Biome because per-path `no-restricted-imports`, `no-restricted-globals` and `no-restricted-syntax` overrides are mature and the engine rules need all three.
 
 ```js
-// eslint.config.js (abridged)
+// eslint.config.js (abridged: the shipped file also lists every test tsconfig under parserOptions.project)
 const NODE_IO = ["node:*", "fs", "fs/promises", "path", "os", "child_process", "net", "http", "https", "crypto", "stream", "worker_threads"];
 const FIREBASE = ["firebase", "firebase/*", "firebase-admin", "firebase-admin/*", "firebase-functions", "firebase-functions/*", "@firebase/*", "@google-cloud/*"];
 const BUN = ["bun", "bun:*"];
-const CLOCK_AND_ENTROPY = [
-  { selector: "CallExpression[callee.object.name='Date'][callee.property.name='now']", message: "No clock in engine; use ctx.now." },
+// Member selectors (not call selectors) so `const f = Date.now`, `Math["random"]()` and `Date()` are caught too.
+const CLOCK = [
+  { selector: "MemberExpression[object.name='Date'][property.name='now']", message: "No clock in engine; use ctx.now." },
   { selector: "NewExpression[callee.name='Date'][arguments.length=0]", message: "No clock in engine; use ctx.now." },
-  { selector: "CallExpression[callee.object.name='Math'][callee.property.name='random']", message: "Use the injected Rng." },
+  { selector: "CallExpression[callee.name='Date']", message: "No clock in engine; use ctx.now." },
+];
+const RANDOM = { selector: "MemberExpression[object.name='Math'][property.value='random'], MemberExpression[object.name='Math'][property.name='random']", message: "Use the injected Rng." };
+const CLOCK_AND_ENTROPY = [
+  ...CLOCK,
+  RANDOM,
   { selector: "CallExpression[callee.object.name='performance']", message: "No clock in engine." },
 ];
 // Base restrictions for all of functions/src. A later flat-config block that sets the same rule key
 // replaces the earlier options instead of merging them, so every narrower functions/src block below
 // spreads these in rather than restating (or dropping) them.
-const FN_IMPORT_PATTERNS = [...BUN];
+const FN_IMPORT_PATTERNS = [...BUN, "@dc/web"];
 const FN_IMPORT_PATHS = [{ name: "firebase-functions/v2/https", importNames: ["onCall", "onRequest"], message: "Use defineCallable() from api/callable." }];
 const FN_GLOBALS = ["Bun"];
+const TESTS = ["**/*.test.ts", "**/*.test.tsx"];
 
 export default [
-  { files: ["packages/engine/src/**/*.ts"], ignores: ["**/*.test.ts"], rules: {
+  { ignores: ["**/dist/**", "**/node_modules/**"] },
+  // Every TypeScript file: type-aware rules (explicit `project` list, because projectService only finds the nearest tsconfig.json and would reject *.test.ts).
+  { files: ["**/*.ts", "**/*.tsx"], /* parser, parserOptions.project, reportUnusedDisableDirectives: "warn" */ rules: {
+      "@typescript-eslint/no-floating-promises": "error",
+      "@typescript-eslint/no-misused-promises": "error",
+      "@typescript-eslint/consistent-type-imports": "error" } },
+
+  { files: ["packages/engine/src/**/*.ts"], ignores: TESTS, rules: {
       "no-restricted-imports": ["error", { patterns: [...FIREBASE, ...NODE_IO, ...BUN, "@dc/functions", "@dc/web"] }],
       "no-restricted-globals": ["error", "process", "Buffer", "fetch", "setTimeout", "setInterval", "performance", "crypto", "Bun", "window", "document"],
       "no-restricted-syntax": ["error", ...CLOCK_AND_ENTROPY] } },
-  { files: ["packages/contracts/src/**/*.ts"], rules: {
+  { files: ["packages/contracts/src/**/*.ts"], ignores: TESTS, rules: {
       "no-restricted-imports": ["error", { patterns: [...FIREBASE, ...NODE_IO, ...BUN, "@dc/*"] }] } },
-  { files: ["apps/web/src/**/*.{ts,tsx}"], rules: {
-      "no-restricted-imports": ["error", { patterns: [...BUN, "firebase-admin", "firebase-admin/*", "@dc/engine", "@dc/functions"] }] } },
-  { files: ["functions/src/**/*.ts"], ignores: ["functions/src/api/callable.ts", "**/*.test.ts"], rules: {
+  { files: ["apps/web/src/**/*.{ts,tsx}"], ignores: TESTS, rules: {
+      "no-restricted-imports": ["error", { patterns: [...BUN, "firebase-admin", "firebase-admin/*", "@dc/engine", "@dc/engine/*", "@dc/functions"] }] } },
+
+  { files: ["functions/src/**/*.ts"], ignores: ["functions/src/api/callable.ts", ...TESTS], rules: {
       "no-restricted-imports": ["error", { patterns: FN_IMPORT_PATTERNS, paths: FN_IMPORT_PATHS }],
       "no-restricted-globals": ["error", ...FN_GLOBALS] } },
+  // P12: callable.ts is the one module that may import onCall/onRequest. It is still shipped code, so P7 applies.
+  { files: ["functions/src/api/callable.ts"], rules: {
+      "no-restricted-imports": ["error", { patterns: FN_IMPORT_PATTERNS }],
+      "no-restricted-globals": ["error", ...FN_GLOBALS] } },
   // ST2 (LLD 3): the transaction callback is re-executable, so the Store has no side-effect or entropy sources.
-  { files: ["functions/src/store/**/*.ts"], ignores: ["**/*.test.ts"], rules: {
-      "no-restricted-imports": ["error", { patterns: [...FN_IMPORT_PATTERNS, "firebase-admin/auth", "firebase-admin/messaging", "**/notify/*", "**/identity/*"], paths: FN_IMPORT_PATHS }],
+  { files: ["functions/src/store/**/*.ts"], ignores: TESTS, rules: {
+      "no-restricted-imports": ["error", { patterns: [...FN_IMPORT_PATTERNS, "firebase-admin/auth", "firebase-admin/messaging", "**/notify", "**/notify/*", "**/identity", "**/identity/*"], paths: FN_IMPORT_PATHS }],
       "no-restricted-globals": ["error", ...FN_GLOBALS, "fetch"],
-      "no-restricted-syntax": ["error", { selector: "CallExpression[callee.object.name='Math'][callee.property.name='random']", message: "Use deps.newSeed()." }] } },
+      "no-restricted-syntax": ["error", { ...RANDOM, message: "Use deps.newSeed()." }] } },
   // T3 (LLD 6): time enters notifications only through the injected clock.
-  { files: ["functions/src/notify/**/*.ts"], ignores: ["**/*.test.ts"], rules: {
-      "no-restricted-syntax": ["error", ...CLOCK_AND_ENTROPY.slice(0, 2)] } },
-  // T1 (LLD 6): the sweep holds no game logic; it may import only listWaitingOn and runCommand from the Store.
+  { files: ["functions/src/notify/**/*.ts"], ignores: TESTS, rules: {
+      "no-restricted-syntax": ["error", ...CLOCK] } },
+  // T1 (LLD 6): the sweep holds no game logic; from the Store it may import only listWaitingOn and runCommand.
   // (The notify block above sets only no-restricted-syntax, which the base block does not, so nothing is lost there.)
+  // A `patterns` array is all strings or all objects, so the base strings go in as one group. The second store group
+  // allows only the two names; the first bans every other module under store/ outright (so ../store/tx cannot supply them either).
   { files: ["functions/src/notify/sweep.ts"], rules: {
-      "no-restricted-imports": ["error", { patterns: [...FN_IMPORT_PATTERNS, "@dc/engine", "@dc/engine/*", "**/store/*", "!**/store/index"], paths: FN_IMPORT_PATHS }] } },
-  // No block for *.test.ts, functions/test-integration and rules-test: the BUN ban above is not applied to them, so bun:test is allowed there and nowhere else.
+      "no-restricted-imports": ["error", { patterns: [
+        { group: FN_IMPORT_PATTERNS },
+        { group: ["@dc/engine", "@dc/engine/*"] },
+        { group: ["**/store/*", "!**/store/index", "!**/store/index.*"], message: "The sweep may import only listWaitingOn and runCommand, from the store index." },
+        { group: ["**/store", "**/store/index", "**/store/index.*"], allowImportNames: ["listWaitingOn", "runCommand"], message: "The sweep may import only listWaitingOn and runCommand from the store." },
+      ], paths: FN_IMPORT_PATHS }] } },
+  // No block for *.test.ts, functions/test-integration and rules-test: the BUN ban is not applied to them, so bun:test is allowed there and nowhere else.
 ];
 ```
 
 - P5. `bun run lint` fails on: any `firebase*`, `@firebase/*`, `node:*`/Node I/O module, `bun`, `bun:*` import, or the globals `process`, `Buffer`, `fetch`, `setTimeout`, `performance`, `crypto`, `Bun` in `packages/engine/src`; any `Date.now()`, `new Date()`, `Math.random()` there; any workspace import that violates the direction rule of section 3. `packages/engine` additionally has a test that parses its `package.json` and asserts `dependencies` is a subset of `{"@dc/contracts"}` plus an allowlisted pure-library list (`zod`).
 - P12. `onCall` and `onRequest` are imported only in `functions/src/api/callable.ts`, whose `defineCallable` wrapper (`callable` is a deprecated alias exported from the same file) sets `region`, `serviceAccount`, `enforceAppCheck: true`, `consumeAppCheckToken: false` and the per-callable `runtime` options, and implements the LLD 5 section 4.2 pipeline from its spec options: `allow` (explicit principal kinds, no default), `limits`, `gameIdOf` (seat liveness check), strict `output` parsing, and the `sv` contract-version stamp, with typed structured logging and no body logging. Every callable therefore enforces App Check and never forgets to (A1, LLD 5 API1).
-- P21. `functions/src/store/**` imports no Auth, FCM, identity or notify module and uses neither `fetch` nor `Math.random` (ST2); `functions/src/notify/**` uses no `Date.now()` or `new Date()` (T3); `functions/src/notify/sweep.ts` imports neither the Engine nor any Store module beyond `listWaitingOn` and `runCommand` (T1). Enforced by the lint blocks above; ST2 and T3 also keep their own tests in LLDs 3 and 6. Because flat config replaces (does not merge) a rule key set again by a later matching block, the Store and sweep blocks re-include the base `functions/src` options (`FN_IMPORT_PATTERNS`, `FN_IMPORT_PATHS`, `FN_GLOBALS`), so the `onCall`/`onRequest` import ban (P12) and the Bun ban (P7) still apply inside `functions/src/store` and `functions/src/notify/sweep.ts`. A lint fixture test asserts that an `onCall` import and a `Bun` global in a Store file and in `sweep.ts` are both reported.
-- P7 (lint half). `Bun`, `bun`, `bun:*` appear in no shipped code (`packages/*/src`, `functions/src`, `apps/web/src`). `bun:test` imports are allowed only in `*.test.ts`, `functions/test-integration`, `rules-test`. Build and ops scripts (`functions/scripts`, `scripts`) may use `Bun.*`.
-- Warnings are errors (`--max-warnings 0`). Type-aware rules enabled: `no-floating-promises`, `no-misused-promises`, `consistent-type-imports`.
+- P21. `functions/src/store/**` imports no Auth, FCM, identity or notify module and uses neither `fetch` nor `Math.random` (ST2); `functions/src/notify/**` uses no `Date.now()` or `new Date()` (T3); `functions/src/notify/sweep.ts` imports neither the Engine nor any Store module, except the names `listWaitingOn` and `runCommand` from the store index (T1; enforced by name with `allowImportNames`, and probed against `../store`, `../store/index.js` and `@dc/engine/sub`). Enforced by the lint blocks above; ST2 and T3 also keep their own tests in LLDs 3 and 6. Because flat config replaces (does not merge) a rule key set again by a later matching block, the Store and sweep blocks re-include the base `functions/src` options (`FN_IMPORT_PATTERNS`, `FN_IMPORT_PATHS`, `FN_GLOBALS`), so the `onCall`/`onRequest` import ban (P12) and the Bun ban (P7) still apply inside `functions/src/store` and `functions/src/notify/sweep.ts`. The fixture suite in `lint-test/` (`bun run test:lint`) asserts that an `onCall` import, a `bun:*` import and a `Bun` global in a Store file and in `sweep.ts` are all reported, and that each block fires and stays quiet where it should (issue #10).
+- P7 (lint half). `Bun`, `bun`, `bun:*` appear in no shipped code (`packages/*/src`, `functions/src`, `apps/web/src`). `bun:test` imports are allowed only in `*.test.ts`, `functions/test-integration`, `rules-test`. Build and ops scripts (`functions/scripts`, `scripts`) may use `Bun.*`. `api/callable.ts` is exempt only from the `onCall`/`onRequest` import ban (P12), not from the Bun ban; it has its own block.
+- Warnings are errors (`--max-warnings 0`; unused `eslint-disable` directives are warnings). Type-aware rules enabled: `no-floating-promises`, `no-misused-promises`, `consistent-type-imports`. `*.test.ts` files are exempt from the per-package import and global bans (they run under Bun); the type-aware rules still apply to them.
+- `parserOptions.project` lists the tsconfigs that exist (packages, functions, web, `lint-test`). A step that adds TypeScript outside them (`functions/scripts`, `apps/web/vite.config.ts`, `rules-test`, `e2e`, repo-level `scripts`) adds a tsconfig for it and lists it in the same change, or `bun run lint` fails on that file. The clock and entropy bans are member selectors, so aliasing (`const f = Date.now`) is caught; `globalThis.Date.now()` is not (the engine bans no such receiver, and typecheck isolation covers `window`).
+- Policy tests (`lint-test/`, `bun run test:lint`): feed snippets under virtual file paths to the real `eslint.config.js` (`ESLint.lintText`) and to `tsc -p` on throwaway configs that extend the package configs, and assert each forbidden construct is reported and each permitted one is not. P5's `package.json` dependency check lives there too (`lint-test/engine-deps.ts`).
 
 **TypeScript.** One strict base, per-package `lib` and `types` so the compiler also enforces isolation (an engine file that touches `process` or `setTimeout` fails typecheck, not only lint).
 
@@ -347,11 +373,11 @@ export default [
 | Package | `lib` | `types` | Notes |
 |---|---|---|---|
 | `packages/engine`, `packages/contracts` | `["ES2023"]` | `[]` | No DOM, no Node: `process`, `Buffer`, `setTimeout`, `fetch` do not exist |
-| `functions` | `["ES2023"]` | `["node"]` | `@types/node` 22 matches the runtime |
-| `apps/web` | `["ES2023","DOM","DOM.Iterable"]` | `["vite/client"]` | `jsx: react-jsx` |
+| `functions` | `["ES2023"]` | `["node"]` | `@types/node` on the 22 line matches the runtime |
+| `apps/web` | `["ES2023","DOM","DOM.Iterable"]` | `[]` now, `["vite/client"]` once #14 installs Vite | `jsx: react-jsx` |
 | tests | per package | adds `["bun"]` | `tsconfig.test.json` per package extends the package config, includes `**/*.test.ts` and `test-integration`; the main config excludes them so `bun-types` cannot leak into shipped code |
 
-- P8. `bun run typecheck` runs `tsc --noEmit` for each package config and each test config. A CI step asserts `git diff --exit-code` after `bun install --frozen-lockfile`, `lint`, and `build:functions` so no generated file is silently out of date.
+- P8. `bun run typecheck` runs `tsc --noEmit` for each package config and each test config, plus `lint-test/tsconfig.json` (the policy suite is typechecked and linted like everything else). A test config needs at least one input, so each package carries a small `src/index.test.ts` smoke test until it has real tests. A CI step asserts `git diff --exit-code` after `bun install --frozen-lockfile`, `lint`, and `build:functions` so no generated file is silently out of date.
 
 ## 6. Test pyramid and emulator setup
 
