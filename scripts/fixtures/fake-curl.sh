@@ -2,7 +2,8 @@
 # Stand-in for `curl` in scripts/provision-channel.test.ts, i.e. for the `api` helper of provision-staging.sh, which
 # always calls: -sS --fail-with-body -X <method> -H ... --data-binary @- <url> with the body on stdin.
 # Copy it onto PATH as `curl` (the test does) and point FAKE_CURL_STATE at a state directory holding:
-#   channels.json   the GET .../notificationChannels response (default: no channels)
+#   channels.json   the GET .../notificationChannels response (default: no channels); channels.<n>.json answers
+#                   the nth GET instead, which is how a paginated listing is scripted
 #   calls           this script appends "<method> <url>", one line per call
 #   created.json    written from stdin on the first POST; absent means no channel was created
 set -u
@@ -19,7 +20,11 @@ printf '%s %s\n' "$method" "$url" >>"$state/calls"
 body="$(cat)"
 case "$method $url" in
   "GET "*notificationChannels*)
-    if [ -f "$state/channels.json" ]; then cat "$state/channels.json"; else printf '{"notificationChannels":[]}'; fi
+    n=$(($(cat "$state/channels.calls" 2>/dev/null || echo 0) + 1))
+    echo "$n" >"$state/channels.calls"
+    page="$state/channels.$n.json"
+    [ -f "$page" ] || page="$state/channels.json"
+    if [ -f "$page" ]; then cat "$page"; else printf '{"notificationChannels":[]}'; fi
     ;;
   "POST "*notificationChannels*)
     printf '%s' "$body" >"$state/created.json"

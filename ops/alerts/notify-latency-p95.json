@@ -26,7 +26,7 @@
           {
             "alignmentPeriod": "300s",
             "perSeriesAligner": "ALIGN_PERCENTILE_95",
-            "crossSeriesReducer": "REDUCE_SUM"
+            "crossSeriesReducer": "REDUCE_MAX"
           }
         ]
       }

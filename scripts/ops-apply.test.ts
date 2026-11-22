@@ -1,8 +1,8 @@
-import { chmod, copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { tmp } from "../functions/scripts/fixtures";
-import { applyOps, parseArgs } from "./ops-apply";
+import { accessToken, applyOps, monitoringApi, parseArgs, readOps } from "./ops-apply";
 import type { Rest } from "./ops-apply";
 import type { Gcloud } from "./gcloud";
 
@@ -147,6 +147,22 @@ describe("OB1 the ops tree parses and is well formed", () => {
     }
   });
 
+  test("every threshold that spans more than an hour carries a matching duration", async () => {
+    // `duration: "0s"` fires on a single alignment window. That is intended for a "more than 5 in the last hour"
+    // row; on a 24 h window it means "any one call in the last day", which is what the client-outdated alert says it
+    // must not do (LLD 5 section 9: nonzero for more than 24 h).
+    const seconds = (duration: unknown): number => Number(String(duration).replace(/s$/, ""));
+    for (const name of await filesIn("alerts", ".json")) {
+      const condition = objectOf((objectOf(JSON.parse(await readOPS(`alerts/${name}`)))["conditions"] as unknown[])[0]);
+      const threshold = condition["conditionThreshold"];
+      if (threshold === undefined) continue;
+      const body = objectOf(threshold);
+      const windows = (Array.isArray(body["aggregations"]) ? body["aggregations"] : []).map((a) => seconds(objectOf(a)["alignmentPeriod"]));
+      if (seconds(body["duration"]) > 0) continue;
+      for (const window of windows) expect([name, window <= 3600]).toEqual([name, true]);
+    }
+  });
+
   test("the dashboard is dc main with the nine widgets section 9 lists", async () => {
     const dashboard = objectOf(JSON.parse(await readOPS("dashboards/main.json")));
     expect(dashboard["displayName"]).toBe("dc main");
@@ -172,6 +188,79 @@ describe("OB1 the ops tree parses and is well formed", () => {
   });
 });
 
+describe("OB1 readOps rejects a broken declaration, naming the file", () => {
+  const METRIC = 'description: "d"\nfilter: "jsonPayload.event=\\"txn.retry\\""\nmetricDescriptor:\n  metricKind: DELTA\n  valueType: INT64\n';
+  const DASHBOARD = JSON.stringify({ displayName: "dc main" });
+  const ALERT = JSON.stringify({ displayName: "dc test", notificationChannels: ["__NOTIFICATION_CHANNEL__"] });
+  const BASELINE = { "metrics/dc_txn_retry_total.yaml": METRIC, "dashboards/main.json": DASHBOARD, "alerts/test.json": ALERT };
+
+  /** A throwaway `ops` tree; the keys are paths under it, so a test states exactly what the declaration holds. */
+  async function tempOps(files: Record<string, string>): Promise<string> {
+    const dir = await tmp("ops-tree");
+    for (const [path, content] of Object.entries(files)) {
+      await mkdir(join(dir, path, ".."), { recursive: true });
+      await writeFile(join(dir, path), content);
+    }
+    return dir;
+  }
+  const reasonOf = async (files: Record<string, string>): Promise<string> => {
+    const outcome = await readOps(await tempOps(files));
+    return typeof outcome === "string" ? outcome : "readOps accepted it";
+  };
+  const without = (path: string): Record<string, string> =>
+    Object.fromEntries(Object.entries(BASELINE).filter(([key]) => key !== path));
+
+  test("the baseline tree is accepted", async () => {
+    const outcome = await readOps(await tempOps(BASELINE));
+    expect(typeof outcome).toBe("object");
+    expect(typeof outcome === "string" ? [] : outcome.metrics.map((m) => m.id)).toEqual(["dc_txn_retry_total"]);
+  });
+
+  test("a missing metrics directory", async () => {
+    expect(await reasonOf(without("metrics/dc_txn_retry_total.yaml"))).toContain("ops/metrics is missing");
+  });
+
+  test("a missing alerts directory", async () => {
+    expect(await reasonOf(without("alerts/test.json"))).toContain("ops/alerts is missing");
+  });
+
+  test("a metric that does not parse", async () => {
+    expect(await reasonOf({ ...BASELINE, "metrics/dc_txn_retry_total.yaml": "a: b: c\n" })).toContain("does not parse");
+  });
+
+  test("a metric with no filter", async () => {
+    const reason = await reasonOf({ ...BASELINE, "metrics/dc_txn_retry_total.yaml": 'description: "d"\nmetricDescriptor:\n  metricKind: DELTA\n' });
+    expect(reason).toContain("dc_txn_retry_total.yaml has no filter");
+  });
+
+  test("a metric with no metricDescriptor", async () => {
+    const reason = await reasonOf({ ...BASELINE, "metrics/dc_txn_retry_total.yaml": 'description: "d"\nfilter: "x"\n' });
+    expect(reason).toContain("dc_txn_retry_total.yaml has no metricDescriptor");
+  });
+
+  test("an unreadable dashboard", async () => {
+    expect(await reasonOf({ ...BASELINE, "dashboards/main.json": "{" })).toContain("ops/dashboards/main.json is unreadable");
+  });
+
+  test("a dashboard with no displayName", async () => {
+    expect(await reasonOf({ ...BASELINE, "dashboards/main.json": "{}" })).toContain("has no displayName");
+  });
+
+  test("an alert that does not parse", async () => {
+    expect(await reasonOf({ ...BASELINE, "alerts/test.json": "{" })).toContain("alerts/test.json does not parse");
+  });
+
+  test("an alert with no displayName", async () => {
+    const reason = await reasonOf({ ...BASELINE, "alerts/test.json": JSON.stringify({ notificationChannels: ["__NOTIFICATION_CHANNEL__"] }) });
+    expect(reason).toContain("alerts/test.json has no displayName");
+  });
+
+  test("an alert with no channel placeholder", async () => {
+    const reason = await reasonOf({ ...BASELINE, "alerts/test.json": JSON.stringify({ displayName: "dc test", notificationChannels: [] }) });
+    expect(reason).toContain("has no __NOTIFICATION_CHANNEL__ placeholder");
+  });
+});
+
 describe("OB2 to OB4 the tree matches the LLD", () => {
   test("OB2 every declared metric is named by LLD 0 section 9, LLD 5 section 9 or LLD 6 section 7.3", async () => {
     const lld = async (path: string, from: RegExp, to: RegExp): Promise<string> => {
@@ -194,6 +283,36 @@ describe("OB2 to OB4 the tree matches the LLD", () => {
   test("OB3 every metric the LLD declares has a file, and there are no extras", async () => {
     const declaredMetrics = (await filesIn("metrics", ".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
     expect(declaredMetrics).toEqual([...METRIC_IDS].sort());
+  });
+
+  test("OB4 no percentile is reduced with REDUCE_SUM", async () => {
+    // A percentile is already an aggregate over one series. Summing per-series p95 values doubles the number whenever
+    // two revisions overlap (a deploy), so a p95 alert or chart must take the max of them.
+    const aggregationOf = (value: unknown): Record<string, unknown>[] => {
+      const body = objectOf(value);
+      const direct = body["aggregation"];
+      const listed = body["aggregations"];
+      const found = [...(direct === undefined ? [] : [objectOf(direct)]), ...(Array.isArray(listed) ? listed.map(objectOf) : [])];
+      return found;
+    };
+    const check = (where: string, aggregation: Record<string, unknown>) => {
+      if (!String(aggregation["perSeriesAligner"] ?? "").startsWith("ALIGN_PERCENTILE_")) return;
+      expect([where, aggregation["crossSeriesReducer"]]).toEqual([where, "REDUCE_MAX"]);
+    };
+    for (const name of await filesIn("alerts", ".json")) {
+      const condition = objectOf((objectOf(JSON.parse(await readOPS(`alerts/${name}`)))["conditions"] as unknown[])[0]);
+      for (const kind of ["conditionThreshold", "conditionAbsent"]) {
+        for (const aggregation of aggregationOf(condition[kind])) check(`${name}:${kind}`, aggregation);
+      }
+    }
+    const layout = objectOf(objectOf(JSON.parse(await readOPS("dashboards/main.json")))["mosaicLayout"]);
+    for (const tile of (Array.isArray(layout["tiles"]) ? layout["tiles"] : []).map(objectOf)) {
+      const chart = objectOf(objectOf(tile["widget"])["xyChart"]);
+      for (const dataset of (Array.isArray(chart["dataSets"]) ? chart["dataSets"] : []).map(objectOf)) {
+        const query = objectOf(objectOf(dataset["timeSeriesQuery"])["timeSeriesFilter"]);
+        for (const aggregation of aggregationOf(query)) check(`dashboard:${String(objectOf(tile["widget"])["title"])}`, aggregation);
+      }
+    }
   });
 
   test("OB4 every alert condition references a declared metric or a documented built-in, and every row has a policy", async () => {
@@ -368,7 +487,7 @@ test("OB9 bad usage is refused before anything is applied", () => {
 });
 
 /** Puts the fake `gcloud` on PATH and the fake curl-style REST answers in place for a CLI run. */
-async function cliFixture(lists: "empty-then-present" | "present"): Promise<{ env: Record<string, string>; state: string }> {
+async function cliFixture(lists: "empty-then-present" | "present", extra: Record<string, string> = {}): Promise<{ env: Record<string, string>; state: string }> {
   const base = await tmp("ops-apply-cli");
   const bin = join(base, "bin");
   await mkdir(bin, { recursive: true });
@@ -389,9 +508,114 @@ async function cliFixture(lists: "empty-then-present" | "present"): Promise<{ en
       await writeFile(join(state, `${kind}.2.json`), JSON.stringify(body));
     }
   }
+  for (const [name, content] of Object.entries(extra)) await writeFile(join(state, name), content);
   const env = { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}`, FAKE_GCLOUD_STATE: state, CLOUDSDK_CORE_DISABLE_PROMPTS: "1" };
   return { env: env as Record<string, string>, state };
 }
+
+test("OB5 a non-zero gcloud exit fails the run, naming the command and its stderr", async () => {
+  const gcloud: Gcloud = async () => ({ code: 1, stdout: "", stderr: "PERMISSION_DENIED: caller lacks logging.metrics.list" });
+  const out = await applyOps({ project: PROJECT, deps: { gcloud, token: async () => "t", rest: channelsRest(), log: () => {}, tmpDir: () => tmp("ops-apply-fail") } });
+  expect(out.ok).toBe(false);
+  const reason = out.ok ? "" : out.reason;
+  expect(reason).toContain("logging metrics list");
+  expect(reason).toContain("PERMISSION_DENIED");
+});
+
+test("OB5 a listing that is not JSON fails instead of being read as an empty project", async () => {
+  const gcloud: Gcloud = async () => ({ code: 0, stdout: "ERROR: (gcloud.logging.metrics) something", stderr: "" });
+  const out = await applyOps({ project: PROJECT, deps: { gcloud, token: async () => "t", rest: channelsRest(), log: () => {}, tmpDir: () => tmp("ops-apply-parse") } });
+  expect(out.ok).toBe(false);
+  expect(out.ok ? "" : out.reason).toContain("did not print JSON");
+});
+
+test("OB8 a Monitoring REST failure fails the run with the endpoint", async () => {
+  const rest: Rest = async () => {
+    throw new Error("GET https://monitoring.googleapis.com/v3/projects/x/notificationChannels answered HTTP 403: Permission denied.");
+  };
+  const out = await applyWith(emptyState(), { rest }).run();
+  expect(out.ok).toBe(false);
+  expect(out.ok ? "" : out.reason).toContain("notification channels");
+  expect(out.ok ? "" : out.reason).toContain("403");
+});
+
+test("OB8 the channel lookup follows nextPageToken, so a channel past the first page resolves", async () => {
+  const asked: string[] = [];
+  const rest: Rest = async ({ url }) => {
+    asked.push(url);
+    if (url.includes("pageToken=page-2")) return { notificationChannels: [{ name: CHANNEL, displayName: "dc-owner", type: "email" }] };
+    return { notificationChannels: [], nextPageToken: "page-2" };
+  };
+  const out = await applyWith(emptyState(), { rest }).run();
+  expect(out.ok).toBe(true);
+  expect(asked.length).toBe(2);
+  expect(asked[1]).toContain("pageToken=page-2");
+});
+
+test("OB9 the access token comes from the user login, falling back to application-default", async () => {
+  const calls: string[][] = [];
+  const gcloud = (answers: Record<string, { code: number; stdout?: string }>): Gcloud => {
+    return async (args) => {
+      calls.push(args);
+      const answer = answers[args.join(" ")] ?? { code: 1 };
+      return { code: answer.code, stdout: answer.stdout ?? "", stderr: answer.code === 0 ? "" : "ERROR: no credential" };
+    };
+  };
+
+  const both = gcloud({
+    "auth print-access-token": { code: 0, stdout: "user-token\n" },
+    "auth application-default print-access-token": { code: 0, stdout: "adc-token\n" },
+  });
+  expect(await accessToken(both)).toBe("user-token");
+  expect(calls.length).toBe(1);
+
+  calls.length = 0;
+  const adc = gcloud({ "auth application-default print-access-token": { code: 0, stdout: "adc-token\n" } });
+  expect(await accessToken(adc)).toBe("adc-token");
+  expect(calls.map((c) => c.join(" "))).toEqual(["auth print-access-token", "auth application-default print-access-token"]);
+
+  await expect(accessToken(gcloud({}))).rejects.toThrow(/application-default/);
+});
+
+test("OB9 MONITORING_API_URL is honoured only for a loopback host", () => {
+  expect(monitoringApi(undefined)).toBe("https://monitoring.googleapis.com");
+  expect(monitoringApi("http://127.0.0.1:8080")).toBe("http://127.0.0.1:8080");
+  expect(monitoringApi("http://localhost:8080/")).toBe("http://localhost:8080");
+  expect(monitoringApi("http://[::1]:8080")).toBe("http://[::1]:8080");
+  expect(() => monitoringApi("https://monitoring.evil.example")).toThrow(/loopback/);
+});
+
+test("OB10 the CLI exits 1 when a gcloud call fails, and 2 for a non-loopback MONITORING_API_URL", async () => {
+  // The channel lookup needs an answer before the gcloud lists run, so a local server stands in for it; the async spawn
+  // keeps this process free to answer.
+  const server = Bun.serve({ port: 0, fetch: () => Response.json({ notificationChannels: [{ name: CHANNEL, displayName: "dc-owner", type: "email" }] }) });
+  try {
+    const broken = await cliFixture("present", { "metrics-list.exit": "1" });
+    const child = Bun.spawn(["bun", "scripts/ops-apply.ts", "--project", PROJECT], {
+      cwd: ROOT,
+      env: { ...broken.env, MONITORING_API_URL: `http://127.0.0.1:${server.port}` },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect([code, stderr.slice(0, 200)]).toEqual([1, expect.stringContaining("logging metrics list")]);
+    expect(stdout).not.toContain("created");
+  } finally {
+    await server.stop(true);
+  }
+
+  // A usage error is decided before anything is read or sent, so it needs no server.
+  const refused = Bun.spawnSync(["bun", "scripts/ops-apply.ts", "--project", PROJECT], {
+    cwd: ROOT,
+    env: { ...(await cliFixture("present")).env, MONITORING_API_URL: "https://monitoring.evil.example" },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(refused.exitCode).toBe(2);
+  expect(refused.stderr.toString()).toContain("loopback");
+});
 
 test("OB10 the real argv shapes, through the CLI against a fake gcloud on PATH", async () => {
   const seen: string[] = [];

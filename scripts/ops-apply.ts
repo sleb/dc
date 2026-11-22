@@ -20,8 +20,21 @@ import type { Gcloud } from "./gcloud";
 const OPS_DIR = join(import.meta.dir, "..", "ops");
 export const DEFAULT_CHANNEL_NAME = "dc-owner";
 const CHANNEL_PLACEHOLDER = "__NOTIFICATION_CHANNEL__";
-/** Overridable only so a test can aim the REST calls at a local server; the deploy never sets it. */
-const MONITORING_API = process.env["MONITORING_API_URL"] ?? "https://monitoring.googleapis.com";
+const DEFAULT_API = "https://monitoring.googleapis.com";
+
+/**
+ * The Monitoring API base URL. `MONITORING_API_URL` exists only so a test can aim the REST calls at a local server,
+ * so it is accepted only for a loopback host: a job that holds a cloud credential must not be able to send its bearer
+ * token anywhere because of a stray environment variable.
+ */
+export function monitoringApi(override: string | undefined): string {
+  if (override === undefined || override === "") return DEFAULT_API;
+  const host = new URL(override).hostname;
+  if (!["127.0.0.1", "localhost", "[::1]", "::1"].includes(host)) {
+    throw new Error(`MONITORING_API_URL must be a loopback host (127.0.0.1, localhost or ::1); got ${host}`);
+  }
+  return override.replace(/\/+$/, "");
+}
 
 export interface MetricDeclaration {
   id: string;
@@ -133,6 +146,22 @@ export async function readOps(dir = OPS_DIR): Promise<OpsDeclarations | string> 
   return { metrics, dashboardFile, dashboardDisplayName, alerts };
 }
 
+/**
+ * A Monitoring API access token. `gcloud auth print-access-token` has only ever run under a user login here; under
+ * Workload Identity Federation (`deploy-staging`) the credential is the auth action's file, which that command may
+ * refuse, so the application-default path is tried before giving up.
+ */
+export async function accessToken(gcloud: Gcloud): Promise<string> {
+  const user = await gcloud(["auth", "print-access-token"]);
+  if (user.code === 0 && user.stdout.trim() !== "") return user.stdout.trim();
+  const adc = await gcloud(["auth", "application-default", "print-access-token"]);
+  if (adc.code === 0 && adc.stdout.trim() !== "") return adc.stdout.trim();
+  throw new Error(
+    `no access token: \`gcloud auth print-access-token\` exited ${user.code} and ` +
+      `\`gcloud auth application-default print-access-token\` exited ${adc.code}`,
+  );
+}
+
 const realRest: Rest = async ({ method, url, token, body }) => {
   const response = await fetch(url, {
     method,
@@ -144,20 +173,30 @@ const realRest: Rest = async ({ method, url, token, body }) => {
 };
 
 /** The resource name of the policy channel, or a reason that says how to create it. */
-async function resolveChannel(deps: ApplyDeps, project: string, channelName: string): Promise<string | { reason: string }> {
+async function resolveChannel(deps: ApplyDeps, project: string, channelName: string, apiBase: string): Promise<string | { reason: string }> {
   let token: string;
   try {
     token = await deps.token();
   } catch (e) {
     return { reason: `could not get an access token for the Monitoring API: ${message(e)}` };
   }
-  let response: unknown;
-  try {
-    response = await deps.rest({ method: "GET", url: `${MONITORING_API}/v3/projects/${project}/notificationChannels`, token });
-  } catch (e) {
-    return { reason: `could not list the notification channels of ${project}: ${message(e)}` };
+  // The channel list is paginated: a channel past the first page must not read as absent, or the run would tell a
+  // human to create a channel they already have.
+  const channels: Record<string, unknown>[] = [];
+  let pageToken = "";
+  for (let page = 0; page < 100; page += 1) {
+    const suffix = pageToken === "" ? "" : `?pageToken=${encodeURIComponent(pageToken)}`;
+    let response: unknown;
+    try {
+      response = await deps.rest({ method: "GET", url: `${apiBase}/v3/projects/${project}/notificationChannels${suffix}`, token });
+    } catch (e) {
+      return { reason: `could not list the notification channels of ${project}: ${message(e)}` };
+    }
+    channels.push(...listOf(objectOf(response)["notificationChannels"]));
+    pageToken = stringOf(objectOf(response)["nextPageToken"]);
+    if (pageToken === "") break;
   }
-  const found = listOf(objectOf(response)["notificationChannels"]).find((channel) => stringOf(channel["displayName"]) === channelName);
+  const found = channels.find((channel) => stringOf(channel["displayName"]) === channelName);
   if (!found) {
     return {
       reason:
@@ -194,13 +233,7 @@ export async function applyOps(o: ApplyOptions): Promise<ApplyOutcome> {
   let ownTmpDir: string | undefined;
   const deps: ApplyDeps = {
     gcloud,
-    token:
-      o.deps?.token ??
-      (async () => {
-        const result = await gcloud(["auth", "print-access-token"]);
-        if (result.code !== 0) throw new Error(`\`gcloud auth print-access-token\` exited ${result.code}: ${lastLine(result.stderr)}`);
-        return result.stdout.trim();
-      }),
+    token: o.deps?.token ?? (() => accessToken(gcloud)),
     rest: o.deps?.rest ?? realRest,
     log: o.deps?.log ?? ((line) => console.log(line)),
     tmpDir:
@@ -216,7 +249,7 @@ export async function applyOps(o: ApplyOptions): Promise<ApplyOutcome> {
     if (typeof declarations === "string") return { ok: false, reason: declarations };
 
     const channelName = o.channelName ?? DEFAULT_CHANNEL_NAME;
-    const channel = await resolveChannel(deps, o.project, channelName);
+    const channel = await resolveChannel(deps, o.project, channelName, monitoringApi(process.env["MONITORING_API_URL"]));
     if (typeof channel !== "string") return { ok: false, reason: channel.reason };
 
     const dir = await deps.tmpDir();
@@ -357,6 +390,12 @@ if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (typeof args === "string") {
     console.error(`ops-apply: ${args}\n${USAGE}`);
+    process.exit(2);
+  }
+  try {
+    monitoringApi(process.env["MONITORING_API_URL"]);
+  } catch (e) {
+    console.error(`ops-apply: ${message(e)}\n${USAGE}`);
     process.exit(2);
   }
   const outcome = await applyOps(args);

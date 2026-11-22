@@ -302,10 +302,22 @@ step_secrets() { # V11. Values are generated and piped; they are never printed o
   done
 }
 
+# Prints every page of the project's notification channels, one JSON document per line (`nextPageToken` followed).
+list_channels() {
+  local url="https://monitoring.googleapis.com/v3/projects/$PROJECT/notificationChannels" token="" page
+  while :; do
+    if [ -n "$token" ]; then page="$(api GET "$url?pageToken=$token")"; else page="$(api GET "$url")"; fi
+    printf '%s\n' "$page"
+    token="$(printf '%s' "$page" | jq -r '.nextPageToken // empty')"
+    [ -n "$token" ] || break
+  done
+}
+
 step_channel() { # LLD 0 section 9: the notification channel every alert policy in ops/alerts/ names.
   local url="https://monitoring.googleapis.com/v3/projects/$PROJECT/notificationChannels"
   local existing
-  existing="$(api GET "$url" | jq -r '[.notificationChannels[]? | select(.displayName == "dc-owner") | .name] | length')"
+  # The listing is paginated: a channel past the first page must not read as absent, or this step creates a duplicate.
+  existing="$(list_channels | jq -s '[.[].notificationChannels[]? | select(.displayName == "dc-owner") | .name] | length')"
   if [ "$existing" -gt 0 ]; then
     log "notification channel dc-owner exists"
     return 0
@@ -328,6 +340,12 @@ steps=("$@")
 [ "$1" = all ] && steps=(project firebase apis firestore iam wif secrets webapp auth appcheck config channel)
 for s in "${steps[@]}"; do
   declare -F "step_$s" >/dev/null || { echo "unknown step: $s" >&2; exit 2; }
+  # `all` stays runnable on a fresh project without ALERT_EMAIL: the channel needs the owner's address, which is
+  # supplied at run time, so an unattended `all` skips it and says how to run it. An explicit `channel` still fails.
+  if [ "$s" = channel ] && [ "$1" = all ] && [ -z "${ALERT_EMAIL:-}" ]; then
+    log "step: channel skipped: set ALERT_EMAIL and run: ALERT_EMAIL=<address> $0 channel"
+    continue
+  fi
   log "step: $s"
   "step_$s"
 done

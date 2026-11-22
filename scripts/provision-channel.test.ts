@@ -57,6 +57,20 @@ test("OB11 a second run is a no-op and needs no ALERT_EMAIL", async () => {
   expect(await calls(existing.state)).toEqual([`GET https://monitoring.googleapis.com/v3/projects/${PROJECT}/notificationChannels`]);
 });
 
+test("OB11 the channel lookup follows nextPageToken, so a channel past the first page is not re-created", async () => {
+  const paged = await fixture();
+  await writeFile(join(paged.state, "channels.1.json"), JSON.stringify({ notificationChannels: [], nextPageToken: "page-2" }));
+  await writeFile(join(paged.state, "channels.2.json"), JSON.stringify({ notificationChannels: [{ name: `projects/${PROJECT}/notificationChannels/1`, displayName: "dc-owner", type: "email" }] }));
+  const out = run(paged.env);
+  expect(out.code).toBe(0);
+  expect(out.out).toContain("dc-owner");
+  const made = await readFile(join(paged.state, "created.json"), "utf8").catch(() => "");
+  expect(made).toBe("");
+  const asked = await calls(paged.state);
+  expect(asked.length).toBe(2);
+  expect(asked[1]).toContain("pageToken=page-2");
+});
+
 test("OB11 an absent channel with no ALERT_EMAIL fails with a usage message and creates nothing", async () => {
   const env = { ...(await fixture()).env };
   delete env["ALERT_EMAIL"];
@@ -74,4 +88,15 @@ test("OB11 the step is listed in the usage line and in the `all` order", async (
   expect(allSteps).toContain("channel");
   // It needs a project and APIs first, so it cannot be the first step.
   expect(allSteps?.indexOf("channel")).toBeGreaterThan(allSteps?.indexOf("project") ?? -1);
+});
+
+test("OB11 `all` skips the channel step when ALERT_EMAIL is unset, and says how to run it", async () => {
+  // The `all` path needs a live project, so the guard is asserted over the script: an unset ALERT_EMAIL must not turn
+  // the documented `scripts/provision-staging.sh all` into a failure on a fresh project, while an explicit
+  // `channel` run still fails loudly (tested above).
+  const script = await readFile(join(ROOT, "scripts/provision-staging.sh"), "utf8");
+  const guard = script.split("\n").find((line) => line.includes('"$s" = channel') && line.includes("ALERT_EMAIL"));
+  expect(guard).toBeDefined();
+  expect(guard).toContain('"$1" = all');
+  expect(script).toContain("ALERT_EMAIL=<address> $0 channel");
 });

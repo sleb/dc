@@ -602,7 +602,7 @@ Extends LLD 0 section 9. The wrapper emits one line per call through the typed l
 | `dc_api_invalid_total` | counter, `api.done` with `reason="INVALID_REQUEST"` | `callable` |
 | `dc_client_outdated_total` | counter, `api.done` with `reason="CLIENT_OUTDATED"` | `clientV` |
 | `dc_idem_replay_total` | counter, `api.done` with `replay=true` | `callable` |
-| `dc_appcheck_denied_total` | counter from Cloud Run request logs (`httpRequest.status=401` per function), not our lines | `callable` |
+| `dc_appcheck_denied_total` | counter from Cloud Run request logs (`httpRequest.status=401`), not our lines; it is every 401 at the edge, not only App Check denials, which is why the alert reads as an aggregate edge-denial rate | `callable` (the Cloud Run service name) |
 
 **Alerts added** (same notification channel as LLD 0): `dc_api_invalid_total` above 1% of calls for 15 min (contract drift or a broken client); `dc_client_outdated_total` nonzero for more than 24 h after `MIN_V` was raised (informational); `ip.unresolved` any occurrence; any `api.detail.stripped`; `dc_ratelimit_total{bucket=code_ip}` spike (LLD 4's global miss alert uses it); `dc_appcheck_denied_total` sustained above baseline.
 

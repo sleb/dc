@@ -97,6 +97,36 @@ test("T4b LogEvent and the LLD 0 section 9 event row cannot drift", () => {
   for (const event of EVENTS) expect([event, row?.includes(`\`${event}\``)]).toEqual([event, true]);
 });
 
+test("T4b LogFields and KEYS cannot drift from the LLD 0 section 9 field table", () => {
+  // The same drift guard as the event row, over the field rows: a field added to the table (or dropped from the type)
+  // fails here rather than surviving as a silently dropped key.
+  const lld = readFileSync(join(import.meta.dir, "../../docs/lld/00-platform-build-deploy.md"), "utf8");
+  const lines = lld.split("\n");
+  const start = lines.findIndex((line) => line.startsWith("| `event` |"));
+  expect(start).toBeGreaterThan(-1);
+  const rows: string[] = [];
+  for (const line of lines.slice(start)) {
+    if (!line.startsWith("|")) break;
+    // Escaped pipes inside a cell (`host`\|`seat`) are not cell boundaries.
+    rows.push(line.replace(/\\\|/g, "/").split("|")[1] ?? "");
+  }
+  // The first cell names the fields; parenthetical values (`host`|`seat`, an `ErrorCode`) are not field names.
+  const documented = new Set(
+    rows.flatMap((cell) =>
+      cell
+        .replace(/\([^)]*\)/g, "")
+        .split(",")
+        .map((token) => token.trim())
+        .filter((token) => /^`[a-z][A-Za-z0-9]*`$/.test(token))
+        .map((token) => token.slice(1, -1)),
+    ),
+  );
+  expect([...documented].sort()).toEqual([...KEYS].sort());
+  type TypeKeys = keyof LogFields;
+  const documentedAsTypes: Record<string, TypeKeys> = Object.fromEntries([...documented].map((k) => [k, k as TypeKeys]));
+  expect(Object.keys(documentedAsTypes).sort()).toEqual([...KEYS].sort());
+});
+
 test("T4c KEYS covers every LogFields key", () => {
   // Compile-time exhaustiveness: `satisfies` in log.ts proves KEYS ⊆ LogFields, this proves LogFields ⊆ KEYS.
   type Missing = Exclude<keyof LogFields, (typeof KEYS)[number]>;
