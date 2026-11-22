@@ -247,7 +247,7 @@ describe("V6 saveDraft: every text, every call, the cleaned form is stored", () 
 
   test("a late joiner's saveDraft in PLAYING is moderated like any other", () => {
     const g = roundGame({ extra: { settings: settingsWith("on") } });
-    const late = { ...g, players: [...g.players, makePlayer(4, { status: "writing", writeTarget: { red: 1, green: 1 } })] };
+    const late = { ...g, players: [...g.players, makePlayer(4, { status: "writing", writeTarget: { red: 1, green: 8 } })] };
     expect(rejected(late, { type: "saveDraft", red: ["zorblat"], green: [] }, as(4))).toStrictEqual(CONTENT("PROFANITY"));
     expect(accepted(late, { type: "saveDraft", red: ["fine"], green: [] }, as(4)).draftChanges[0]?.draft?.red).toEqual(["fine"]);
   });

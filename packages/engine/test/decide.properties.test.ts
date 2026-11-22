@@ -171,7 +171,9 @@ describe("X1 decide is total", () => {
       if (me === undefined) return { code: "NOT_AUTHORIZED" };
       if (g.phase !== "WRITING" && g.phase !== "PLAYING") return { code: "WRONG_PHASE" };
       if (me.status !== "writing") return { code: "WRONG_PHASE", detail: "finished" };
-      return c.type === "saveDraft" ? "accepted" : { code: "NOT_PLAYABLE", detail: "incomplete" }; // the junk runs carry no drafts
+      // the junk runs carry no drafts; the oversized-payload entry carries a 10 000-character red text, which guard 8 (#25) refuses as TOO_LONG (in WRITING, where a seat may still save)
+      if (c.type === "saveDraft") return (c as unknown as { red: string[] }).red.length > 0 ? { code: "CONTENT_REJECTED", detail: "TOO_LONG" } : "accepted";
+      return { code: "NOT_PLAYABLE", detail: "incomplete" };
     }
     if (c.type === "confirmSubmission" || c.type === "closeSubmissions" || c.type === "pickWinner") return expectedRound(g, actor, c);
     if (c.type === "join") return { code: "NOT_AUTHORIZED" }; // none of the junk actors holds the seat uid of pid(9)

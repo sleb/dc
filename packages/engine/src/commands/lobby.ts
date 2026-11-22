@@ -1,14 +1,16 @@
 // The lobby and membership commands (LLD 1 sections 7.1, 7.2, 8.5, 9.4): createGame, updateSettings, join, leave, removePlayer (join, leave and removePlayer also run mid-game since #23).
-// Moderation (guard 8) is not wired for createGame and join until #25, so names are stored trimmed and otherwise as given.
+// Guard 8 (#25): `createGame` and `join` moderate the name (the mode is the new game's, or the table's); the cleaned name is stored; NAME_TAKEN compares `nameKey`, the Moderation fold.
 import { MAX_SEATED, MAX_TOTAL_JOINS, PlayerIdSchema, RoomCodeSchema, GameIdSchema, SettingsPatchSchema } from "@dc/contracts";
 import type { Command, Settings } from "@dc/contracts";
 import { reject } from "../errors";
+import { nameKey } from "../moderation";
 import type { CommandSpec, CreateSpec } from "../registry";
 import { evictPlayer } from "../rules/membership";
 import { lateJoinerRequirement } from "../rules/playability";
 import { seatUid } from "../roles";
 import { seated } from "../selectors";
 import type { Ctx, Game, Handled, Player, PlayerId, Rejection } from "../types";
+import { cleanedText, textRejection } from "./text";
 
 type Of<T extends Command["type"]> = Extract<Command, { type: T }>;
 
@@ -40,9 +42,6 @@ const hasCards = (g: Game): boolean => Object.keys(g.cards).length > 0;
 const isString = (v: unknown): v is string => typeof v === "string";
 const field = (cmd: object, key: string): unknown => (cmd as Record<string, unknown>)[key];
 
-/** Private name key until #25's `normalize` replaces it: case-insensitive and whitespace-insensitive. */
-const nameKey = (name: string): string => name.toLowerCase().replace(/\s+/gu, "");
-
 const invalid = (): Rejection => reject("INVALID_ARGUMENT");
 
 export const createGame: CreateSpec<Of<"createGame">> = {
@@ -57,12 +56,14 @@ export const createGame: CreateSpec<Of<"createGame">> = {
       && patch !== null && (patch.writeCountsOverride ?? null) === null; // no deck exists yet, so an override cannot apply
     return ok ? null : invalid();
   },
+  // Guard 8: the host's name, under the mode the new game will have (the patch's `profanity`, else the default `on`).
+  moderation: ({ cmd }) => textRejection(cmd.hostName, "name", ((cmd.settings === undefined ? {} : parsePatch(cmd.settings)) ?? {}).profanity ?? defaultSettings().profanity),
   handle: ({ cmd, ctx }) => {
     const patch = (cmd.settings === undefined ? {} : parsePatch(cmd.settings)) ?? {};
     const host: Player = {
       id: cmd.hostPlayerId,
       uid: cmd.hostId,
-      name: cmd.hostName.trim(),
+      name: cleanedText(cmd.hostName, "name"),
       joinOrder: 0,
       status: "writing",
       hand: [],
@@ -126,6 +127,7 @@ export const join: CommandSpec<Of<"join">> = {
     const ok = PlayerIdSchema.safeParse(field(cmd, "playerId")).success && isString(field(cmd, "name")) && !state.players.some((p) => p.id === cmd.playerId); // any record, left and removed too: a departed id never comes back mid-game (LOBBY deletes records, so it is the same there)
     return ok ? null : invalid();
   },
+  moderation: ({ state, cmd }) => textRejection(cmd.name, "name", state.settings.profanity),
   preconditions: ({ state, cmd }) => {
     const key = nameKey(cmd.name);
     const here = seated(state);
@@ -140,7 +142,7 @@ export const join: CommandSpec<Of<"join">> = {
     const player: Player = {
       id: cmd.playerId,
       uid: seatUid(state.id, cmd.playerId),
-      name: cmd.name.trim(),
+      name: cleanedText(cmd.name, "name"),
       joinOrder,
       status: "writing",
       hand: [],

@@ -6,7 +6,7 @@ import { join } from "node:path";
 describe("V9 public entry point", () => {
   test("exports exactly the names that exist so far (LLD 1 section 2.1); later steps extend this list", async () => {
     const names = Object.keys(await import("./index")).sort();
-    expect(names).toEqual(["EngineInvariantError", "REMINDER_INTERVAL_MS", "actorRole", "activePlayers", "checkText", "decide", "makeRng", "playability", "seated", "seatUid"].sort());
+    expect(names).toEqual(["EngineInvariantError", "REMINDER_INTERVAL_MS", "actorRole", "activePlayers", "checkText", "decide", "makeRng", "playability", "seated", "seatUid", "shownToTable"].sort());
   });
 
   test("decide is the public pipeline over the real registry: an unregistered command is INVALID_ARGUMENT", async () => {

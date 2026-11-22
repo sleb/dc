@@ -1,6 +1,7 @@
 import type { Command } from "@dc/contracts";
 import { createGame, join, leave, removePlayer, updateSettings } from "./commands/lobby";
 import { closeSubmissions, confirmSubmission, pickWinner } from "./commands/rounds";
+import { removeCard } from "./commands/cards";
 import { endGame, passJudging } from "./commands/stalls";
 import { markReminded } from "./commands/waiting";
 import { finishWriting, saveDraft, startGame } from "./commands/writing";
@@ -57,5 +58,5 @@ export interface CreateSpec<C extends BaseCommand = Command> {
 export type AnySpec = CommandSpec<BaseCommand> | CreateSpec<BaseCommand>;
 export type Registry = Readonly<Record<string, AnySpec>>;
 
-/** The real registry: the lobby commands since #20, the writing commands since #21, the round commands since #22, `passJudging` and `endGame` since #23, `markReminded` since #24. */
-export const REGISTRY: Registry = { createGame, updateSettings, join, leave, removePlayer, startGame, saveDraft, finishWriting, confirmSubmission, closeSubmissions, pickWinner, passJudging, endGame, markReminded };
+/** The real registry: the lobby commands since #20, the writing commands since #21, the round commands since #22, `passJudging` and `endGame` since #23, `markReminded` since #24, `removeCard` since #25. */
+export const REGISTRY: Registry = { createGame, updateSettings, join, leave, removePlayer, startGame, saveDraft, finishWriting, confirmSubmission, closeSubmissions, pickWinner, passJudging, endGame, markReminded, removeCard };
