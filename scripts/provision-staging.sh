@@ -123,9 +123,15 @@ step_iam() { # V8, V9
   log "ci-deployer may act as the App Engine default service account (the functions deploy needs it; #16)"
   gcloud iam service-accounts add-iam-policy-binding "$PROJECT@appspot.gserviceaccount.com" --member="serviceAccount:$CI_SA" \
     --role=roles/iam.serviceAccountUser --project "$PROJECT" >/dev/null
-  local number compute
+  local number compute compute_sa
   number="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
-  compute="serviceAccount:${number}-compute@developer.gserviceaccount.com"
+  compute_sa="${number}-compute@developer.gserviceaccount.com"
+  compute="serviceAccount:$compute_sa"
+  # Cloud Functions 2nd gen set the build identity to the default compute service account, so the deployer needs ActAs
+  # on it too; without it `firebase deploy --only functions` fails 403 (found in the first push-to-main deploy, #69).
+  log "ci-deployer may act as the default compute service account (the functions build needs it; #69)"
+  gcloud iam service-accounts add-iam-policy-binding "$compute_sa" --member="serviceAccount:$CI_SA" \
+    --role=roles/iam.serviceAccountUser --project "$PROJECT" >/dev/null
   if gcloud projects get-iam-policy "$PROJECT" --format=json \
       | jq -e --arg m "$compute" '.bindings[]? | select(.role == "roles/editor" and (.members | index($m)))' >/dev/null; then
     log "removing Editor from the default compute service account"
