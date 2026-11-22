@@ -6,6 +6,7 @@ Repo-level scripts that are not shipped. Plain bash, because they predate the Bu
 |---|---|
 | `verify-staging.sh` | Read-only. Runs checks V1 to V14 (LLD 0 section 2.1) and exits 0 only if all pass. Prints reasons for each failure, never a secret value. |
 | `provision-staging.sh` | Idempotent. Creates what the checks assert, one step at a time. |
+| `check-web-size.ts` | Bun. `bun scripts/check-web-size.ts [dist]` (default `apps/web/dist`, so run `bun run build:web` first). Fails if gzip sizes exceed LLD 7 section 10.1: entry 300 KB, lazy chunk 60 KB, CSS 20 KB, service worker 40 KB (a KB is 1000 bytes). Tested by `check-web-size.test.ts`, which also holds `web-build.test.ts` (builds per mode, the no-referrer meta tag, the App Check debug-token guard); both run in `bun run test`. |
 
 ## Prerequisites
 

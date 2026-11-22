@@ -94,8 +94,8 @@ dc/
   tsconfig.base.json
   lint-test/                   # policy tests: real eslint.config.js and tsc against snippets (`bun run test:lint`); own tsconfig.json
   apps/web/                    # @dc/web: React, Vite, PWA, Tailwind
-    .env.staging  .env.production  .env.emulator   # public config, committed; Vite's .env.<mode> names, read for --mode <mode>
-    package.json  tsconfig.json  tsconfig.test.json  vite.config.ts  src/
+    .env.staging  .env.emulator  .env.production   # public config, committed; Vite's .env.<mode> names, read for --mode <mode>; .env.production arrives with M8
+    package.json  tsconfig.json  tsconfig.test.json  tsconfig.node.json  vite.config.ts  index.html  src/   # tsconfig.node.json covers vite.config.ts
   functions/                   # @dc/functions
     package.json  tsconfig.json  tsconfig.test.json   # tsconfig.test.json also covers scripts/
     src/index.ts               # exports every deployed function
@@ -111,6 +111,7 @@ dc/
     engine/                    # @dc/engine: pure core, Projector, Moderation (package.json, tsconfig.json, tsconfig.test.json, src/)
     contracts/                 # @dc/contracts: zod schemas and types (same shape)
   rules-test/                  # @firebase/rules-unit-testing suites
+  hosting-test/                # bun tests against the Hosting emulator (`bun run test:hosting`); own tsconfig.json
   e2e/                         # Playwright
   ops/                         # metrics, alert policies, dashboard JSON (section 9)
   scripts/                     # repo-level Bun scripts (smoke.ts, ops-apply.ts, wait-indexes.ts, check-web-size.ts); not shipped
@@ -119,7 +120,7 @@ dc/
 
 Dependency direction, enforced by lint (P5): `contracts` imports no workspace package; `engine` imports only `contracts`; `functions` imports `engine` and `contracts`; `web` imports only `contracts` (the client holds no authority, HLD C1, so it never imports the engine; anything it needs to display comes in the `GameView`).
 
-Root `package.json` (the scripts marked "this step" exist now; the rest arrive with the step that owns them: the `test*` scripts with #13, `build:web` with #14, `dev` with #15):
+Root `package.json` (the scripts marked "this step" exist now; the rest arrive with the step that owns them: the `test*` scripts with #13, `build:web` and `test:hosting` with #14, `dev` with #15):
 
 ```jsonc
 {
@@ -129,16 +130,17 @@ Root `package.json` (the scripts marked "this step" exist now; the rest arrive w
   "workspaces": ["apps/*", "packages/*", "functions"],
   "scripts": {
     "lint": "eslint . --max-warnings 0",                                   // this step
-    "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json && tsc --noEmit -p rules-test/tsconfig.json",  // this step; #13 adds rules-test
+    "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json && tsc --noEmit -p rules-test/tsconfig.json && tsc --noEmit -p scripts/tsconfig.json && tsc --noEmit -p hosting-test/tsconfig.json",  // this step; #13 adds rules-test; #14 adds scripts and hosting-test (apps/web's own typecheck also covers vite.config.ts)
     "test:lint": "bun test lint-test",                                    // this step; `test` also runs it (about 6 s); kept for running it alone
-    "test": "bun test packages functions/src functions/scripts lint-test",   // #13
+    "test": "bun test packages functions/src functions/scripts scripts lint-test",   // #13; #14 adds scripts/ (check-web-size and the web build tests; the build tests run `vite build` a few times, about 1 s each)
     "test:web": "bun test --preload ./apps/web/test/setup.ts apps/web/src",   // #13 (Bun needs the leading ./)
     "test:rules": "firebase emulators:exec --only firestore --project demo-deepcuts 'bun test rules-test'",
     "test:integration": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bun test functions/test-integration --timeout 30000'",
-    "test:e2e": "echo 'test:e2e: NO SUITE. ...'",   // #13 placeholder: exits 0 and says no suite ran; #14 onward replaces it with the line below
+    "test:hosting": "bun run --cwd apps/web build --mode emulator && firebase emulators:exec --only hosting --project demo-deepcuts 'bun test hosting-test'",   // #14: headers, cache and rewrite served by the Hosting emulator; rebuilds apps/web/dist in emulator mode
+    "test:e2e": "echo 'test:e2e: NO SUITE. ...'",   // #13 placeholder: exits 0 and says no suite ran; stays a placeholder until Playwright arrives in 5.1 (#45), which replaces it with the line below
     // "test:e2e": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bunx playwright test'",
     "build:functions": "bun run --cwd functions build",             // issue #11
-    "build:web": "bun run --cwd apps/web build",
+    "build:web": "bun run --cwd apps/web build --mode staging",   // #14; apps/web's `build` is plain `vite build`, so a mode is always passed (production waits for .env.production, M8)
     "dev": "firebase emulators:start --project demo-deepcuts"
   }
 }
@@ -187,7 +189,7 @@ The Firebase CLI uploads the `source` directory and runs `npm install` in Cloud 
 - P7. The bundle loads and registers its functions under Node 22 with no Bun present on `PATH` (the CI integration job removes Bun from `PATH` after building).
 - Pinning: direct deps are exact; transitive deps are fixed by the committed-per-build `dist/package-lock.json`. The lockfile is generated, not committed; two builds a day apart can differ in transitive versions. Decision: accept this for v1 and upgrade to committing `functions/package-lock.json` copied into `dist` if it ever bites (see Open questions).
 
-`firebase.json` (only the `functions` block exists so far, from issue #11; the Firestore, Hosting and emulator blocks arrive with #12 to #14; `bun test functions/scripts` asserts the functions block):
+`firebase.json` (the `functions` block is from issue #11, the emulators from #12 and #13, and the Hosting block and Hosting emulator from #14; `bun test functions/scripts` asserts the functions, hosting and emulators blocks; the Firestore block arrives with #32):
 
 ```json
 {
@@ -210,14 +212,14 @@ The Firebase CLI uploads the `source` directory and runs `npm install` in Cloud 
   },
   "emulators": {
     "auth": { "port": 9099 }, "functions": { "port": 5001 }, "firestore": { "port": 8080 },
-    "hosting": { "port": 5000 }, "ui": { "enabled": true, "port": 4000 }, "singleProjectMode": true
+    "hosting": { "port": 5002 }, "ui": { "enabled": true, "port": 4000 }, "singleProjectMode": true
   }
 }
 ```
 
 `.firebaserc`: `{ "projects": { "default": "deepcuts-staging", "staging": "deepcuts-staging", "prod": "deepcuts-prod" } }`. Deploys always pass `--project` explicitly in CI; the default is for humans and is never `prod`.
 
-The `Referrer-Policy: no-referrer` header keeps the rejoin URL (and any path carrying a game id) from leaking in `Referer` (LLD 4, LLD 7 conflict 12); the SPA rewrite must exclude `/__/` (Firebase Auth helper paths). The service worker is the single `/sw.js` (vite-plugin-pwa `injectManifest`), which also handles FCM background messages; there is no `/firebase-messaging-sw.js`.
+The `Referrer-Policy: no-referrer` header keeps the rejoin URL (and any path carrying a game id) from leaking in `Referer` (LLD 4, LLD 7 conflict 12). The SPA rewrite needs no `/__/` exclusion: `/__/*` (Firebase Auth helper paths) is a reserved Hosting namespace that wins over rewrites, shown on the Hosting emulator in #14 (`hosting-test`) and confirmed on live Hosting in #17. The Hosting emulator port is 5002, not Firebase's default 5000, because macOS AirPlay Receiver listens on 5000. The service worker is the single `/sw.js` (vite-plugin-pwa `injectManifest`), which also handles FCM background messages; there is no `/firebase-messaging-sw.js`.
 
 The Functions emulator reads `source` from `firebase.json`, so it runs the same `functions/dist` bundle that deploys (P9). A `--no-install`-style shortcut does not exist: `build:functions` is a prerequisite of every emulator script.
 
@@ -302,7 +304,7 @@ export default [
 - P21. `functions/src/store/**` imports no Auth, FCM, identity or notify module and uses neither `fetch` nor `Math.random` (ST2); `functions/src/notify/**` uses no `Date.now()` or `new Date()` (T3); `functions/src/notify/sweep.ts` imports neither the Engine nor any Store module, except the names `listWaitingOn` and `runCommand` from the store index (T1; enforced by name with `allowImportNames`, and probed against `../store`, `../store/index.js` and `@dc/engine/sub`). Enforced by the lint blocks above; ST2 and T3 also keep their own tests in LLDs 3 and 6. Because flat config replaces (does not merge) a rule key set again by a later matching block, the Store and sweep blocks re-include the base `functions/src` options (`FN_IMPORT_PATTERNS`, `FN_IMPORT_PATHS`, `FN_GLOBALS`), so the `onCall`/`onRequest` import ban (P12) and the Bun ban (P7) still apply inside `functions/src/store` and `functions/src/notify/sweep.ts`. The fixture suite in `lint-test/` (`bun run test:lint`) asserts that an `onCall` import, a `bun:*` import and a `Bun` global in a Store file and in `sweep.ts` are all reported, and that each block fires and stays quiet where it should (issue #10).
 - P7 (lint half). `Bun`, `bun`, `bun:*` appear in no shipped code (`packages/*/src`, `functions/src`, `apps/web/src`). `bun:test` imports are allowed only in `*.test.ts`, `functions/test-integration`, `rules-test`. Build and ops scripts (`functions/scripts`, `scripts`) may use `Bun.*`. `api/callable.ts` is exempt only from the `onCall`/`onRequest` import ban (P12), not from the Bun ban; it has its own block.
 - Warnings are errors (`--max-warnings 0`; unused `eslint-disable` directives are warnings). Type-aware rules enabled: `no-floating-promises`, `no-misused-promises`, `consistent-type-imports`. `*.test.ts` files are exempt from the per-package import and global bans (they run under Bun); the type-aware rules still apply to them.
-- `parserOptions.project` lists the tsconfigs that exist (packages, functions, web, `lint-test`). A step that adds TypeScript outside them (`functions/scripts`, `apps/web/vite.config.ts`, `rules-test`, `e2e`, repo-level `scripts`) adds a tsconfig for it and lists it in the same change, or `bun run lint` fails on that file. The clock and entropy bans are member selectors, so aliasing (`const f = Date.now`) is caught; `globalThis.Date.now()` is not (the engine bans no such receiver, and typecheck isolation covers `window`).
+- `parserOptions.project` lists the tsconfigs that exist (packages, functions, web including `apps/web/tsconfig.node.json` for `vite.config.ts`, `lint-test`, `rules-test`, repo-level `scripts`, `hosting-test`). A step that adds TypeScript outside them (`functions/scripts`, `apps/web/vite.config.ts`, `rules-test`, `e2e`, repo-level `scripts`) adds a tsconfig for it and lists it in the same change, or `bun run lint` fails on that file. The clock and entropy bans are member selectors, so aliasing (`const f = Date.now`) is caught; `globalThis.Date.now()` is not (the engine bans no such receiver, and typecheck isolation covers `window`).
 - Policy tests (`lint-test/`, `bun run test:lint`): feed snippets under virtual file paths to the real `eslint.config.js` (`ESLint.lintText`) and to `tsc -p` on throwaway configs that extend the package configs, and assert each forbidden construct is reported and each permitted one is not. P5's `package.json` dependency check lives there too (`lint-test/engine-deps.ts`).
 
 **TypeScript.** One strict base, per-package `lib` and `types` so the compiler also enforces isolation (an engine file that touches `process` or `setTimeout` fails typecheck, not only lint).
@@ -337,7 +339,9 @@ export default [
 | Web unit (happy-dom, Testing Library) | `bun run test:web` | Bun, separate process so `happy-dom` globals never reach engine or functions tests | every PR |
 | Rules | `bun run test:rules` | Firestore emulator (needs Java; developed on a newer JDK, CI pins 21 in #16). Until #32 the one suite passes inline deny-all rules; `firestore.rules` and the P10 checks are #32 | every PR |
 | Function integration | `bun run test:integration` | Auth + Firestore + Functions emulators, **Node bundle** (Firestore added in #13; needs Java; one Admin SDK write and read, real collections from #32) | every PR |
-| End to end (Playwright, chromium) | `bun run test:e2e` (a placeholder that exits 0 and prints "NO SUITE" until #14 onward) | Same emulators, `vite preview` built with `--mode emulator` (`apps/web/.env.emulator`) | every PR |
+| Hosting config (headers, cache, SPA rewrite, `/__/`) | `bun run test:hosting` | Hosting emulator serving an `--mode emulator` build of `apps/web/dist` | not in CI until #16 adds it |
+| Web build and size (`vite build` per mode, App Check token guard, `check-web-size`) | `bun test scripts` (in `bun run test`) | Bun, runs `vite build` into temp dirs | every PR |
+| End to end (Playwright, chromium) | `bun run test:e2e` (a placeholder that exits 0 and prints "NO SUITE" until Playwright arrives in 5.1, #45) | Same emulators, `vite preview` built with `--mode emulator` (`apps/web/.env.emulator`) | every PR |
 | Post-deploy smoke | `bun scripts/smoke.ts` | Real staging or prod | after each deploy |
 
 - P9. Integration and e2e suites run against `functions/dist/index.cjs` through the Functions emulator, never against `functions/src` imported under Bun. `test:integration` rebuilds the bundle first, and the CI job runs it under Node with Bun absent from `PATH` for the emulator process (the test runner itself is Bun). This is the control for the "Bun-built functions deployed to Node" risk in tech-stack section 10.

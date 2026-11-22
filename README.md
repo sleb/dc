@@ -19,9 +19,12 @@ bun run test:lint               # just the policy tests (they prove each lint an
 bun run test:web                # web tests under happy-dom, in a separate process
 bun run test:rules              # Firestore emulator; inline deny-all rules until #32
 bun run test:integration        # rebuild the bundle, run the Auth, Firestore and Functions emulators against it (ping, diag, Admin write/read)
-bun run test:e2e                # placeholder: prints "NO SUITE" and exits 0 until Playwright lands (#14 onward)
+bun run test:hosting            # build apps/web in emulator mode, serve it on the Hosting emulator, assert headers, cache and the SPA rewrite
+bun run test:e2e                # placeholder: prints "NO SUITE" and exits 0 until Playwright lands (5.1, #45)
 FC_SEED=<n> bun run test        # replay a failed property test; the seed is printed on failure
 bun run build:functions         # bundle functions into functions/dist and check the bundle (see functions/README.md)
+bun run build:web               # vite build --mode staging into apps/web/dist (see apps/web/README.md)
+bun scripts/check-web-size.ts   # gzip budgets for the built apps/web/dist (run build:web first)
 ```
 
 Dependencies are the latest stable at the time they were added, exact-pinned (`bunfig.toml` sets `exact = true`); `bun.lock` is committed.
@@ -33,8 +36,9 @@ Dependencies are the latest stable at the time they were added, exact-pinned (`b
 | `packages/contracts` | `@dc/contracts` | zod schemas and types; imports no other workspace package |
 | `packages/engine` | `@dc/engine` | pure game core; depends only on `@dc/contracts` |
 | `functions` | `@dc/functions` | Cloud Functions; `functions/scripts` builds the deployable bundle (see `functions/README.md`) |
-| `apps/web` | `@dc/web` | React client; imports only `@dc/contracts` |
+| `apps/web` | `@dc/web` | React client (Vite, Tailwind 4); imports only `@dc/contracts` (see `apps/web/README.md`) |
 | `lint-test` | | tests for the lint and compiler policy |
-| `scripts` | | environment provisioning and verification (see `scripts/README.md`) |
+| `scripts` | | environment provisioning and verification, and `check-web-size.ts` (see `scripts/README.md`) |
+| `hosting-test` | | bun tests that run against the Hosting emulator (`bun run test:hosting`) |
 
 The dependency direction and the lint rules that enforce it are in LLD 0 sections 3 and 5.
