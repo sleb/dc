@@ -72,6 +72,10 @@ describe("C1 triggers and ref", () => {
     expect(deployRef).toContain("workflow_dispatch");
     expect(deployRef).toContain("inputs.ref");
     expect(deployRef).toContain("github.ref");
+    // A branch push builds the pushed commit in every job, not whatever the branch points at when the job starts.
+    expect(deployRef).toContain("github.sha");
+    expect(deployRef).toContain("github.event_name == 'push'");
+    expect(deployRef).toContain("startsWith(github.ref, 'refs/heads/')");
     const checkouts = jobNames.flatMap((n) => steps(n).filter((s) => s.uses?.startsWith("actions/checkout@")).map((s) => ({ n, s })));
     expect(checkouts.length).toBeGreaterThanOrEqual(5);
     for (const { n, s } of checkouts) expect([n, s.with?.["ref"]]).toEqual([n, "${{ env.DEPLOY_REF }}"]);

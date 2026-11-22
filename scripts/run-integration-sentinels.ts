@@ -22,18 +22,23 @@ export async function runHarness(o: HarnessOptions): Promise<{ code: number; hit
   const report = o.report ?? ((s: string) => void process.stderr.write(`${s}\n`));
   for (const f of o.extraLogs) await rm(f, { force: true });
   const proc = Bun.spawn(o.command, { ...(o.cwd ? { cwd: o.cwd } : {}), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  let captured = "";
-  const pump = async (stream: ReadableStream<Uint8Array>) => {
+  // One buffer per stream: interleaved chunks of the two streams must not split a sentinel in a shared buffer.
+  const buffers = { stdout: "", stderr: "" };
+  const pump = async (stream: ReadableStream<Uint8Array>, name: keyof typeof buffers) => {
     const decoder = new TextDecoder();
     for await (const chunk of stream) {
       const s = decoder.decode(chunk, { stream: true });
-      captured += s;
+      buffers[name] += s;
       out(s);
     }
   };
-  await Promise.all([pump(proc.stdout), pump(proc.stderr)]);
+  await Promise.all([pump(proc.stdout, "stdout"), pump(proc.stderr, "stderr")]);
   const exit = await proc.exited;
-  const hits = [...findSentinels(captured, "<command output>"), ...(await scanFiles(o.extraLogs))];
+  const hits = [
+    ...findSentinels(buffers.stdout, "<command stdout>"),
+    ...findSentinels(buffers.stderr, "<command stderr>"),
+    ...(await scanFiles(o.extraLogs)),
+  ];
   for (const h of hits) report(formatHit(h));
   const code = exit !== 0 ? exit : hits.length > 0 ? 1 : 0;
   return { code, hits };

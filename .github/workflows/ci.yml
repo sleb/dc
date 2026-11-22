@@ -15,8 +15,9 @@ on:
         type: string
 
 env:
-  # Every checkout uses this ref: the dispatched tag, or the pushed ref / pull request merge ref.
-  DEPLOY_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.ref) || github.ref }}
+  # Every checkout uses this ref: the dispatched tag; the pushed commit for a branch push (github.sha, so every job builds
+  # the commit verify and emulator ran on even if main has moved); otherwise github.ref (a pushed tag, the PR merge ref).
+  DEPLOY_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.ref) || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && github.sha) || github.ref }}
 
 concurrency:
   group: ci-${{ inputs.ref || github.ref }}
@@ -127,7 +128,7 @@ jobs:
         run: |
           marker='<!-- dc-preview -->'
           body="$marker"$'\n'"Preview: $URL"$'\n'"(staging backend as on main; expires in 7 days)"
-          id="$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n 1)"
+          id="$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.body | startswith(\"$marker\")) | .id] | first // empty")"
           if [ -n "$id" ]; then
             gh api --method PATCH "repos/$REPO/issues/comments/$id" -f body="$body" > /dev/null
           else

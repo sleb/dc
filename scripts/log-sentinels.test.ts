@@ -85,3 +85,10 @@ test("L1j the harness output never contains the sentinel it found", async () => 
   expect(reports.length).toBe(1);
   expect(reports[0]).not.toContain("leak");
 });
+
+test("L1k a sentinel split across chunks of one stream is found even when the other stream writes in between", async () => {
+  const cmd = `printf 'NAME-SENT'; sleep 0.3; echo noise >&2; sleep 0.3; printf 'INEL-split\\n'`;
+  const r = await runHarness({ command: ["sh", "-c", cmd], extraLogs: [], out: quiet });
+  expect(r.code).toBe(1);
+  expect(r.hits.length).toBe(1);
+});
