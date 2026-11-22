@@ -10,6 +10,7 @@ const PROJECT = "deepcuts-staging";
 const TOKEN = "debug-token-sentinel-1";
 const MINTED = "minted-debug-token-sentinel-2";
 const CUSTOM = "custom-token-sentinel-3";
+const APP_CHECK = "app-check-token-sentinel-4";
 const PROBE_UID = "seat:probe:probe";
 
 type Options = {
@@ -19,14 +20,16 @@ type Options = {
   diag?: CallResult;
   uid?: string;
   minted?: string;
+  appCheckToken?: string;
   registerError?: Error;
+  exchangeError?: Error;
   signInError?: Error;
   deleteUserError?: Error;
   deleteTokenError?: Error;
 };
 
 function harness(o: Options = {}) {
-  const rec = { calls: [] as string[], registered: [] as string[], tokenDeletes: 0, signIns: [] as string[], userDeletes: 0, lines: [] as string[] };
+  const rec = { calls: [] as string[], registered: [] as string[], exchanges: [] as string[], tokenDeletes: 0, signIns: [] as string[], userDeletes: 0, lines: [] as string[] };
   const ok = (result: unknown): CallResult => ({ ok: true, result });
   const deps: Partial<SmokeDeps> = {
     env: o.env ?? { APPCHECK_DEBUG_TOKEN: TOKEN },
@@ -45,14 +48,20 @@ function harness(o: Options = {}) {
         rec.calls.push("unregister");
       };
     },
+    exchangeDebugToken: async (debugToken) => {
+      rec.exchanges.push(debugToken);
+      if (o.exchangeError) throw o.exchangeError;
+      return o.appCheckToken ?? APP_CHECK;
+    },
     call: async (name, appCheckToken) => {
       rec.calls.push(appCheckToken === undefined ? `${name}:no-token` : `${name}:token`);
+      if (appCheckToken !== undefined && appCheckToken !== (o.appCheckToken ?? APP_CHECK)) throw new Error(`call sent App Check token ${appCheckToken}`);
       if (name === "ping") return appCheckToken === undefined ? (o.noToken ?? { ok: false, status: 401, code: "unauthenticated" }) : (o.ping ?? ok({ ok: true, node: "v22.23.2" }));
       return o.diag ?? ok({ ok: true, token: CUSTOM });
     },
     signInWithCustomToken: async (customToken, appCheckToken) => {
       rec.signIns.push(customToken);
-      if (appCheckToken !== TOKEN && appCheckToken !== MINTED) throw new Error(`sign-in sent App Check token ${appCheckToken}`);
+      if (appCheckToken !== (o.appCheckToken ?? APP_CHECK)) throw new Error(`sign-in sent App Check token ${appCheckToken}`);
       if (o.signInError) throw o.signInError;
       return o.uid ?? PROBE_UID;
     },
@@ -129,6 +138,18 @@ test("V6 the minted token is deleted even when a check fails", async () => {
   expect(rec.tokenDeletes).toBe(1);
 });
 
+test("V6 the debug token is exchanged for an App Check token before any call, and the exchange failure fails the run", async () => {
+  const { deps, rec } = harness({ env: {} });
+  expect(await smoke({ project: PROJECT, deps })).toEqual({ ok: true, reasons: [] });
+  expect(rec.exchanges).toEqual([MINTED]);
+
+  const failed = harness({ exchangeError: new Error("INVALID_DEBUG_TOKEN") });
+  const out = await smoke({ project: PROJECT, deps: failed.deps });
+  expect(out.ok).toBe(false);
+  expect(out.reasons.join(" ")).toContain("INVALID_DEBUG_TOKEN");
+  expect(failed.rec.calls).not.toContain("ping:token");
+});
+
 test("V6 a registration failure names the fallback and fails before any call", async () => {
   const { deps, rec } = harness({ env: {}, registerError: new Error("PERMISSION_DENIED: appcheck.debugTokens.create") });
   const out = await smoke({ project: PROJECT, deps });
@@ -150,7 +171,7 @@ test("V6 no token value is ever printed", async () => {
     const { deps, rec } = harness({ env });
     await smoke({ project: PROJECT, diag: true, deps });
     const printed = rec.lines.join("\n");
-    for (const secret of [TOKEN, MINTED, CUSTOM]) expect(printed).not.toContain(secret);
+    for (const secret of [TOKEN, MINTED, CUSTOM, APP_CHECK]) expect(printed).not.toContain(secret);
     expect(printed).toContain(PROBE_UID);
   }
 });

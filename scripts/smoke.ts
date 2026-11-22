@@ -17,6 +17,7 @@ import { join } from "node:path";
 const REGION = "us-central1";
 const PROBE_UID = "seat:probe:probe";
 const APPCHECK_API = "https://firebaseappcheck.googleapis.com/v1";
+const FIREBASE_API = "https://firebase.googleapis.com/v1beta1";
 const IDENTITY_API = "https://identitytoolkit.googleapis.com/v1";
 const ROOT = join(import.meta.dir, "..");
 /** The two codes a callable with `enforceAppCheck` can answer a tokenless request with (LLD 0 section 6). */
@@ -32,6 +33,8 @@ export interface SmokeDeps {
   mintToken: () => string;
   /** Registers a newly minted debug token; resolves to the function that deletes it. */
   registerDebugToken: (token: string) => Promise<() => Promise<void>>;
+  /** Exchanges a debug token for a real App Check token (the JWT the callables and Auth verify). */
+  exchangeDebugToken: (debugToken: string) => Promise<string>;
   signInWithCustomToken: (customToken: string, appCheckToken: string) => Promise<string>;
   deleteSignedInUser: () => Promise<void>;
   log: (line: string) => void;
@@ -52,10 +55,10 @@ const message = (e: unknown): string => (e instanceof Error ? e.message : String
 /** Messages can come back from Google with the value we sent; redact it before it is printed. */
 const redact = (e: unknown, ...values: string[]): string => values.reduce((text, value) => (value ? text.replaceAll(value, "<redacted>") : text), message(e));
 
-async function checkPing(d: SmokeDeps, token: string, reasons: string[]): Promise<void> {
-  const ping = await d.call("ping", token);
+async function checkPing(d: SmokeDeps, appCheckToken: string, reasons: string[]): Promise<void> {
+  const ping = await d.call("ping", appCheckToken);
   if (!ping.ok) {
-    reasons.push(`ping with an App Check token failed: ${ping.code} (HTTP ${ping.status})`);
+    reasons.push(`ping with an App Check token failed: ${ping.code} (HTTP ${ping.status}); a valid App Check token from the debug-token exchange must be accepted`);
   } else {
     const { ok, node } = objectOf(ping.result);
     if (ok !== true) reasons.push(`ping did not return ok: true (got ${JSON.stringify(ping.result)})`);
@@ -69,8 +72,8 @@ async function checkPing(d: SmokeDeps, token: string, reasons: string[]): Promis
   else d.log(`no App Check token: rejected (${noToken.code})`);
 }
 
-async function checkDiag(d: SmokeDeps, token: string, reasons: string[]): Promise<void> {
-  const diag = await d.call("diag", token);
+async function checkDiag(d: SmokeDeps, appCheckToken: string, reasons: string[]): Promise<void> {
+  const diag = await d.call("diag", appCheckToken);
   if (!diag.ok) {
     reasons.push(`diag failed: ${diag.code} (HTTP ${diag.status}); if it is a signBlob denial, fn-runtime is missing the self-grant of roles/iam.serviceAccountTokenCreator`);
     return;
@@ -82,7 +85,7 @@ async function checkDiag(d: SmokeDeps, token: string, reasons: string[]): Promis
   }
   let uid: string;
   try {
-    uid = await d.signInWithCustomToken(customToken, token);
+    uid = await d.signInWithCustomToken(customToken, appCheckToken);
   } catch (e) {
     reasons.push(`signInWithCustomToken failed: ${redact(e, customToken)}`);
     return;
@@ -105,13 +108,13 @@ export async function smoke(o: SmokeOptions): Promise<SmokeOutcome> {
   const reasons: string[] = [];
   const out = o.diag === true;
 
-  let token = (d.env["APPCHECK_DEBUG_TOKEN"] ?? "").trim();
+  let debugToken = (d.env["APPCHECK_DEBUG_TOKEN"] ?? "").trim();
   let release: (() => Promise<void>) | undefined;
-  if (!token) {
+  if (!debugToken) {
     const minted = d.mintToken();
     try {
       release = await d.registerDebugToken(minted);
-      token = minted;
+      debugToken = minted;
       d.log("App Check debug token: registered for this run");
     } catch (e) {
       reasons.push(
@@ -120,10 +123,21 @@ export async function smoke(o: SmokeOptions): Promise<SmokeOutcome> {
     }
   }
 
+  // The callables and Auth verify a real App Check JWT (firebase-admin requires RS256 claims), so the debug token is
+  // exchanged first; sending the debug token itself is rejected with `unauthenticated` (observed on staging, #15).
+  let appCheckToken = "";
+  if (reasons.length === 0) {
+    try {
+      appCheckToken = await d.exchangeDebugToken(debugToken);
+    } catch (e) {
+      reasons.push(`could not exchange the App Check debug token for an App Check token (${redact(e, debugToken)})`);
+    }
+  }
+
   try {
     if (reasons.length === 0) {
-      await checkPing(d, token, reasons);
-      if (out) await checkDiag(d, token, reasons);
+      await checkPing(d, appCheckToken, reasons);
+      if (out) await checkDiag(d, appCheckToken, reasons);
     }
   } finally {
     if (release) {
@@ -195,14 +209,41 @@ async function appCheckAdminHeaders(project: string): Promise<Record<string, str
   return { Authorization: `Bearer ${await adcToken()}`, "x-goog-user-project": project };
 }
 
+/** The registered web app's App Check app id. The App Check API has no app list; the Firebase management API has one. */
+function webAppId(project: string): Promise<string> {
+  return appCheckAdminHeaders(project)
+    .then((headers) => request(`${FIREBASE_API}/projects/${project}/webApps`, { headers }))
+    .then((web) => {
+      const appId = stringOf(objectOf(Array.isArray(web["apps"]) ? web["apps"][0] : undefined)["appId"]);
+      if (!appId) throw new Error(`project ${project} has no registered web app to attach an App Check debug token to`);
+      return appId;
+    });
+}
+
+function exchangeDebugToken(project: string): SmokeDeps["exchangeDebugToken"] {
+  return async (debugToken) => {
+    try {
+      const appId = await webAppId(project);
+      const key = await webApiKey(project);
+      const body = await request(`${APPCHECK_API}/projects/${project}/apps/${appId}:exchangeDebugToken?key=${key}`, {
+        method: "POST",
+        body: { debugToken },
+      });
+      const token = stringOf(body["token"]);
+      if (!token) throw new Error("App Check returned no token for the debug token");
+      return token;
+    } catch (e) {
+      throw new Error(redact(e, debugToken));
+    }
+  };
+}
+
 function registerDebugToken(project: string): SmokeDeps["registerDebugToken"] {
   return async (debugToken) => {
     try {
       const headers = await appCheckAdminHeaders(project);
-      const apps = await request(`${APPCHECK_API}/projects/${project}/apps`, { headers });
-      const appName = stringOf(objectOf(Array.isArray(apps["apps"]) ? apps["apps"][0] : undefined)["name"]);
-      if (!appName) throw new Error(`project ${project} has no App Check app to register a debug token on`);
-      const created = await request(`${APPCHECK_API}/${appName}/debugTokens`, {
+      const appId = await webAppId(project);
+      const created = await request(`${APPCHECK_API}/projects/${project}/apps/${appId}/debugTokens`, {
         method: "POST",
         headers,
         body: { displayName: `smoke-${new Date().toISOString()}`, token: debugToken },
@@ -249,8 +290,17 @@ function identityCalls(project: string): Pick<SmokeDeps, "signInWithCustomToken"
         throw new Error(redact(e, customToken, token));
       });
       idToken = stringOf(body["idToken"]);
-      const uid = stringOf(body["localId"]);
-      if (!uid || !idToken) throw new Error("signInWithCustomToken returned no localId or idToken");
+      if (!idToken) throw new Error("signInWithCustomToken returned no idToken");
+      // This endpoint omits `localId` on staging (observed, #15), so the uid is read back server-side with accounts:lookup.
+      const localId = stringOf(body["localId"]);
+      if (localId) return localId;
+      const lookup = await request(`${IDENTITY_API}/accounts:lookup?key=${apiKey}`, {
+        method: "POST",
+        headers: { "X-Firebase-AppCheck": token },
+        body: { idToken },
+      });
+      const uid = stringOf(objectOf(Array.isArray(lookup["users"]) ? lookup["users"][0] : undefined)["localId"]);
+      if (!uid) throw new Error("could not read the signed-in user's uid");
       return uid;
     },
     deleteSignedInUser: async () => {
@@ -272,6 +322,7 @@ export function realDeps(project: string): SmokeDeps {
     call: callCallable(project),
     mintToken: () => randomUUID(),
     registerDebugToken: registerDebugToken(project),
+    exchangeDebugToken: exchangeDebugToken(project),
     ...identityCalls(project),
     log: (line) => console.log(line),
   };
