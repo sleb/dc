@@ -5,9 +5,11 @@
 #   scripts/verify-staging.sh            # exits 0 only if every check passes
 #   PROJECT=deepcuts-prod ...            # same checks against another project (see scripts/README.md)
 #
-# Needs: gcloud (logged in), firebase, gh, jq, curl, gitleaks.
+# Needs: gcloud (logged in), firebase, gh, jq, curl, betterleaks.
 
 set -uo pipefail
+export CLOUDSDK_CORE_DISABLE_PROMPTS=1  # a prompt must fail the check, never hang it
+exec </dev/null
 
 PROJECT="${PROJECT:-deepcuts-staging}"
 REPO="${REPO:-sleb/dc}"
@@ -135,7 +137,7 @@ v2() {
   local acct budgets match
   acct="$(gcloud billing projects describe "$PROJECT" --format='value(billingAccountName)' 2>/dev/null | sed 's#billingAccounts/##')"
   [ -n "$acct" ] || { bad "no billing account attached, cannot look up budgets"; return 0; }
-  budgets="$(gcloud billing budgets list --billing-account "$acct" --format=json 2>/dev/null)"
+  budgets="$(gcloud billing budgets list --billing-project="$PROJECT" --billing-account "$acct" --format=json 2>/dev/null)"
   match="$(echo "$budgets" | jqr --arg p "projects/$(project_number)" \
     '[.[]? | select(.budgetFilter.projects // [] | index($p))] | .[0] // empty')"
   [ -n "$match" ] || { bad "no budget scoped to $PROJECT on billing account $acct"; return 0; }
@@ -144,8 +146,8 @@ v2() {
   cur="$(echo "$match" | jqr '.amount.specifiedAmount.currencyCode // empty')"
   [ "$amt" = "$BUDGET_AMOUNT" ] && [ "$cur" = "USD" ] || bad "budget amount is '${amt} ${cur}', want ${BUDGET_AMOUNT} USD"
   local got want
-  got="$(echo "$match" | jqr '[.thresholdRules[]?.thresholdPercent] | sort | map(tostring) | join(" ")')"
-  want="$(printf '%s\n' $BUDGET_THRESHOLDS | sort -n | tr '\n' ' ' | sed 's/ $//')"
+  got="$(echo "$match" | jqr '[.thresholdRules[]?.thresholdPercent | tonumber * 100 | round] | sort | map(tostring) | join(" ")')"
+  want="$(printf '%s\n' $BUDGET_THRESHOLDS | awk '{printf "%d\n", $1 * 100 + 0.5}' | sort -n | tr '\n' ' ' | sed 's/ $//')"
   [ "$got" = "$want" ] || bad "budget thresholds are [$got], want [$want]"
 }
 
@@ -163,7 +165,7 @@ v3() {
 v4() {
   need_project || return 0
   local fields g state
-  fields="$(gcloud firestore fields list --filter='ttlConfig:*' --project "$PROJECT" --format=json 2>/dev/null)"
+  fields="$(gcloud firestore fields ttls list --project "$PROJECT" --format=json 2>/dev/null)"
   [ -n "$fields" ] || { bad "could not list Firestore fields (is Firestore created?)"; return 0; }
   for g in $TTL_GROUPS; do
     state="$(echo "$fields" | jqr --arg g "$g" \
@@ -188,7 +190,7 @@ v6() {
   cfg="$(api "https://identitytoolkit.googleapis.com/admin/v2/projects/$PROJECT/config")"
   [ "$(echo "$cfg" | jqr '.name // empty')" != "" ] || { bad "Identity Platform config unreadable (not upgraded?): $(echo "$cfg" | jqr '.error.message // "no response"')"; return 0; }
   [ "$(echo "$cfg" | jqr '.signIn.email.enabled')" = "true" ] || bad "Email sign-in is not enabled"
-  [ "$(echo "$cfg" | jqr '.signIn.email.passwordRequired')" = "false" ] || bad "Email sign-in must be email link (passwordRequired=false)"
+  [ "$(echo "$cfg" | jqr '.signIn.email.passwordRequired // false')" = "false" ] || bad "Email sign-in must be email link (passwordRequired=false)"
   [ "$(echo "$cfg" | jqr '.signIn.anonymous.enabled')" = "true" ] || bad "Anonymous sign-in is not enabled"
   [ "$(echo "$cfg" | jqr '.signIn.phoneNumber.enabled // false')" = "false" ] || bad "Phone sign-in must stay off"
   [ "$(echo "$cfg" | jqr '.autodeleteAnonymousUsers // false')" = "true" ] || bad "Anonymous-account auto-cleanup is not enabled"
@@ -319,8 +321,10 @@ v12() {
 }
 
 v13() {
-  have gitleaks || { bad "gitleaks is not installed"; return 0; }
-  (cd "$ROOT" && gitleaks detect --source . --no-banner --redact >/dev/null 2>&1) || bad "gitleaks found a leak in the repository history or tree"
+  have betterleaks || { bad "betterleaks is not installed (brew install betterleaks)"; return 0; }
+  # No --validate: detection only, no requests to credential providers.
+  (cd "$ROOT" && betterleaks git -c .betterleaks.toml --no-banner --redact . >/dev/null 2>&1) || bad "betterleaks found a leak in the git history"
+  (cd "$ROOT" && betterleaks dir -c .betterleaks.toml --no-banner --redact . >/dev/null 2>&1) || bad "betterleaks found a leak in the working tree"
 }
 
 v14() {
@@ -346,7 +350,7 @@ check V9  "No user-managed service account keys" v9
 check V10 "WIF pool/provider restricted to repo, staging environment and variables" v10
 check V11 "Secrets exist and only fn-runtime reads; APPCHECK_DEBUG_TOKEN in env" v11
 check V12 "Committed config files have the required keys" v12
-check V13 "No secret value committed (gitleaks)" v13
+check V13 "No secret value committed (betterleaks)" v13
 check V14 "Default Hosting site exists" v14
 
 echo
