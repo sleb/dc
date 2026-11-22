@@ -5,6 +5,7 @@ A Bun workspace: a pure game engine, shared contracts, Firebase Cloud Functions 
 ## Prerequisites
 
 - [Bun](https://bun.sh), the version in `.bun-version`
+- `firebase-tools` 15.37.0 (a devDependency, run as `bunx firebase` or through the scripts; needs no Java until the Firestore emulator joins in #13)
 - Node 22 and npm (the Functions runtime; `build:functions` runs `npm install` in `functions/dist`; developed with Node 22.23 and npm 10.9)
 
 ## Setup and checks
@@ -14,7 +15,8 @@ bun install --frozen-lockfile   # exact versions from bun.lock
 bun run lint                    # ESLint, warnings are errors
 bun run typecheck               # tsc for every package, every test config and lint-test
 bun run test:lint               # policy tests: prove each lint and tsconfig rule fires (and stays quiet where it should)
-bun test functions/scripts      # tests for the functions build and check-bundle scripts
+bun test functions/src functions/scripts   # functions unit tests, plus the build and check-bundle script tests
+bun run test:integration        # rebuild the bundle, run the Auth and Functions emulators against it (ping, diag)
 bun run build:functions         # bundle functions into functions/dist and check the bundle (see functions/README.md)
 ```
 

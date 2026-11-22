@@ -23,7 +23,25 @@ bun scripts/check-bundle.ts
 
 Fails unless `dist/index.cjs` has no `bun:`, `Bun.` or `@dc/`, every `require`, `__require` and dynamic `import` target is a Node builtin or a `dist` dependency, and the bundle loads under Node and exports exactly the names in `exports.json` (in both directions). Add a function's name to `exports.json` in the same change that exports it. It runs `node` (must be major 22) from `PATH` with a minimal environment; to prove the bundle needs no Bun, run it with Bun removed from `PATH` (CI does, #16).
 
+## Callables
+
+`src/api/callable.ts` is the only module that imports `onCall`. `defineCallable({ name, allow, runtime, handler })` builds a callable with region `us-central1`, service account `fn-runtime`, `enforceAppCheck: true`, `consumeAppCheckToken: false` and the given runtime shape (`RT.command`: 256MiB, cpu 1, concurrency 80, `minInstances` from the `COMMAND_MIN_INSTANCES` param, default 0), records it in `REGISTRY`, checks that the request is authenticated unless `allow` has `guest`, and logs one `api.done` line (`src/log.ts`, the typed logger). A handler that throws anything other than an `HttpsError` reaches the client as `internal` with a fixed message. This is the minimal wrapper of issue #12; #38 completes the pipeline (LLD 5 section 4).
+
+Every export in `src/index.ts` is also listed in `exports.json`. Current exports, both throwaway probes (`diag` is removed in #15):
+
+- `ping` returns `{ ok: true, node }` (`node` is `process.version`).
+- `diag` returns `{ ok: true, token }`, a custom token for uid `seat:probe:probe`. Under the emulator the token is unsigned; real signing (the `signBlob` self-grant) is proven by the staging smoke test.
+
 ## Tests
+
+```sh
+bun test functions/src functions/scripts   # unit and build-script tests
+bun run test:integration                   # from the repo root
+```
+
+`bun test functions` alone also picks up `test-integration/`, which needs the emulators; use the paths above. `test:integration` rebuilds `dist`, starts the Auth and Functions emulators (`firebase emulators:exec`, no Java needed) and runs `test-integration/` against the Node bundle. The emulator does not verify App Check tokens but rejects a call with none, so the tests send a well-formed unsigned token; enforcement itself is proven only by the staging smoke test. The Firestore emulator joins in #13.
+
+### Build script tests
 
 ```sh
 bun test functions/scripts
