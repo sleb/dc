@@ -101,7 +101,7 @@ dc/
     src/index.ts               # exports every deployed function
     src/api/callable.ts        # defineCallable (alias callable): the only module allowed to import onCall (P12)
     src/store/  src/notify/    # lint-isolated trees (ST2, T3; section 5)
-    src/log.ts                 # typed logger (section 9)
+    src/log.ts                 # typed logger (section 9); starts minimal (#12: `api.done` and its fields), #17 extends it
     exports.json               # every deployed function name (check-bundle)
     scripts/build.ts  scripts/check-bundle.ts  # exported functions plus a thin `import.meta.main` CLI; tests in scripts/*.test.ts (fixtures, a fake `npm` on PATH)
     test-integration/          # emulator suites, bun:test, run against dist (P9)
@@ -334,14 +334,14 @@ export default [
 | Functions build scripts (`build`, `check-bundle`; fixtures and a fake `npm`) | `bun test functions/scripts` | Bun | every PR (wired into CI by #13 and #16) |
 | Web unit (happy-dom, Testing Library) | `bun run test:web` | Bun, separate process so `happy-dom` globals never reach engine or functions tests | every PR |
 | Rules | `bun run test:rules` | Firestore emulator | every PR |
-| Function integration | `bun run test:integration` | Auth + Firestore + Functions emulators, **Node bundle** | every PR |
+| Function integration | `bun run test:integration` | Auth + Firestore + Functions emulators, **Node bundle** (Auth and Functions only until #13 adds Firestore, which needs Java) | every PR |
 | End to end (Playwright, chromium) | `bun run test:e2e` | Same emulators, `vite preview` built with `--mode emulator` (`apps/web/.env.emulator`) | every PR |
 | Post-deploy smoke | `bun scripts/smoke.ts` | Real staging or prod | after each deploy |
 
 - P9. Integration and e2e suites run against `functions/dist/index.cjs` through the Functions emulator, never against `functions/src` imported under Bun. `test:integration` rebuilds the bundle first, and the CI job runs it under Node with Bun absent from `PATH` for the emulator process (the test runner itself is Bun). This is the control for the "Bun-built functions deployed to Node" risk in tech-stack section 10.
 - P10. Rules suites cover every denial in tech-stack section 5 (aggregate, drafts, outbox, events, idem, `joinIdem`, `roomCodes`, `pushSubs`, another player's view, `views/spectator` when `enabled` is false) and fail if any of them reads or writes successfully. A CI step lists the collections named in `firestore.rules` and the suites fail if one has no denial test.
 - P11. Tests use deterministic seeds: engine property tests take `FC_SEED` from the environment and print it on failure, so a CI failure is reproducible locally.
-- Emulator specifics. The Firestore emulator needs Java 21 (`actions/setup-java`, temurin); emulator binaries are cached at `~/.cache/firebase/emulators`. Integration tests connect with `FIRESTORE_EMULATOR_HOST` and `FIREBASE_AUTH_EMULATOR_HOST` (set by `emulators:exec`). App Check is not enforced by the Functions emulator, so the integration suite cannot prove enforcement; that is covered by P12 plus the post-deploy smoke test (an unauthenticated-by-App-Check call must be rejected).
+- Emulator specifics. The Firestore emulator needs Java 21 (`actions/setup-java`, temurin); emulator binaries are cached at `~/.cache/firebase/emulators`. Integration tests connect with `FIRESTORE_EMULATOR_HOST` and `FIREBASE_AUTH_EMULATOR_HOST` (set by `emulators:exec`). The Functions emulator runs with `skipTokenVerification`: it does not verify an App Check token, but with `enforceAppCheck: true` it still rejects (`unauthenticated`) a request that carries no `X-Firebase-AppCheck` header (found in issue #12; the emulator is not blind to enforcement, only to token validity). Integration tests therefore attach a well-formed unsigned token through the SDK's `CustomProvider`. The suite cannot prove real enforcement (a forged or expired token is accepted); that is covered by P12 plus the post-deploy smoke test (a call with no App Check token must be rejected).
 - Integration tests are Bun-run `bun:test` files that call the callables over HTTP with the Firebase JS SDK (`connectFunctionsEmulator`), so the real request path (callable protocol, auth context, custom-token rejoin) is exercised. Seeding uses the Admin SDK against the emulator.
 - Clock and randomness in integration: functions read `now` from a single `clock()` in `functions/src` that tests can set through an env var honored only when `FUNCTIONS_EMULATOR === "true"`.
 
@@ -507,7 +507,7 @@ jobs:
 
 Mirrors HLD 4.5 and tech-stack section 9; this LLD fixes the conventions.
 
-**Logger.** `functions/src/log.ts` wraps `firebase-functions/logger` and is the only logging path (lint forbids `console.*` in `functions/src`). It takes a typed field set; unknown keys are a type error and are dropped at runtime.
+**Logger.** `functions/src/log.ts` (minimal since #12: the `api.done` event and the API line fields; #17 adds the rest of the table below) wraps `firebase-functions/logger` and is the only logging path (lint forbids `console.*` in `functions/src`). It takes a typed field set; unknown keys are a type error and are dropped at runtime.
 
 | Field | Meaning |
 |---|---|
@@ -583,7 +583,7 @@ Goal: prove the riskiest seam (Bun monorepo, bundle, Node runtime, IAM custom to
 **B. Local proof (no cloud)**
 8. Scaffold the workspace per section 3 with a minimal `functions/src/index.ts` exporting `ping` and `diag` through `defineCallable`; `ping` returns `{ ok: true, node: process.version }`; `diag` calls `getAuth().createCustomToken("seat:probe:probe")` and returns the token (staging-only, deleted in step 17).
 9. `bun install`, `bun run lint`, `bun run typecheck`, `bun run build:functions` (it prints `build: ok` when `check-bundle` passes; run it twice, the second must not install). Confirm `functions/dist` contains `index.cjs`, `package.json`, `package-lock.json`, `node_modules/firebase-admin`, `.install-ok` and a copy of `.env.deepcuts-staging`.
-10. `bun run test:integration` with a one-test suite calling `ping` through the emulator and asserting `node` starts with `v22`. This proves the Node bundle loads under the emulator. Also run `bun run test:web` and `bun scripts/check-web-size.ts` once the web scaffold exists.
+10. `bun run test:integration` with a one-test suite calling `ping` through the emulator and asserting `node` starts with `v22` (landed in #12 with `diag`; it runs the Auth and Functions emulators only, #13 adds Firestore). This proves the Node bundle loads under the emulator. Also run `bun run test:web` and `bun scripts/check-web-size.ts` once the web scaffold exists.
 
 **C. Deploy**
 11. `firebase login:ci` is not used; authenticate locally with `gcloud auth application-default login` as a project owner for this first run.
@@ -624,7 +624,7 @@ Goal: prove the riskiest seam (Bun monorepo, bundle, Node runtime, IAM custom to
 9. **Dynamic Links.** Email-link sign-in must not depend on Firebase Dynamic Links (shut down). Standard web email-link flow with a `continueUrl` on an authorized domain is assumed; LLD 4 should confirm. **Resolved by LLD 4 (section 3 and its interface table):** SDK email-link flow with `continueUrl` on `APP_ORIGIN`; Identity Platform upgrade added to section 2.
 10. **Wrapper path and name.** **Resolved by LLD 5 section 4.2:** `defineCallable` in `functions/src/api/callable.ts` (`callable` deprecated alias); P12, lint and file tree updated here. LLD 4's `guestOk` option is the spec's `allow` containing `"guest"`; LLD 4 sections 2.2 and 13 now use `allow`.
 11. **Logger field and event set.** **Resolved:** section 9 is the superset of LLD 5 section 9 and LLD 6 section 7.2 plus LLD 3 and LLD 4 events. `outbox.sent` removed. LLD 3's `deletion.stuck` and `store.size.warn` alerts added.
-12. **Runtime options and `beforeEmailSent`.** Open until the first deploy: `cpu: 1` at 256MiB, `concurrency: 80`, `consumeAppCheckToken: false` (LLD 5 conflict 14), and `beforeEmailSent` support in the pinned `firebase-functions` (LLD 5 8.1). If unsupported, `beforeEmailSent` leaves `exports.json` and Identity Platform is still needed for anonymous cleanup.
+12. **Runtime options and `beforeEmailSent`.** Partly answered (issue #12, `firebase-functions` 7.4.0): `cpu: 1` at 256MiB, `concurrency: 80`, `consumeAppCheckToken: false`, `enforceAppCheck: true`, `serviceAccount: "fn-runtime"` (reported as `serviceAccountEmail: "fn-runtime"`, the short name, in the manifest) and a `minInstances` param (`defineInt("COMMAND_MIN_INSTANCES", { default: 0 })`) compile, load in the Functions emulator and appear in each function's `__endpoint`. Deploy acceptance is still open until the first deploy (#15): `cpu: 1` at 256MiB, `concurrency: 80`, `consumeAppCheckToken: false` (LLD 5 conflict 14), and `beforeEmailSent` support in the pinned `firebase-functions` (LLD 5 8.1). If unsupported, `beforeEmailSent` leaves `exports.json` and Identity Platform is still needed for anonymous cleanup.
 13. **Identity Platform cost. Resolved (issue #9).** The upgrade succeeded on `deepcuts-staging` with no console step. Per [Identity Platform pricing](https://cloud.google.com/identity-platform/pricing) the first 50,000 monthly active users are free for Tier 1 providers (Email and Anonymous), and anonymous users are not counted when automatic cleanup is enabled, which it is (V6). No fallback sweep is needed. Phone and MFA are billed per message and are not used.
 14. **`deletionRunner` name. RESOLVED.** `deletionRunner` is assigned here for LLD 3's `onDocumentCreated("deletions/{gameId}")` export; LLD 3 section 6.4 now uses the name and it matches `exports.json`.
 
