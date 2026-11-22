@@ -155,6 +155,18 @@ describe("L3 createGame (7.2)", () => {
     expect(s).toEqual({ ...DEFAULT_SETTINGS, profanity: "off", targetOverride: 4, spectators: { enabled: true, vote: false } });
   });
 
+  test("two created games do not share nested settings objects", () => {
+    const a = accepted(null, CREATE).state.settings;
+    const b = accepted(null, CREATE).state.settings;
+    expect(a.variants).not.toBe(b.variants);
+    expect(a.spectators).not.toBe(b.spectators);
+    (a.variants as { pitch: boolean }).pitch = true;
+    (a.spectators as { enabled: boolean }).enabled = true;
+    expect(b.variants.pitch).toBe(false);
+    expect(b.spectators.enabled).toBe(false);
+    expect(accepted(null, CREATE).state.settings).toEqual(DEFAULT_SETTINGS);
+  });
+
   test("settings out of range, malformed or with an override and no deck are INVALID_ARGUMENT", () => {
     for (const settings of [{ targetOverride: 1 }, { targetOverride: 11 }, { targetOverride: 2.5 }, { profanity: "maybe" }, { variants: { pitch: true } }, { spectators: null }, { writeCountsOverride: { red: 1, green: 1 } }, "x", 5, []]) {
       expect(rejected(null, { ...CREATE, settings })).toStrictEqual({ code: "INVALID_ARGUMENT" });

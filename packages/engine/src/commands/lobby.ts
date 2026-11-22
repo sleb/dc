@@ -14,13 +14,14 @@ const effects = (): Pick<Handled, "draftChanges" | "roundRecords" | "redactEnvel
   ({ draftChanges: [], roundRecords: [], redactEnvelope: false, aggregateChanged: true });
 
 const SETTING_KEYS = ["targetOverride", "profanity", "variants", "spectators", "writeCountsOverride"] as const satisfies readonly (keyof Settings)[];
-const DEFAULT_SETTINGS: Settings = {
+/** A fresh default Settings each call, so no nested object is shared between games. */
+const defaultSettings = (): Settings => ({
   targetOverride: null,
   profanity: "on",
   variants: { pitch: false, writeIn: false, redraw: false, peoplesChoice: false },
   spectators: { enabled: false, vote: false },
   writeCountsOverride: null,
-};
+});
 
 /** A patch that parsed as valid, with undefined-valued keys dropped; null when it is not a valid patch. Unknown keys are ignored. */
 function parsePatch(raw: unknown): Partial<Settings> | null {
@@ -77,7 +78,7 @@ export const createGame: CreateSpec<Of<"createGame">> = {
       totalJoins: 0,
       phase: "LOBBY",
       paused: false,
-      settings: { ...DEFAULT_SETTINGS, ...patch },
+      settings: { ...defaultSettings(), ...patch },
       target: null,
       writeCounts: null,
       cards: {},
