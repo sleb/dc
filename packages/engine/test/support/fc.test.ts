@@ -36,3 +36,18 @@ test("T6d a passing property does not throw", () => {
 test("T6e a non-integer FC_SEED is rejected loudly", () => {
   expect(() => fcParams({ FC_SEED: "abc" })).toThrow("FC_SEED");
 });
+
+test("T6f FC_NUM_RUNS must be a positive integer", () => {
+  for (const bad of ["2k", "-5", "0", "1.5"]) expect(() => fcParams({ FC_SEED: "1", FC_NUM_RUNS: bad })).toThrow("FC_NUM_RUNS");
+});
+
+test("T6g FC_SEED is trimmed, and a blank one means a fresh seed, not 0", () => {
+  expect(fcParams({ FC_SEED: " 7 " }).seed).toBe(7);
+  expect(Number.isInteger(fcParams({ FC_SEED: "  " }).seed)).toBe(true);
+});
+
+test("T6h FC_SEED must fit in 32 bits so the printed seed replays", () => {
+  expect(fcParams({ FC_SEED: "2147483647" }).seed).toBe(2147483647);
+  expect(() => fcParams({ FC_SEED: "2147483648" })).toThrow("FC_SEED");
+  expect(() => fcParams({ FC_SEED: "-2147483649" })).toThrow("FC_SEED");
+});
