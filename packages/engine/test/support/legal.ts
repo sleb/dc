@@ -43,6 +43,25 @@ export const enumerators: Record<string, Enumerator> = {
   leave: (g) => (g.phase !== "LOBBY" ? [] : g.players.filter((p) => p.status === "writing").map((p) => ({ actor: { kind: "user", uid: p.uid } as Actor, cmd: { type: "leave" } as Command }))),
   // removePlayer: the host may remove any seated player from a LOBBY, their own seat included.
   removePlayer: (g) => (g.phase !== "LOBBY" ? [] : g.players.filter((p) => p.status === "writing").map((p) => ({ actor: { kind: "user", uid: g.hostId } as Actor, cmd: { type: "removePlayer", playerId: p.id } as Command }))),
+  // startGame: the host, from a LOBBY of at least three seated players with no imported deck (a new deck is always playable; gameplay.md "Starting a game").
+  startGame: (g) => (g.phase === "LOBBY" && g.players.filter((p) => p.status === "writing").length >= 3 && Object.keys(g.cards).length === 0 ? [{ actor: { kind: "user", uid: g.hostId }, cmd: { type: "startGame" } as Command }] : []),
+  // saveDraft: a player who has not finished writing, in WRITING or (a late joiner) in PLAYING: the full target, half of it, and a text-only rewrite of the saved counts.
+  saveDraft: (g) => {
+    if (g.phase !== "WRITING" && g.phase !== "PLAYING") return [];
+    return g.players.filter((p) => p.status === "writing" && p.writeTarget !== null).flatMap((p) => {
+      const t = p.writeTarget ?? { red: 0, green: 0 };
+      const draft = (red: number, green: number, tag: string) => ({ red: Array.from({ length: red }, (_, k) => `${p.id} red ${k} ${tag}`), green: Array.from({ length: green }, (_, k) => `${p.id} green ${k} ${tag}`) });
+      return [draft(t.red, t.green, "full"), draft(Math.floor(t.red / 2), Math.floor(t.green / 2), "half"), draft(p.writeProgress.red, p.writeProgress.green, "edit")]
+        .map((d) => ({ actor: { kind: "user", uid: p.uid } as Actor, cmd: { type: "saveDraft", ...d } as Command }));
+    });
+  },
+  // finishWriting: a writer whose saved draft holds exactly the target counts (the draft map is the Store's drafts documents).
+  finishWriting: (g, drafts) => {
+    if (g.phase !== "WRITING" && g.phase !== "PLAYING") return [];
+    return g.players
+      .filter((p) => p.status === "writing" && p.writeTarget !== null && drafts[p.id]?.red.length === p.writeTarget.red && drafts[p.id]?.green.length === p.writeTarget.green)
+      .map((p) => ({ actor: { kind: "user", uid: p.uid } as Actor, cmd: { type: "finishWriting" } as Command }));
+  },
 };
 
 /** A command type that has no enumerator on purpose, with the reason. */

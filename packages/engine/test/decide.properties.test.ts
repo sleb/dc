@@ -51,7 +51,10 @@ const arbRealTyped = fc.record({
   patch: fc.oneof(fc.anything(), fc.record({ profanity: fc.constantFrom("on", "off", "x") }, { requiredKeys: [] }), fc.record({ targetOverride: fc.oneof(fc.integer({ min: -2, max: 12 }), fc.constant(null)) }, { requiredKeys: [] })),
   playerId: fc.oneof(fc.anything(), fc.integer({ min: 0, max: 12 }).map(pid)),
   name: fc.oneof(fc.anything(), fc.string()),
+  red: fc.oneof(fc.anything(), fc.array(fc.string(), { maxLength: 4 })),
+  green: fc.oneof(fc.anything(), fc.array(fc.string(), { maxLength: 4 })),
 }, { requiredKeys: ["type"] });
+const seatActor = (n: number): Actor => userActor(seatUidOf(GAME_ID, pid(n)));
 const arbActor = fc.constantFrom(userActor(HOST_UID), userActor(seatUidOf(GAME_ID, pid(1))), userActor("stranger"), { kind: "system" as const });
 
 describe("X1 decide is total", () => {
@@ -111,7 +114,7 @@ describe("X1 decide is total", () => {
 
   // The expected code per junk entry is written out from the guard ladder (5.3) and 7.1, not read off the handlers. Acceptances are not assumed away:
   // the host's updateSettings with an empty patch is legal in LOBBY, WRITING and PLAYING, and a seated player may leave in LOBBY.
-  const LOBBY_REAL = new Set(["createGame", "updateSettings", "join", "leave", "removePlayer"]); // independent of REGISTRY on purpose
+  const LOBBY_REAL = new Set(["createGame", "updateSettings", "join", "leave", "removePlayer", "startGame", "saveDraft", "finishWriting"]); // independent of REGISTRY on purpose
   const expectedReal = (g: Game, actor: Actor, c: Command): Rejection | "accepted" => {
     if (!LOBBY_REAL.has(c.type)) return { code: "INVALID_ARGUMENT" };
     if (c.type === "createGame") return { code: "WRONG_PHASE" };
@@ -120,6 +123,14 @@ describe("X1 decide is total", () => {
     const seated = g.players.some((p) => p.uid === user && p.status !== "left" && p.status !== "removed");
     const inLobby = g.phase === "LOBBY";
     if (c.type === "updateSettings") return isHost ? "accepted" : { code: "NOT_AUTHORIZED" };
+    if (c.type === "startGame") return !isHost ? { code: "NOT_AUTHORIZED" } : inLobby ? "accepted" : { code: "WRONG_PHASE" }; // every junk LOBBY has four seated players and no deck
+    if (c.type === "saveDraft" || c.type === "finishWriting") {
+      const me = g.players.find((p) => p.uid === user && p.status !== "left" && p.status !== "removed");
+      if (me === undefined) return { code: "NOT_AUTHORIZED" };
+      if (g.phase !== "WRITING" && g.phase !== "PLAYING") return { code: "WRONG_PHASE" };
+      if (me.status !== "writing") return { code: "WRONG_PHASE", detail: "finished" };
+      return c.type === "saveDraft" ? "accepted" : { code: "NOT_PLAYABLE", detail: "incomplete" }; // the junk runs carry no drafts
+    }
     if (c.type === "join") return { code: "NOT_AUTHORIZED" }; // none of the junk actors holds the seat uid of pid(9)
     if (c.type === "leave") return !seated ? { code: "NOT_AUTHORIZED" } : inLobby ? "accepted" : { code: "WRONG_PHASE" };
     // removePlayer: the target pid(9) is not seated in these games
@@ -218,9 +229,11 @@ describe("G1 generator sanity", () => {
   test("the real enumerators are not vacuous: a LOBBY of four offers settings, joins, leaves and removals; WRITING offers a profanity patch", () => {
     const lobby = buildGame({ n: 4, phase: "LOBBY", ready: [], handSize: 0, judge: 0, submitted: [], paused: false });
     const types = new Set(legalCommands(lobby, {}, enumerators).map((e) => e.cmd.type));
-    expect([...types].sort()).toEqual(["join", "leave", "removePlayer", "updateSettings"]);
+    expect([...types].sort()).toEqual(["join", "leave", "removePlayer", "startGame", "updateSettings"]);
     const writing = buildGame({ n: 4, phase: "WRITING", ready: [false, false, false, false], handSize: 0, judge: 0, submitted: [], paused: false });
-    expect(legalCommands(writing, {}, enumerators).map((e) => e.cmd.type)).toEqual(["updateSettings"]);
+    expect([...new Set(legalCommands(writing, {}, enumerators).map((e) => e.cmd.type))].sort()).toEqual(["saveDraft", "updateSettings"]);
+    const full = { [pid(1)]: { red: Array.from({ length: 10 }, () => "r"), green: Array.from({ length: 8 }, () => "g") } };
+    expect(legalCommands(writing, full, enumerators).filter((e) => e.cmd.type === "finishWriting").map((e) => e.actor)).toEqual([seatActor(1)]);
   });
 
   test("the enumerators stop offering joins at the room cap and at the join cap", () => {
@@ -233,7 +246,7 @@ describe("G1 generator sanity", () => {
   test("meta: every registered command in the real registry has an enumerator or an explicit exemption; createGame is the one exemption", () => {
     expect(missingEnumerators(REGISTRY, enumerators, exemptions)).toEqual([]);
     expect(Object.keys(exemptions)).toEqual(["createGame"]);
-    expect(Object.keys(enumerators).sort()).toEqual(["join", "leave", "removePlayer", "updateSettings"]);
+    expect(Object.keys(enumerators).sort()).toEqual(["finishWriting", "join", "leave", "removePlayer", "saveDraft", "startGame", "updateSettings"]);
   });
 
   test("meta: a registered lobby command with neither an enumerator nor an exemption fails the check (test the test)", () => {

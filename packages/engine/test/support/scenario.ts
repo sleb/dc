@@ -8,6 +8,7 @@ import type { Step } from "./checks";
 import { counterMintId, ctxFor, deepFreeze, cid, makeGame, makePlayer, makeRound, pid, addCard } from "./factories";
 import type { Enumerator } from "./legal";
 import { junkCommands, legalCommands } from "./legal";
+import { NEW_DECK_RED, defaultTarget } from "../../src/rules/playability";
 
 export type Decide = (state: Game | null, cmd: Command, ctx: Ctx) => Result<Accepted, Rejection>;
 
@@ -21,27 +22,42 @@ export interface GameShape {
   paused: boolean;
 }
 
-/** A fixture-world game: players, hands, and (in PLAYING) an open SUBMITTING round with the given submissions. */
+/** A fixture-world game, coherent for the E5 and E6 checkers: every registry card is in exactly one zone. WRITING: ready players have finished and their cards sit in the decks, the others have nothing pooled. PLAYING: hands, an open SUBMITTING round with the given submissions, a green card on the table and one in the deck. */
 export function buildGame(s: GameShape): Game {
   const playing = s.phase === "PLAYING" || s.phase === "FINISHED";
+  const target = defaultTarget(s.n);
+  const readyAt = (i: number): boolean => s.phase === "WRITING" && s.ready[i] === true;
   let g = makeGame({
     phase: s.phase,
     paused: s.paused,
     version: 7,
     players: Array.from({ length: s.n }, (_, i) =>
-      makePlayer(i, { status: s.phase === "LOBBY" ? "writing" : playing ? "active" : s.ready[i] ? "ready" : "writing" })),
+      makePlayer(i, s.phase === "LOBBY"
+        ? { status: "writing" }
+        : playing
+          ? { status: "active" }
+          : { status: readyAt(i) ? "ready" : "writing", writeTarget: { red: NEW_DECK_RED, green: target }, writeProgress: readyAt(i) ? { red: NEW_DECK_RED, green: target } : { red: 0, green: 0 } })),
+    ...(s.phase === "WRITING" ? { target, writeCounts: { red: NEW_DECK_RED, green: target } } : {}),
   });
+  if (s.phase === "WRITING") {
+    for (let i = 0; i < s.n; i++) {
+      if (!readyAt(i)) continue;
+      for (let k = 0; k < NEW_DECK_RED; k++) g = addCard(g, cid(2000 + 100 * i + k), "red", "redDeck");
+      for (let k = 0; k < target; k++) g = addCard(g, cid(3000 + 100 * i + k), "green", "greenDeck");
+    }
+    return g;
+  }
   if (!playing) return g;
   for (let i = 0; i < s.n; i++) for (let k = 0; k < s.handSize; k++) g = addCard(g, cid(100 * i + k), "red", { hand: pid(i) });
-  g = addCard(g, cid(900), "green", "greenDeck");
+  g = addCard(g, cid(901), "green", "greenDeck");
+  if (s.phase === "FINISHED") return g;
   const judge = s.judge % s.n;
   const submissions = Array.from({ length: s.n }, (_, i) => i)
     .filter((i) => i !== judge && s.submitted[i])
-    .map((i) => ({ playerId: pid(i), cardId: cid(500 + i) }));
-  for (const sub of submissions) g = addCard(g, sub.cardId, "red", "redDiscard");
-  g = { ...g, pools: { ...g.pools, redDiscard: g.pools.redDiscard.filter((c) => !submissions.some((x) => x.cardId === c)) } };
-  if (s.phase === "FINISHED") return g;
-  return { ...g, round: makeRound({ judgeId: pid(judge), roster: g.players.map((p) => p.id), submissions, changedAtVersion: 5 }), judgeCursor: judge };
+    .map((i) => ({ playerId: pid(i), cardId: cid(700 + i) }));
+  for (const sub of submissions) g = { ...g, cards: { ...g.cards, [sub.cardId]: { kind: "red", text: `card ${sub.cardId}` } } };
+  g = { ...g, cards: { ...g.cards, [cid(900)]: { kind: "green", text: "the green card" } } };
+  return { ...g, round: makeRound({ judgeId: pid(judge), greenCardId: cid(900), roster: g.players.map((p) => p.id), submissions, changedAtVersion: 5 }), judgeCursor: judge };
 }
 
 export const arbShape: fc.Arbitrary<GameShape> = fc.record({
@@ -81,7 +97,7 @@ export function runScenario(decide: Decide, game0: Game | null, picks: Picks, op
     const result = decide(state, entry.cmd, ctx);
     expect(state).toEqual(before);
     expect(entry.cmd).toEqual(cmdBefore);
-    const step: Step = { index: i, seed: opts.seed, before: state, cmd: entry.cmd, result };
+    const step: Step = { index: i, seed: opts.seed, before: state, cmd: entry.cmd, result, actor: entry.actor, drafts };
     checkAll(step);
     trace.results.push(result);
     if (result.ok) {

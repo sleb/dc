@@ -60,7 +60,7 @@ describe("V8 slot order", () => {
     expect(SETTLE_SLOTS.map((s) => s.id)).toEqual(["1", "2", "3", "3a", "4", "5"]);
   });
 
-  test("slots 1, 3, 3a and 4 are no-ops in 1.2 (filled by #21 and #22)", () => {
+  test("slots 1, 3, 3a and 4 are no-ops on a PLAYING game (slot 1 acts only in WRITING and is filled by #21; 3, 3a and 4 by #22)", () => {
     const g = makeGame({ phase: "PLAYING", players: players(["active", "active", "active"]), round: makeRound({ roster: [pid(0), pid(1), pid(2)] }) });
     for (const id of ["1", "3", "3a", "4"] as const) {
       const slot = SETTLE_SLOTS.find((s) => s.id === id);

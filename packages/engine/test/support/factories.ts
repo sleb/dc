@@ -144,3 +144,23 @@ export function ctxFor(over: Partial<Ctx> = {}): Ctx {
     ...over,
   };
 }
+
+/** A real seeded rng that logs every call: `["shuffle", length]` and `["int", max]` (a shuffle's inner draws are not logged separately). Pins consumption order. */
+export function recordingRng(seed: string): Rng & { readonly log: readonly (readonly [string, number])[] } {
+  const inner = makeRng(seed);
+  const log: [string, number][] = [];
+  return {
+    seed,
+    int: (max) => { log.push(["int", max]); return inner.int(max); },
+    shuffle: <T>(xs: readonly T[]): T[] => { log.push(["shuffle", xs.length]); return inner.shuffle(xs); },
+    get log() { return log; },
+  };
+}
+
+/** A LOBBY, WRITING or PLAYING-ready fixture with `n` players (player 0 is the host) and, optionally, imported cards in the decks. Card ids are cid(1) up, reds first. */
+export function gameWithDeck(n: number, red: number, green: number, over: Partial<Game> = {}, status: Player["status"] = "writing"): Game {
+  let g = makeGame({ players: Array.from({ length: n }, (_, i) => makePlayer(i, { status })), ...over });
+  for (let k = 0; k < red; k++) g = addCard(g, cid(1 + k), "red", "redDeck");
+  for (let k = 0; k < green; k++) g = addCard(g, cid(1 + red + k), "green", "greenDeck");
+  return g;
+}
