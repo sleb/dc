@@ -94,7 +94,7 @@ export function checkSkills(root: string): Violation[] {
       violations.push({ code: "SYM01", message: `${skill.name}: .claude/skills/${skill.name} is missing` });
     } else if (!linked) {
       violations.push({ code: "SYM01", message: `${skill.name}: .claude/skills/${skill.name} is not a symlink` });
-    } else if (realpathSync(link) !== realpathSync(skill.dir)) {
+    } else if (resolveOrNull(link) !== realpathSync(skill.dir)) {
       violations.push({ code: "SYM01", message: `${skill.name}: .claude/skills/${skill.name} does not resolve to ${skill.dir}` });
     }
 
@@ -116,6 +116,15 @@ export function checkSkills(root: string): Violation[] {
 
   return violations;
 }
+
+/** The target of a path, or `null` when it does not resolve (a dangling symlink still lstats as a symlink). */
+const resolveOrNull = (path: string): string | null => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+};
 
 /** `null` when nothing is there, `true` when the entry is a symlink, `false` when it is something else. */
 const linkStat = (path: string): boolean | null => {

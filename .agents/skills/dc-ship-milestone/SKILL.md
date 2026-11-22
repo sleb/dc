@@ -42,7 +42,7 @@ Ask only what the user must decide. Do not start until they say go, and ship exa
 
 ## 4. Loop over the slice
 
-For each step in slice order, with the batch tip green:
+For each step in slice order, with the batch tip green. A step whose blocker is parked is parked with it, not attempted:
 
 1. **Plan.** One `general-purpose` sub-agent running `dc-plan` in batch mode: brief it with the issue, the base branch and SHA, and the batch constraints (names, data shapes, interfaces, doc and PR conventions the slice has already settled). Autonomous: no artifact, no review wait; it returns the draft and its open questions, you rule, then you resume it to post the plan comment. Check the posted comment for the base line, TDD mapping, verification matrix, phases, docs table and "Not proven here". Do not let it branch or implement.
 2. **Implement.** A second sub-agent running `dc-implement` in batch mode: its base is the batch tip, its commits are prefixed `#N:`, it opens no PR and closes nothing, and it parks instead of leaving the branch red. It returns the short report. It does not review.
@@ -79,7 +79,7 @@ On the user's word: `gh pr merge <P> --squash --delete-branch`, confirm every is
 
 - One slice, one PR, one review. Never push to `main` and never merge another PR into the slice.
 - The step is the unit: its commits, plan comment, review threads, ledger row and issue comment. Never fold two steps into one row.
-- A parked step leaves nothing behind: `git reset --hard <last green>` and the attempt on `attempt/N.M`.
+- A parked step leaves nothing behind and loses nothing: WIP commit, push `attempt/N.M`, then `git reset --hard <last green>` on the batch branch. The attempt never merges, and nothing that depends on the step is attempted.
 - Never claim a seam is proven that only a later step proves; a hybrid step's report says "proves X, does not prove Y".
 - Public-thread hygiene applies to the PR body, the ledger, the issue comments and the commits.
 - Sub-agents cannot ask the user anything: a step that needs the user is parked and reported.

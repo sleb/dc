@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -59,7 +59,7 @@ test("S4 AGENTS.md states the batch exception to one step, one PR", () => {
 
 test("S5 a skill with no SKILL.md, no name, or no description is reported", () => {
   const noFile = planted();
-  Bun.spawnSync(["rm", join(skillsDir(noFile), "dc-test", "SKILL.md")]);
+  rmSync(join(skillsDir(noFile), "dc-test", "SKILL.md"));
   expect(codes(noFile)).toContain("SK01");
 
   expect(codes(planted({ skill: "---\ndescription: d\n---\n" }))).toEqual(["SK02"]);
@@ -67,12 +67,19 @@ test("S5 a skill with no SKILL.md, no name, or no description is reported", () =
   expect(codes(planted({ skill: "---\nname: dc-test\ndescription:\n---\n" }))).toEqual(["SK03"]);
 });
 
-test("S6 a missing or foreign .claude symlink is reported", () => {
+test("S6 a missing, foreign or dangling .claude symlink is reported", () => {
   expect(codes(planted({ link: false }))).toEqual(["SYM01"]);
+
   const wrong = planted();
-  Bun.spawnSync(["rm", join(claudeSkillsDir(wrong), "dc-test")]);
+  rmSync(join(claudeSkillsDir(wrong), "dc-test"));
   mkdirSync(join(claudeSkillsDir(wrong), "dc-test"));
   expect(codes(wrong)).toEqual(["SYM01"]);
+
+  // A symlink that outlives its target: lstat still calls it a symlink, so resolution must not throw out of the check.
+  const dangling = planted();
+  rmSync(join(claudeSkillsDir(dangling), "dc-test"));
+  symlinkSync(join(claudeSkillsDir(dangling), "gone"), join(claudeSkillsDir(dangling), "dc-test"), "dir");
+  expect(codes(dangling)).toEqual(["SYM01"]);
 });
 
 test("S7 the AGENTS.md table must list every skill and nothing else", () => {

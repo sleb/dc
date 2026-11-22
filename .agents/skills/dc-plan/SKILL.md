@@ -22,7 +22,7 @@ Every plan must:
 - **base**: the batch branch (`batch/M<n>-<slug>`) and its tip SHA, not `main`;
 - **batch constraints**: what the slice has already settled (names, data shapes, interfaces, doc and PR conventions).
 
-In batch mode the plan assumes that base, not `main`: a `Blocked by` issue counts as delivered when it is on the batch branch, or by an earlier step in the same slice per the ledger. Never plan on the assumption that `main` has the blocker. Phase 0 checks out the base the orchestrator names and does not branch from `main`. The posted plan comment opens with `Base: <branch> @ <sha>`, and the step's PR is the batch PR, so say that instead of promising its own. Do not edit the issue footer that says one step is one PR; the batch comment states the arrangement.
+In batch mode the plan assumes that base, not `main`: a `Blocked by` issue counts as delivered only when its commits are on the batch branch and the step is not parked (a parked step's work is on `attempt/N.M`, not on the branch). An earlier step in the same slice counts once its commits are there; a step whose blocker is parked is parked with it, not planned. Never plan on the assumption that `main` has the blocker. Phase 0 checks out the base the orchestrator names and does not branch from `main`. The posted plan comment opens with `Base: <branch> @ <sha>`, and the step's PR is the batch PR, so say that instead of promising its own. Do not edit the issue footer that says one step is one PR; the batch comment states the arrangement.
 
 ## 1. Gather context (read-only)
 

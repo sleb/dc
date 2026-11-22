@@ -18,7 +18,7 @@ Implement `#N`. The plan comes from the dc-plan skill, posted as an issue commen
 - Prefix every commit with the issue: `#47: red ...`, `#47: green ...`. The step is the unit, and its commit range has to stay identifiable in the batch.
 - Keep the batch tip green. Run the whole gate set on the tip, not just this step's tests, before you report: an earlier step breaking is yours now.
 - Open no PR and close no issue. Push, rewrite your step's section of the ledger in the batch PR body, and comment on the issue that it is implemented on the branch and the batch PR closes it.
-- Park rather than rot: if the step needs something only the user can supply, `git reset --hard <base>`, push the attempt as `attempt/N.M`, and report. Half-finished work never becomes the next step's base.
+- Park rather than rot: if the step needs something only the user can supply, lose nothing and leave nothing red. Commit the attempt as a WIP commit (`#N: wip <what is done>`, no secrets, never merged), push it as `attempt/N.M`, and only then `git reset --hard <base>` on the batch branch. Report the block. The next step starts from the last green tip, and the attempt stays on its branch for the user to inspect.
 - The orchestrator reviews your range and sends the findings; do not run the review yourself.
 
 ## 0. Preflight
