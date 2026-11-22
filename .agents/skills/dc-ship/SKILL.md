@@ -1,6 +1,6 @@
 ---
 name: dc-ship
-description: Take a Deep Cuts step issue from plan to open PR with minimal main-session context. Runs the dc-plan and dc-implement skills as sub-agents, rules on open questions itself, runs a code review itself and rules on the findings, verifies the result, and reports. Stops for the user only on genuinely user-owned decisions, and merges only when told. Use when asked to "ship", or do plan and implement for, GH issue #N.
+description: Take one Deep Cuts step issue from plan to open PR with minimal main-session context. Runs the dc-plan and dc-implement skills as sub-agents, rules on open questions itself, runs a code review itself and rules on the findings, verifies the result, and reports. Stops for the user only on genuinely user-owned decisions, and merges only when told. Use when asked to "ship", or do plan and implement for, GH issue #N; use dc-ship-milestone for a batch.
 compatibility: Needs sub-agent delegation, git, and an authenticated `gh` CLI for the target repo.
 ---
 
@@ -10,25 +10,13 @@ This skill takes one argument, a GitHub issue number; it is called `N` below (re
 
 Ship `#N`. You are the orchestrator. The point is to keep this session small: the heavy reading, writing and debugging happens in sub-agents, and you see their reports and check their artifacts. The GitHub issue is the handoff between phases (plan comment in, PR out), so no context needs to be passed along.
 
-Read `../dc-plan/SKILL.md` and `../dc-implement/SKILL.md` once so you can brief the sub-agents and judge their output.
+This is the single-issue path. For several steps, a slice of a milestone on one branch with one review at the end, use `dc-ship-milestone`; the two share their rulings and escalations through `reference/authority.md`.
+
+Read `../dc-plan/SKILL.md`, `../dc-implement/SKILL.md` and `reference/authority.md` once so you can brief the sub-agents and judge their output.
 
 ## Authority
 
-The user's invocation of this skill authorizes everything the dc-plan and dc-implement skills would do for this issue, including rewriting the issue's "Done when", posting the plan comment, pushing the branch and opening the PR. It does not authorize merging.
-
-**Rule it yourself, report it later.** Open questions, acceptance rewrites, deviations from an LLD, review findings: decide them using the LLD, the HLD, the tracking issue and the user's earlier decisions, pick the option you would recommend, and record the question, the ruling and the reason. The user reads these in the final report and can overturn any.
-
-**Escalate only when a ruling is not yours to make.** Stop and ask (one question per decision, nothing bundled, your recommendation first) when it:
-- spends money or changes shared cloud or GitHub state beyond what the plan names, or is hard to reverse;
-- needs a fact only the user has (a login, a billing account, an email, an amount);
-- contradicts a decision the user made, or reopens a decision issue (#5, #6, #7 and the like);
-- changes the scope of a neighbouring issue, or the product, taste or priorities in a way the docs do not settle.
-
-Escalation is by reversibility and documentation, not by how unsure you feel:
-- **Settled by the docs or an earlier user decision:** rule, whatever the stakes.
-- **Docs silent or conflicting, cheap to change in review** (a name, a layout, a test choice): rule, log it.
-- **Docs silent or conflicting, costly to change later** (a data shape other steps build on, a public interface, a dependency choice): rule only if one option is clearly better; otherwise ask. Whichever way, put it at the top of the final report under "rulings most worth a look".
-- **Hard to undo, or a criterion above:** ask.
+The invocation authorizes what the dc-plan and dc-implement skills would do for this issue, and not merging. `reference/authority.md` is the whole of it: when to rule and report, when an escalation is not yours to make, and what you never do. Read it before the first ruling and keep to it.
 
 ## 1. Plan (sub-agent)
 
@@ -84,7 +72,7 @@ Only when the user says to: `gh pr merge N --squash --delete-branch`, `git check
 
 ## Rules
 
-- One step, one PR. The sub-agents stay inside the issue's scope and so do you.
+- One step, one PR. The sub-agents stay inside the issue's scope and so do you. A batch of steps is `dc-ship-milestone`'s job, not a second PR for this issue.
 - Never claim a seam is proven that only a later step can prove, and never relay a sub-agent's claim you have not checked against the artifact.
 - Never paste long sub-agent output into this session; ask for the short report format above and re-ask if it comes back long.
 - Sub-agents cannot ask the user anything. Anything that needs the user comes back to you as a block or escalation, and you ask.

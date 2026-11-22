@@ -12,18 +12,19 @@ Working notes for any coding agent (Claude Code, Codex, Pi, Cursor, …) in this
 
 ## Skills
 
-Three skills live in `.agents/skills/` (the Agent Skills layout; `.claude/skills/` holds symlinks to them for Claude Code):
+The skills live in `.agents/skills/` (the Agent Skills layout; `.claude/skills/` holds symlinks to them for Claude Code). `scripts/skills.test.ts` fails if a skill, its frontmatter, its symlink and the table below disagree:
 
 | Skill | Use it to |
 |---|---|
 | `dc-plan` | turn a step issue into a reviewed execution plan; posts the plan to the issue when approved |
 | `dc-implement` | execute an approved plan on the issue: red, green, docs, review, PR |
-| `dc-ship` | run plan and implement as sub-agents from a small orchestrating session |
+| `dc-ship` | run plan and implement as sub-agents from a small orchestrating session, for one issue |
+| `dc-ship-milestone` | ship a slice of a milestone unattended: one batch branch, one PR, one human review at the end |
 
 ## Conventions
 
 - **Strict TDD.** No production change without a failing test or check first. Code steps: a failing `bun test` / emulator / rules / Playwright test. Infra and setup steps: a read-only verification script that fails for a stated reason against the empty state. Include a "test the test" pass; for scripts, re-run and prove idempotence.
-- **One step, one PR.** Branch `step/N.M-short-name` off `main`; never commit to `main`. Leave neighbouring steps and other environments alone, and say so in the PR.
+- **One step, one PR.** Branch `step/N.M-short-name` off `main`; never commit to `main`. Leave neighbouring steps and other environments alone, and say so in the PR. A batch run (`dc-ship-milestone`) is the exception: one `batch/M<n>-<slug>` branch and one PR, one commit range per step, the PR's `Closes` list firing when the slice merges, and the human's review at the end.
 - **Keep the docs current in the same PR.** If reality differs from an LLD, amend the LLD, note the deviation in the PR body, and mark resolved open questions with the issue that proved them. State plainly what is not proven and which later step proves it.
 - **Never claim a seam is proven** that only a later step can prove.
 - **Public thread hygiene.** Issues, PRs, commits and docs are public: no personal emails, billing account IDs, project numbers, tokens or secret values. Use placeholders such as `<BILLING_ACCOUNT_ID>`; scripts take real values as flags or env vars at run time. Generate secrets and pipe them; never echo them, pass them as arguments, or write them to disk. `bun scripts/scan-secrets.ts` is the scan.

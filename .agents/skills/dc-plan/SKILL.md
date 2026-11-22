@@ -15,6 +15,15 @@ Every plan must:
 2. Meet the issue's acceptance criteria, or propose a change to them for the user to approve.
 3. Keep every design and doc current as part of the work (deviation, new feature, new script).
 
+## Batch mode
+
+`dc-ship-milestone` runs this skill once per step inside a slice, and passes two inputs beyond the issue number:
+
+- **base**: the batch branch (`batch/M<n>-<slug>`) and its tip SHA, not `main`;
+- **batch constraints**: what the slice has already settled (names, data shapes, interfaces, doc and PR conventions).
+
+In batch mode the plan assumes that base, not `main`: a `Blocked by` issue counts as delivered only when its commits are on the batch branch and the step is not parked (a parked step's work is on `attempt/N.M`, not on the branch). An earlier step in the same slice counts once its commits are there; a step whose blocker is parked is parked with it, not planned. Never plan on the assumption that `main` has the blocker. Phase 0 checks out the base the orchestrator names and does not branch from `main`. The posted plan comment opens with `Base: <branch> @ <sha>`, and the step's PR is the batch PR, so say that instead of promising its own. Do not edit the issue footer that says one step is one PR; the batch comment states the arrangement.
+
 ## 1. Gather context (read-only)
 
 - `gh issue view N --json title,body,labels,comments`. If `gh` returns nothing, retry with `2>&1`. If you hit the API rate limit, stop and report when the limit resets; don't loop.
@@ -46,12 +55,12 @@ Sections, in this order:
 2. **Acceptance criteria** (current and proposed).
 3. **Verification matrix**: ID, what is asserted, how it is checked, how it is created. For code steps this is the list of tests or properties and the LLD clause each covers.
 4. **Phases**, each with a gate and a commit message:
-   - Phase 0 preflight (branch `step/N.M-short-name`, prerequisites, tool versions)
+   - Phase 0 preflight (branch `step/N.M-short-name` off `main`, or the batch branch the orchestrator names; prerequisites, tool versions)
    - Phase 1 red
    - Phase 2 green, in dependency order, with the checks that turn green at each step
    - Phase 3 test the test / idempotence / secret hygiene
    - Phase 4 refactor and docs (reconcile LLD text with what was actually built)
-   - Phase 5 PR and close-out (`Closes #N`, comments on decision issues, unblock notes, tracking issue update)
+   - Phase 5 PR and close-out (`Closes #N` in the PR; in batch mode the batch comment and the ledger row instead. Either way: comments on decision issues, unblock notes, tracking issue update)
 5. **Documentation updates**: a table of doc, change, why. Always consider: the LLD section(s) implemented, open questions that this step resolves, the LLD "Interfaces to other LLDs" tables, HLD and tech-stack if a deviation exists, new READMEs for new scripts or packages, the tracking issue. Add the rule: if reality differs from an LLD, stop, amend the LLD in the same PR, note the deviation in the PR body.
 6. **Risks** with mitigations, including collisions with neighbouring issues.
 7. **Open questions for review**: numbered, each with a recommendation and a one-line reason. Ask only what the user must decide.
@@ -69,7 +78,7 @@ Keep the plan specific to this issue. Use real LLD IDs (P-numbers, section numbe
 
 Only when the user says to:
 1. If the acceptance rewrite was approved, update the issue body (`gh issue edit N --body-file`), keeping Work, Implements, Blocked by and the footer, replacing "Done when".
-2. Post the plan as a `gh issue comment`, in Markdown, with phases as checkboxes. Do not link the private artifact.
+2. Post the plan as a `gh issue comment`, in Markdown, with phases as checkboxes and the base line (`Base: <branch> @ <sha>`) first. Do not link the private artifact.
 3. Delete the plan document so we don't accumulate cruft: the issue comment is now the record. Confirm with the user first (deleting is permanent and breaks the link), then remove it with whatever your agent uses to delete published documents, or delete the local file and say so. Resolve or answer any open comment threads before deleting, since they go with it.
 4. Then offer to start Phase 0 and Phase 1. Do not start until asked.
 
@@ -78,5 +87,5 @@ Only when the user says to:
 - **Public thread hygiene.** The issue is public. Never put personal emails, billing account IDs, project numbers, tokens, or secret values in the plan, issue body, comments or commits. Use placeholders such as `<BILLING_ACCOUNT_ID>` and `<BUDGET_ALERT_EMAIL>`, and have scripts take real values as flags or env vars at run time.
 - **Be honest about limits.** If a check only proves presence and not runtime behaviour, say which later step proves it. Don't claim a seam is proven.
 - **Account facts matter.** A personal Google account has no GCP organization, so org policies can't be set. Ask about account facts that change the design.
-- **Stay in scope.** One step is one PR. Leave other environments and neighbouring steps (for example prod, M8) out, and say so.
+- **Stay in scope.** One step is one PR, or one commit range in a batch PR (`dc-ship-milestone`). Leave other environments and neighbouring steps (for example prod, M8) out, and say so.
 - **Never start work early.** Planning ends at the posted comment and the artifact cleanup.
