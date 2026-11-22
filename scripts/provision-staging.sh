@@ -20,9 +20,8 @@ BUDGET_AMOUNT="${BUDGET_AMOUNT:-10}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 FIRESTORE_LOCATION="nam5"
-TTL_GROUPS="idem outbox notifLog rateLimits deletions joinIdem"
 APIS="cloudfunctions.googleapis.com run.googleapis.com cloudbuild.googleapis.com
-artifactregistry.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com
+artifactregistry.googleapis.com eventarc.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com
 iamcredentials.googleapis.com recaptchaenterprise.googleapis.com firebaseappcheck.googleapis.com
 fcm.googleapis.com fcmregistrations.googleapis.com identitytoolkit.googleapis.com
 firestore.googleapis.com firebase.googleapis.com firebasehosting.googleapis.com
@@ -33,6 +32,9 @@ roles/secretmanager.secretAccessor roles/logging.logWriter roles/cloudtrace.agen
 CI_ROLES="roles/firebase.admin roles/cloudfunctions.developer roles/cloudscheduler.admin
 roles/artifactregistry.writer roles/serviceusage.serviceUsageConsumer
 roles/monitoring.editor roles/logging.configWriter"
+# 2nd gen function builds run as the default compute service account, so it keeps the build roles even though our code
+# never uses it and its roles/editor is removed (#15).
+COMPUTE_BUILD_ROLES="roles/storage.objectViewer roles/artifactregistry.writer roles/logging.logWriter"
 WIF_POOL="github"
 WIF_PROVIDER="github"
 SECRETS="RATE_LIMIT_HASH_SALT LOG_HASH_SALT SEAT_DERIVATION_KEY"
@@ -94,11 +96,8 @@ step_firestore() { # V3, V4
     log "creating Firestore (Native, $FIRESTORE_LOCATION)"
     gcloud firestore databases create --location="$FIRESTORE_LOCATION" --type=firestore-native --project "$PROJECT"
   fi
-  local g
-  for g in $TTL_GROUPS; do
-    log "TTL on $g.expiresAt"
-    gcloud firestore fields ttls update expiresAt --collection-group="$g" --enable-ttl --async --project "$PROJECT" >/dev/null
-  done
+  # The TTL policies are not set here: `firestore.indexes.json` declares them and `firebase deploy --only firestore`
+  # applies them (#15 proved the deploy honours "ttl": true; see LLD 0 section 11 step 12).
 }
 
 step_iam() { # V8, V9
@@ -128,13 +127,19 @@ step_iam() { # V8, V9
     log "removing Editor from the default compute service account"
     gcloud projects remove-iam-policy-binding "$PROJECT" --member="$compute" --role=roles/editor --condition=None >/dev/null
   fi
+  # The functions build runs as this account; without these roles Cloud Build fails "missing permission on the build
+  # service account" (#15).
+  for r in $COMPUTE_BUILD_ROLES; do
+    gcloud projects add-iam-policy-binding "$PROJECT" --member="$compute" --role="$r" --condition=None >/dev/null
+  done
 }
 
 step_wif() { # V10
   gcloud iam workload-identity-pools describe "$WIF_POOL" --location=global --project "$PROJECT" >/dev/null 2>&1 \
     || gcloud iam workload-identity-pools create "$WIF_POOL" --location=global --display-name="GitHub Actions" --project "$PROJECT"
-  # P4 (staging): this repository, and either the staging environment or a same-repository pull request.
-  local cond="assertion.repository == '$REPO' && (assertion.environment == '$ENV_NAME' || assertion.event_name == 'pull_request')"
+  # P4: this repository, through the named GitHub environment. A `pull_request` claim cannot express "same repository"
+  # (GitHub sets `repository` to the base repo for fork PRs), so previews must enter the `staging` environment too (#16).
+  local cond="assertion.repository == '$REPO' && assertion.environment == '$ENV_NAME'"
   local action=create-oidc
   gcloud iam workload-identity-pools providers describe "$WIF_PROVIDER" --workload-identity-pool="$WIF_POOL" \
     --location=global --project "$PROJECT" >/dev/null 2>&1 && action=update-oidc
@@ -205,18 +210,34 @@ step_appcheck() { # V7. Debug token value is generated here, piped to GitHub, ne
     log "App Check enforcement: $svc"
     api PATCH "$ac/services/$svc?updateMask=enforcementMode" '{"enforcementMode":"ENFORCED"}' >/dev/null
   done
-  # Gate on the GitHub secret, the only copy of the token. Store it first, then register, so a
-  # failed `gh` call leaves nothing registered and a re-run starts clean.
-  if gh secret list --env "$ENV_NAME" --repo "$REPO" --json name --jq '.[].name' 2>/dev/null | grep -qx APPCHECK_DEBUG_TOKEN; then
-    log "debug token already stored in GitHub environment $ENV_NAME"
-  else
-    log "creating a debug token and storing it in GitHub environment $ENV_NAME"
-    local tok
-    tok="$(uuidgen | tr 'A-Z' 'a-z')"
-    gh api -X PUT "repos/$REPO/environments/$ENV_NAME" >/dev/null
-    printf '%s' "$tok" | gh secret set APPCHECK_DEBUG_TOKEN --env "$ENV_NAME" --repo "$REPO"
-    api POST "$ac/apps/$app/debugTokens" "{\"displayName\":\"ci-smoke\",\"token\":\"$tok\"}" >/dev/null
+  # The token has two halves and the value's only copy is the GitHub secret, so check them separately: a run that
+  # stored the secret and then failed to register (or the reverse) must be recoverable, and a value that App Check does
+  # not know is useless to both smoke and preview builds.
+  local has_secret=false registrations
+  gh secret list --env "$ENV_NAME" --repo "$REPO" --json name --jq '.[].name' 2>/dev/null | grep -qx APPCHECK_DEBUG_TOKEN && has_secret=true
+  registrations="$(api GET "$ac/apps/$app/debugTokens" 2>/dev/null \
+    | jq -r '[.debugTokens[]? | select(.displayName == "ci-smoke") | .name] | .[]' 2>/dev/null || true)"
+  if [ "$has_secret" = true ] && [ -n "$registrations" ]; then
+    log "debug token: stored in GitHub environment $ENV_NAME and registered with App Check"
+    return 0
   fi
+  if [ "$has_secret" = true ]; then
+    log "App Check does not know the stored debug token (its value cannot be read back); rotating it"
+  fi
+  if [ -n "$registrations" ]; then
+    log "removing ci-smoke debug token registrations that have no matching GitHub secret"
+    for n in $registrations; do api DELETE "https://firebaseappcheck.googleapis.com/v1/$n" >/dev/null; done
+  fi
+  log "creating a debug token, storing it in GitHub environment $ENV_NAME and registering it with App Check"
+  # A debug token must be a UUID v4 (App Check rejects anything else); openssl is already a prerequisite, uuidgen is not.
+  local h tok variant
+  h="$(openssl rand -hex 16)"
+  variant=$(( (0x${h:16:1} & 0x3) | 0x8 ))
+  h="${h:0:12}4${h:13:3}$(printf '%x' "$variant")${h:17:15}"
+  tok="${h:0:8}-${h:8:4}-${h:12:4}-${h:16:4}-${h:20:12}"
+  gh api -X PUT "repos/$REPO/environments/$ENV_NAME" >/dev/null
+  printf '%s' "$tok" | gh secret set APPCHECK_DEBUG_TOKEN --env "$ENV_NAME" --repo "$REPO"
+  api POST "$ac/apps/$app/debugTokens" "{\"displayName\":\"ci-smoke\",\"token\":\"$tok\"}" >/dev/null
 }
 
 step_config() { # V12. Public client config only (P13): web config and reCAPTCHA site key are public by design.

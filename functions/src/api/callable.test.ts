@@ -3,7 +3,7 @@ import { HttpsError } from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
 import exportsList from "../../exports.json";
 import { defineCallable, REGISTRY, RT } from "./callable";
-// Importing the entry registers ping and diag.
+// Importing the entry registers ping.
 import "../index";
 
 // exports.json entries that are triggers, not callables (LLD 0 section 4); none exist yet.
@@ -13,7 +13,7 @@ const callables = (exportsList as string[]).filter((n) => !NON_CALLABLE.has(n));
 test("T1 REGISTRY keys equal the callable subset of exports.json (API1)", () => {
   const real = [...REGISTRY.keys()].filter((k) => !k.startsWith("test-"));
   expect(real.sort()).toEqual([...callables].sort());
-  expect(real.sort()).toEqual(["diag", "ping"]);
+  expect(real.sort()).toEqual(["ping"]);
 });
 
 test("T1 every spec declares allow explicitly (API1)", () => {
@@ -29,7 +29,7 @@ test("T2 registry options: region, service account, App Check, command runtime s
     const o = REGISTRY.get(name)?.options;
     expect(o).toMatchObject({
       region: "us-central1",
-      serviceAccount: "fn-runtime",
+      serviceAccount: "fn-runtime@",
       enforceAppCheck: true,
       consumeAppCheckToken: false,
       cpu: 1,
@@ -46,7 +46,7 @@ test("T2 the built function's __endpoint carries the same options", async () => 
   for (const name of callables) {
     const ep = mod[name]?.__endpoint;
     expect(ep).toBeDefined();
-    expect(ep).toMatchObject({ region: ["us-central1"], serviceAccountEmail: "fn-runtime", availableMemoryMb: 256, cpu: 1, concurrency: 80 });
+    expect(ep).toMatchObject({ region: ["us-central1"], serviceAccountEmail: "fn-runtime@", availableMemoryMb: 256, cpu: 1, concurrency: 80 });
     expect((ep?.minInstances as { name?: string } | undefined)?.name).toBe("COMMAND_MIN_INSTANCES");
     expect(ep).toHaveProperty("callableTrigger");
   }

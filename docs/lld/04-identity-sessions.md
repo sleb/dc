@@ -658,7 +658,7 @@ HLD I1 to I5 and A1, A4 map as follows; new invariants are ID1 onward.
 | Rate limits | Each row of section 9 trips at N+1; keys hashed |
 | Code window | 71 h resolves, 73 h does not; `lobbyInfo` bodies identical for unknown, expired, full |
 | Host email link | Using the Auth emulator's `GET /emulator/v1/projects/{p}/oobCodes`: send, redeem on the same page, second redeem fails (I3), cross-device with email prompt, wrong email fails; `ensureHostProfile` idempotent |
-| Disabled-user enforcement | If the emulator does not reject disabled users on custom-token sign-in, mark the test as staging-smoke only (LLD 0 `scripts/smoke.ts`) |
+| Disabled-user enforcement | If the emulator does not reject disabled users on custom-token sign-in, mark the test as staging-smoke only: this step's own `scripts/smoke.ts` case (LLD 0 `scripts/smoke.ts`). #15 proved the surrounding seam there — a real custom token signs in on staging and the user is deleted again |
 | Sentinel scan | Secrets, tokens, emails, names never appear in emulator logs (ID4, ID15) |
 
 ### 12.3 Security rules (extends LLD 3 section 3.3, same `rules-test/` harness)
@@ -693,7 +693,7 @@ Join by code, close the tab, reopen (session persists), open the rejoin link in 
 | Hosting headers | Add `Referrer-Policy: no-referrer` for all paths in `firebase.json` | section 4 |
 | `functions/exports.json` | `lobbyInfo`, `joinGame`, `rejoin`, `spectate`, `reissueRejoinLink`, `signOutEverywhere`, `identityOutbox` | section 4 check-bundle |
 | Firestore TTL | `joinIdem` on `expiresAt` (the sixth TTL group, LLD 3) | TTL group list |
-| Probe in walkthrough step 16 | Extend `diag`: mint token (with `{ ep: 0 }`), sign in, confirm the ID token carries `ep`, `updateUser` disabled, confirm a second custom-token sign-in fails, `deleteUsers` | section 11 |
+| Probe for the identity step | The plain `diag` probe (mint, sign in, delete the user) ran in #15 and was then removed. This step owns the extended probe: mint a token with `{ ep: 0 }`, sign in, confirm the ID token carries `ep`, `updateUser` disabled, a second custom-token sign-in fails, `deleteUsers`. Extend the staging smoke (`scripts/smoke.ts`) rather than resurrecting `diag` | section 11, `scripts/README.md` |
 | Metrics | `auth.join`, `auth.rejoin`, `auth.reissue`, `auth.revoke`, `auth.purge.partial`, `rate.limited` counters; alert on revoke retries over 5 and on global lookup-miss rate | section 9 |
 
 ## Open questions / conflicts

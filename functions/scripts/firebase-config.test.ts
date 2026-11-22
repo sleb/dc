@@ -46,6 +46,13 @@ test("W2 the root test scripts match LLD 0 section 6 (#13)", async () => {
   expect(scripts["test:e2e"]).toStartWith("echo 'test:e2e: NO SUITE");
 });
 
+test("F5 firebase.json deploys firestore.rules and firestore.indexes.json, and nothing else changed (#15)", async () => {
+  const config = await Bun.file(join(import.meta.dir, "../../firebase.json")).json();
+  expect(config.firestore).toEqual({ rules: "firestore.rules", indexes: "firestore.indexes.json" });
+  // The functions, hosting and emulators blocks are asserted exactly by F1, F4 and F2; this pins the block set.
+  expect(Object.keys(config).sort()).toEqual(["emulators", "firestore", "functions", "hosting"]);
+});
+
 test("F4 firebase.json hosting serves apps/web/dist with the SPA rewrite, cache headers and Referrer-Policy (#14)", async () => {
   const config = await Bun.file(join(import.meta.dir, "../../firebase.json")).json();
   expect(config.hosting).toEqual({

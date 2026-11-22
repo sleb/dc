@@ -11,7 +11,10 @@ import type { LogFields } from "../log";
 export type PrincipalKind = "host" | "seat" | "spectator" | "guest";
 
 export const REGION = "us-central1";
-export const FN_RUNTIME = "fn-runtime";
+// The `firebase-tools` deploy rejects a bare account name (`fn-runtime`) and resolves this project-relative form to
+// `fn-runtime@<projectId>.iam.gserviceaccount.com` (proven by the first deploy, #15); the project id stays out of the
+// code (P2).
+export const FN_RUNTIME = "fn-runtime@";
 
 /** Runtime shapes (LLD 5 section 3.2). `command` here is the shape under test (decision #6); the real `command` differs (512MiB, 40). */
 export const RT = {

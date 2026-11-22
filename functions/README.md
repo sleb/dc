@@ -25,12 +25,16 @@ Fails unless `dist/index.cjs` has no `bun:`, `Bun.` or `@dc/`, every `require`, 
 
 ## Callables
 
-`src/api/callable.ts` is the only module that imports `onCall`. `defineCallable({ name, allow, runtime, handler })` builds a callable with region `us-central1`, service account `fn-runtime`, `enforceAppCheck: true`, `consumeAppCheckToken: false` and the given runtime shape (`RT.command`: 256MiB, cpu 1, concurrency 80, `minInstances` from the `COMMAND_MIN_INSTANCES` param, default 0), records it in `REGISTRY`, checks that the request is authenticated unless `allow` has `guest`, and logs one `api.done` line (`src/log.ts`, the typed logger). A handler that throws anything other than an `HttpsError` reaches the client as `internal` with a fixed message. This is the minimal wrapper of issue #12; #38 completes the pipeline (LLD 5 section 4).
+`src/api/callable.ts` is the only module that imports `onCall`. `defineCallable({ name, allow, runtime, handler })` builds a callable with region `us-central1`, service account `fn-runtime@` (the project-relative form the CLI resolves to `fn-runtime@<projectId>.iam.gserviceaccount.com`; a bare name is rejected at deploy time, #15), `enforceAppCheck: true`, `consumeAppCheckToken: false` and the given runtime shape (`RT.command`: 256MiB, cpu 1, concurrency 80, `minInstances` from the `COMMAND_MIN_INSTANCES` param, default 0), records it in `REGISTRY`, checks that the request is authenticated unless `allow` has `guest`, and logs one `api.done` line (`src/log.ts`, the typed logger). A handler that throws anything other than an `HttpsError` reaches the client as `internal` with a fixed message. This is the minimal wrapper of issue #12; #38 completes the pipeline (LLD 5 section 4).
 
-Every export in `src/index.ts` is also listed in `exports.json`. Current exports, both throwaway probes (`diag` is removed in #15):
+Every export in `src/index.ts` is also listed in `exports.json`. Current exports (one throwaway probe, kept until the real callables arrive):
 
 - `ping` returns `{ ok: true, node }` (`node` is `process.version`).
-- `diag` returns `{ ok: true, token }`, a custom token for uid `seat:probe:probe`. Under the emulator the token is unsigned; real signing (the `signBlob` self-grant) is proven by the staging smoke test.
+
+The `diag` probe (a custom token for uid `seat:probe:probe`) was removed in #15 after proving on staging that `admin.auth().createCustomToken()` signs through IAM `signBlob` with the self-granted `roles/iam.serviceAccountTokenCreator`. Two things it taught, which the identity callables inherit:
+
+- `firebase-functions` initializes its own *named* admin app (`__FIREBASE_FUNCTIONS_SDK__`), so `getApps().length === 0` is false in a deployed function even when there is no default app. Test for the default app (`getApps().some((app) => app.name === "[DEFAULT]")`) before calling `getAuth()` and friends.
+- A new region's first deploy needs an Artifact Registry cleanup policy; see `scripts/README.md`.
 
 ## Tests
 
