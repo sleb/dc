@@ -330,10 +330,14 @@ describe("S4 settle slot 4: auto-advance (8.2)", () => {
     expect(out.state.round).toEqual(g.round);
   });
 
-  test("a paused game does not auto-advance", () => {
-    const g = roundGame({ n: 3, submitted: [1, 2] });
-    const paused = { ...g, players: g.players.map((p, i) => (i === 2 ? { ...p, status: "left" as const } : p)) }; // 2 active
-    expect(settle(paused, scriptedRng([]), 1, false).state.round?.phase).toBe("SUBMITTING");
+  test("slot 4 leaves a paused round alone: the same closable round closes with paused false (control) and does nothing with paused true", () => {
+    const closable = roundGame({ submitted: [1, 2, 3] });
+    const env = () => ({ rng: scriptedRng([0, 0]), now: 1, episodeStarted: false });
+    const slot = SETTLE_SLOTS.find((s) => s.id === "4");
+    expect(types(slot?.run(closable, env()).events ?? [])).toEqual(["SubmissionsClosed"]);
+    const paused = slot?.run({ ...closable, paused: true }, env());
+    expect(paused?.events).toEqual([]);
+    expect(paused?.state.round?.phase).toBe("SUBMITTING");
   });
 
   test("the auto-advance loop has an iteration cap: a step beyond it is an EngineInvariantError, not a hang", () => {

@@ -1,8 +1,8 @@
-import { expect } from "bun:test";
 import fc from "fast-check";
 import type { Command } from "@dc/contracts";
 import { makeRng } from "../../src/rng";
 import type { Accepted, Ctx, Draft, Game, GameDrafts, Rejection, Result } from "../../src/types";
+import { assertDeepEqual } from "./assert";
 import { checkAll } from "./checks";
 import type { Step } from "./checks";
 import { counterMintId, ctxFor, deepFreeze, cid, makeGame, makePlayer, makeRound, pid, addCard } from "./factories";
@@ -28,7 +28,7 @@ export interface GameShape {
  * A fixture-world game, coherent for the E5, E6 and E7 checkers: every registry card is in exactly one zone. WRITING: ready players have finished and their cards sit in the decks,
  * the others have nothing pooled. PLAYING, JUDGING, FINISHED: `target` is set, hands hold `handSize` cards, and the registry meets `meetsMinimums` (the red deck and the green deck are filled up to R_min and G_min),
  * so a resolve can top every hand up and open the next round. PLAYING and JUDGING hold an open round with the given submissions and the round's green card on the table; a JUDGING round
- * has `revealOrder` set (the submissions reversed) and at least one submission. Ids: hands 100 i + k, submissions 700 + i, the round's green 900, greens in the deck 901 and 5000 up, filler reds 4000 up.
+ * has `revealOrder` set (the submissions reversed) and at least one submission. Ids: hands 100 i + k (at most 8 players, so below 800), submissions 6000 + i, the round's green 900, greens in the deck 901 and 5000 up, filler reds 4000 up.
  */
 export function buildGame(s: GameShape): Game {
   const playing = s.phase === "PLAYING" || s.phase === "JUDGING" || s.phase === "FINISHED";
@@ -66,7 +66,7 @@ export function buildGame(s: GameShape): Game {
   g = addCard(g, cid(901), "green", "greenDeck");
   for (let k = 0; k < s.n * target - 1; k++) g = addCard(g, cid(5000 + k), "green", "greenDeck");
   if (!open) return { ...g, winnerId: pid(0) };
-  const submissions = submitters.map((i) => ({ playerId: pid(i), cardId: cid(700 + i) }));
+  const submissions = submitters.map((i) => ({ playerId: pid(i), cardId: cid(6000 + i) }));
   for (const sub of submissions) g = { ...g, cards: { ...g.cards, [sub.cardId]: { kind: "red", text: `card ${sub.cardId}` } } };
   g = { ...g, cards: { ...g.cards, [cid(900)]: { kind: "green", text: "the green card" } } };
   const judging = s.phase === "JUDGING";
@@ -126,8 +126,8 @@ export function runScenario(decide: Decide, game0: Game | null, picks: Picks, op
     const cmdBefore = structuredClone(entry.cmd);
     if (opts.freeze === true) { deepFreeze(state); deepFreeze(entry.cmd); deepFreeze(ctx); }
     const result = decide(state, entry.cmd, ctx);
-    expect(state).toEqual(before);
-    expect(entry.cmd).toEqual(cmdBefore);
+    assertDeepEqual(state, before, `decide mutated its input state at step ${i}`);
+    assertDeepEqual(entry.cmd, cmdBefore, `decide mutated its command at step ${i}`);
     const step: Step = { index: i, seed: opts.seed, before: state, cmd: entry.cmd, result, actor: entry.actor, drafts };
     checkAll(step);
     trace.results.push(result);

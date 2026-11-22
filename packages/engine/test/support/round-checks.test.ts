@@ -52,6 +52,24 @@ describe("H1 the checkers fail rather than pass vacuously", () => {
     expect(() => checkNoAuthorship(leaked)).toThrow(/draft text/);
   });
 
+  test("checkConservation compares the added cards' colors and texts with the draft, keeping multiplicity", () => {
+    const s = finish({ red: ["r1", "r2"], green: ["g1"] });
+    const state = s.value.state;
+    const swapped = Object.fromEntries(Object.entries(state.cards).map(([id, c]) => [id, c.kind === "red" && c.text === "r1" ? { ...c, text: "unrelated" } : c]));
+    expect(() => checkConservation(withValue(s, { state: { ...state, cards: swapped } }))).toThrow(/draft/);
+    const twice = finish({ red: ["same", "same"], green: ["g1"] });
+    expect(() => checkConservation(twice)).not.toThrow();
+    const once = Object.fromEntries(Object.entries(twice.value.state.cards).map(([id, c]) => [id, c.kind === "red" && c.text === "same" && id === Object.keys(twice.value.state.cards).find((k) => twice.value.state.cards[k]?.text === "same") ? { ...c, text: "other" } : c]));
+    expect(() => checkConservation(withValue(twice, { state: { ...twice.value.state, cards: once } }))).toThrow(/draft/);
+  });
+
+  test("checkNoAuthorship does not read the event type as draft text, but still finds draft text in any other field", () => {
+    const s = finish({ red: ["PlayerFinishedWriting", "x"], green: ["g1"] });
+    expect(() => checkNoAuthorship(s)).not.toThrow();
+    const leaked = withValue(s, { events: s.value.events.map((e) => (e.t === "PlayerFinishedWriting" ? { ...e, note: "PlayerFinishedWriting" } : e)) as never });
+    expect(() => checkNoAuthorship(leaked)).toThrow(/draft text/);
+  });
+
   test("the hardened checkers are still in the append-only list", () => {
     for (const c of [checkConservation, checkNoAuthorship, checkAggregateChanged]) expect(checkers).toContain(c);
   });
@@ -104,6 +122,26 @@ describe("the new round checkers each fail on a broken result", () => {
     expect(() => checkRoundMoves(withValue(p, { state: { ...p.value.state, players: p.value.state.players.map((q) => (q.id === pid(2) ? { ...q, scorePile: [] } : q)) } }))).toThrow(/score pile is wrong/);
     const close = stepOf(sub, { type: "closeSubmissions", expectedVersion: 5 }, 1);
     expect(() => checkRoundMoves(withValue(close, { state: { ...close.value.state, pools: { ...close.value.state.pools, redDeck: [] } } }))).toThrow(/a close moved a card/);
+  });
+
+  test("E13 checkRoundMoves: a confirm whose submission is not the command actor's or not the command's card fails, even when the hands agree with the result", () => {
+    const two = roundGame({ judge: 1, submitted: [0] });
+    const c = stepOf(two, { type: "confirmSubmission", cardId: cid(300), expectedVersion: 5 }, 3);
+    expect(() => checkRoundMoves(c)).not.toThrow();
+    expect(() => checkRoundMoves({ ...c, actor: seat(2) })).toThrow(/actor/);
+    expect(() => checkRoundMoves({ ...c, cmd: { type: "confirmSubmission", cardId: cid(301), expectedVersion: 5 } })).toThrow(/command's card/);
+    const { actor: _a, ...bare } = c;
+    expect(() => checkRoundMoves(bare)).toThrow(/actor/);
+  });
+
+  test("E14 checkScoring: a winner reported on the event, in history or in the round record that is not the card's owner fails", () => {
+    const p = picked();
+    const winner = p.value.events[0] as Extract<Accepted["events"][number], { t: "WinnerPicked" }>;
+    expect(() => checkScoring(p)).not.toThrow();
+    expect(() => checkScoring(withValue(p, { events: [{ ...winner, winnerId: pid(3) }, ...p.value.events.slice(1)] }))).toThrow(/owner/);
+    const hist = p.value.state.history.map((h, i, a) => (i === a.length - 1 ? { ...h, winnerId: pid(3) } : h));
+    expect(() => checkScoring(withValue(p, { state: { ...p.value.state, history: hist } }))).toThrow(/owner/);
+    expect(() => checkScoring(withValue(p, { roundRecords: p.value.roundRecords.map((r) => ({ ...r, winnerId: pid(3) })) }))).toThrow(/owner/);
   });
 
   test("E6 checkTopUp: a short hand after a pick fails", () => {

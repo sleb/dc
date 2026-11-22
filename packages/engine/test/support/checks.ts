@@ -1,4 +1,4 @@
-import { expect } from "bun:test";
+import { assertDeepEqual } from "./assert";
 import { meetsMinimums, totals } from "../../src/rules/playability";
 import type { Accepted, Actor, Draft, DomainEvent, Game, GameDrafts, Player, Rejection, Result } from "../../src/types";
 
@@ -41,7 +41,7 @@ export const checkSerializable: Checker = ({ result }) => {
   if (!result.ok) return;
   const bad = findNonJson(result.value.state);
   if (bad !== null) throw new Error(`state is not plain JSON at ${bad}`);
-  expect(JSON.parse(JSON.stringify(result.value.state))).toEqual(result.value.state);
+  assertDeepEqual(JSON.parse(JSON.stringify(result.value.state)), result.value.state, "state does not survive a JSON round trip");
 };
 
 /** E3: the version moves by exactly one when the aggregate changed, else not at all. */
@@ -53,9 +53,9 @@ export const checkVersion: Checker = ({ before, result }) => {
 };
 
 /** E3 corollary: a command reported as not changing the aggregate leaves the state deep-equal to the input (a saveDraft-style handler must not mutate state). */
-export const checkUnchangedWhenNotAggregate: Checker = ({ before, result }) => {
+export const checkUnchangedWhenNotAggregate: Checker = ({ before, cmd, result }) => {
   if (!result.ok || result.value.aggregateChanged || before === null) return;
-  expect(result.value.state).toEqual(before);
+  assertDeepEqual(result.value.state, before, `${cmdType(cmd)} reported no aggregate change but altered the state`);
 };
 
 const cmdType = (cmd: unknown): string => {
@@ -107,6 +107,11 @@ export const checkConservation: Checker = ({ before, cmd, result, drafts }) => {
     const dRed = countKind(after, "red") - countKind(before, "red");
     const dGreen = countKind(after, "green") - countKind(before, "green");
     if (dRed !== draft.red.length || dGreen !== draft.green.length) throw new Error(`finishWriting added ${dRed} red and ${dGreen} green for a draft of ${draft.red.length} and ${draft.green.length}`);
+    // The new registry entries are the draft's cards: same colors and texts, with multiplicity.
+    const kindText = (kind: string, text: string): string => JSON.stringify([kind, text.trim()]);
+    const want = [...draft.red.map((t) => kindText("red", t)), ...draft.green.map((t) => kindText("green", t))].sort();
+    const got = added.map((k) => kindText(after.cards[k]?.kind ?? "", after.cards[k]?.text ?? "")).sort();
+    if (want.join("\n") !== got.join("\n")) throw new Error("finishWriting registered cards that are not the finisher's draft (colors and texts differ)");
   }
 };
 
@@ -169,7 +174,7 @@ export const checkNoAuthorship: Checker = ({ before, cmd, result, drafts }) => {
   const who = finisher(before, v.state);
   const draft = who === undefined ? undefined : drafts[who.id];
   // Whole values: a one-letter draft text is a substring of every event name, so only a string that is exactly a draft text (or an id) counts as a leak.
-  const leaves = new Set(stringLeaves(events));
+  const leaves = new Set(stringLeaves(events.map(({ t: _t, ...fields }) => fields))); // `t` is the event type, never a copy of a draft text
   for (const id of added) if (leaves.has(id)) throw new Error(`an event holds the new card id ${id}`);
   for (const text of [...(draft?.red ?? []), ...(draft?.green ?? [])]) if (leaves.has(text) || leaves.has(text.trim())) throw new Error("an event holds draft text");
   if (JSON.stringify(v.draftChanges).match(/c_[a-z0-9]{10}/) !== null) throw new Error("draftChanges holds a card id");
@@ -240,7 +245,7 @@ export const checkJudges: Checker = ({ before, result }) => {
 };
 
 /** E5 per zone, E13: a confirm moves exactly the played card from the player's hand to the submissions; a close moves nothing; a pick gives the round's green card to the card's owner and to nobody else. */
-export const checkRoundMoves: Checker = ({ before, cmd, result }) => {
+export const checkRoundMoves: Checker = ({ before, cmd, result, actor }) => {
   const v = accepted(result);
   const type = cmdType(cmd);
   if (v === null || before === null || !ROUND_COMMANDS.has(type) || before.round === null) return;
@@ -250,6 +255,11 @@ export const checkRoundMoves: Checker = ({ before, cmd, result }) => {
     const subs = after.round?.submissions ?? [];
     const added = subs[subs.length - 1];
     if (added === undefined || subs.length !== before.round.submissions.length + 1) throw new Error("a confirm must add exactly one submission");
+    // The expected submitter and card come from the command and the actor resolved against `before`, not from the result under test.
+    if (actor === undefined) throw new Error("checkRoundMoves needs the step's actor for a confirmSubmission");
+    const me = actorPlayer(before, actor);
+    if (me === undefined || added.playerId !== me.id) throw new Error(`the submission is by ${added.playerId}, not the command actor`);
+    if (added.cardId !== (cmd as { cardId?: unknown }).cardId) throw new Error("the submitted card is not the command's card");
     if (new Set(subs.map((s) => s.playerId)).size !== subs.length) throw new Error("two submissions by one player");
     if (!handOf(before, added.playerId).includes(added.cardId)) throw new Error("the submitted card was not in the player's hand");
     for (const p of after.players) {
@@ -290,7 +300,7 @@ export const checkPlayable: Checker = ({ result }) => {
 };
 
 /** E14: at most one `WinnerPicked` per command and never the judge; `history` grows by exactly that count with contiguous round numbers; score piles sum to `history.length` (exact until evictions, #23). */
-export const checkScoring: Checker = ({ before, result }) => {
+export const checkScoring: Checker = ({ before, cmd, result }) => {
   const v = accepted(result);
   if (v === null) return;
   const after = v.state;
@@ -299,6 +309,14 @@ export const checkScoring: Checker = ({ before, result }) => {
   for (const p of picks) if (p.winnerId === p.judgeId) throw new Error("the judge won their own round");
   const grew = after.history.length - (before?.history.length ?? 0);
   if (grew !== picks.length) throw new Error(`history grew by ${grew} with ${picks.length} WinnerPicked`);
+  if (cmdType(cmd) === "pickWinner" && picks.length === 1) {
+    // The owner is resolved from the submissions before the command, then compared with every place the winner is reported.
+    const owner = before?.round?.submissions.find((s) => s.cardId === (cmd as { submissionId?: unknown }).submissionId)?.playerId;
+    const last = after.history[after.history.length - 1];
+    const reported = [["WinnerPicked", picks[0]?.winnerId], ["history", last?.winnerId], ...v.roundRecords.map((r) => ["RoundRecord", r.winnerId] as const)];
+    for (const [where, who] of reported) if (who !== owner) throw new Error(`${where} reports winner ${String(who)}, the card's owner is ${String(owner)}`);
+    if (v.roundRecords.length !== 1) throw new Error(`a pick returned ${v.roundRecords.length} round records`);
+  }
   after.history.forEach((h, i) => { if (h.round !== i + 1) throw new Error(`history[${i}] is round ${h.round}`); });
   const points = after.players.reduce((n, p) => n + p.scorePile.length, 0);
   if (points !== after.history.length) throw new Error(`score piles hold ${points} cards, history has ${after.history.length} rounds`);

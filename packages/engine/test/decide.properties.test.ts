@@ -13,7 +13,7 @@ import type { Enumerator } from "./support/legal";
 import { arbPicks, arbShape, buildGame, runScenario, zeroTime } from "./support/scenario";
 import type { Decide } from "./support/scenario";
 import type { Actor, Game, Rejection } from "../src/types";
-import { checkAll } from "./support/checks";
+import { checkAll, zoneIds } from "./support/checks";
 
 // The properties run over the fixture specs (the ladder proof, independent of any real command) and over the real REGISTRY, which holds
 // the lobby commands since #20. #21 and #22 add their rows, their enumerators to support/legal.ts, and these properties then cover them.
@@ -100,6 +100,15 @@ describe("X1 decide is total", () => {
         expect(s.type).toBe(k);
         if (s.creates === true) expect(k).toBe("createGame");
       }
+    }
+  });
+
+  test("buildGame keeps every card in exactly one zone at the largest supported table (n = 8), where a submission id used to collide with a hand id", () => {
+    for (const phase of ["PLAYING", "JUDGING"] as const) {
+      const g = buildGame({ n: 8, phase, ready: [], handSize: 2, judge: 0, submitted: Array.from({ length: 8 }, () => true), paused: false });
+      const ids = zoneIds(g);
+      expect(new Set(ids).size).toBe(ids.length);
+      expect([...ids].sort()).toEqual(Object.keys(g.cards).sort());
     }
   });
 
