@@ -336,7 +336,10 @@ v13() {
   have betterleaks || { bad "betterleaks is not installed (brew install betterleaks)"; return 0; }
   # No --validate: detection only, no requests to credential providers.
   (cd "$ROOT" && betterleaks git -c .betterleaks.toml --no-banner --redact . >/dev/null 2>&1) || bad "betterleaks found a leak in the git history"
-  (cd "$ROOT" && betterleaks dir -c .betterleaks.toml --no-banner --redact . >/dev/null 2>&1) || bad "betterleaks found a leak in the working tree"
+  # The source tree only (tracked and untracked-not-ignored files), the same definition CI uses: built output such as
+  # apps/web/dist legitimately inlines the public web config. See scripts/scan-secrets.ts.
+  have bun || { bad "bun is not installed (needed for scripts/scan-secrets.ts)"; return 0; }
+  (cd "$ROOT" && bun scripts/scan-secrets.ts >/dev/null 2>&1) || bad "betterleaks found a leak in the source tree (run: bun scripts/scan-secrets.ts)"
 }
 
 v14() {
