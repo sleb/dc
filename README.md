@@ -44,7 +44,7 @@ Dependencies are the latest stable at the time they were added, exact-pinned (`b
 | `functions` | `@dc/functions` | Cloud Functions; `functions/scripts` builds the deployable bundle (see `functions/README.md`) |
 | `apps/web` | `@dc/web` | React client (Vite, Tailwind 4); imports only `@dc/contracts` (see `apps/web/README.md`) |
 | `lint-test` | | tests for the lint and compiler policy |
-| `scripts` | | environment provisioning and verification, the secret scan, the log-sentinel harness, `check-web-size.ts` and the workflow policy test (see `scripts/README.md`) |
+| `scripts` | | environment provisioning and verification, the secret scan, the log-sentinel harness, `check-web-size.ts`, the workflow policy test and the skill-layout check (see `scripts/README.md`) |
 | `.github/workflows` | | `ci.yml`: verify, emulator, preview, deploy-staging, check-tag and a guarded deploy-prod stub (LLD 0 section 8) |
 | `hosting-test` | | bun tests that run against the Hosting emulator (`bun run test:hosting`) |
 
