@@ -1,12 +1,14 @@
 ---
 name: dc-plan
-description: Create a reviewed execution plan for a Deep Cuts GitHub issue (one step = one PR). Enforces strict TDD, ties the plan to the issue's acceptance criteria, and keeps designs and docs current. Use when asked to plan, or "create an execution plan for", GH issue #N. Produces a plan artifact for review, then posts it to the issue once approved. Does not start implementation.
-argument-hint: <issue number>
+description: Create a reviewed execution plan for a Deep Cuts GitHub issue (one step = one PR). Enforces strict TDD, ties the plan to the issue's acceptance criteria, and keeps designs and docs current. Use when asked to plan, or "create an execution plan for", GH issue #N. Produces a plan document for review, then posts it to the issue once approved. Does not start implementation.
+compatibility: Needs git and an authenticated `gh` CLI for the target repo. Read-only until step 6.
 ---
 
 # dc-plan: execution plan for a Deep Cuts issue
 
-Plan one step issue (`#$ARGUMENTS`). Output is a reviewed plan, not code. Do not start any implementation, provisioning or branch work until the user asks.
+This skill takes one argument, a GitHub issue number; it is called `N` below (read it from the invocation arguments, `$ARGUMENTS` in agents that expose it).
+
+Plan one step issue (`#N`). Output is a reviewed plan, not code. Do not start any implementation, provisioning or branch work until the user asks.
 
 Every plan must:
 1. Enforce strict TDD (red, green, refactor, no production change without a failing test or check first).
@@ -15,7 +17,7 @@ Every plan must:
 
 ## 1. Gather context (read-only)
 
-- `gh issue view N --json title,body,labels,comments`. If `gh` returns nothing, retry with `2>&1`. If you hit the API rate limit, stop and use `ScheduleWakeup`, don't loop.
+- `gh issue view N --json title,body,labels,comments`. If `gh` returns nothing, retry with `2>&1`. If you hit the API rate limit, stop and report when the limit resets; don't loop.
 - Read the LLD sections the issue's "Implements" line names, plus the "Interfaces to other LLDs" table and Open questions of each LLD touched. Read the HLD and tech-stack only for the parts the LLDs defer to.
 - Read the tracking issue (the "Deep Cuts execution plan", currently #54) for principles, milestones and decision issues.
 - Read the issues this one is blocked by and the ones it blocks. A plan must not assume anything a blocker hasn't delivered, and must not collide with what the next issue scaffolds.
@@ -58,16 +60,17 @@ Keep the plan specific to this issue. Use real LLD IDs (P-numbers, section numbe
 
 ## 5. Publish for review
 
-- Write it as an Artifact (HTML), via the Artifact tool's `quickstart` first, then write the file in the scratchpad and publish. Utilitarian design, theme-aware, readable tables, phases as ruled blocks. Title is a short name, for example "Staging Project Execution Plan".
-- Tell the user the link, the three or four things that most need their decision, and that it is private until shared.
-- The artifact receives comments. Read them with `ArtifactComments`, answer, and when a thread is settled and the plan already reflects it, resolve it. If a thread needs a plan change, edit the artifact (use `edits` on the same file path), then resolve. Leave a thread open only while a decision is outstanding. Ask what a bare "agree" refers to if the highlighted text is ambiguous.
+- Publish it where the user can review and comment inline, using whatever your agent offers: a shared document, a PR or issue draft, or a rendered HTML page in a scratch directory. Utilitarian design, theme-aware, readable tables, phases as ruled blocks. Title is a short name, for example "Staging Project Execution Plan".
+- If your agent has no shareable review surface, write the plan as Markdown in a scratch directory, give the user the path, and ask for comments in chat; treat each chat comment as one thread.
+- Tell the user the link (or path), the three or four things that most need their decision, and that it is private until shared.
+- Read the comments, answer each, and when a thread is settled and the plan already reflects it, resolve or close it. If a thread needs a plan change, edit the same document in place, then resolve. Leave a thread open only while a decision is outstanding. Ask what a bare "agree" refers to if the highlighted text is ambiguous.
 
 ## 6. After approval: put it on the issue
 
 Only when the user says to:
 1. If the acceptance rewrite was approved, update the issue body (`gh issue edit N --body-file`), keeping Work, Implements, Blocked by and the footer, replacing "Done when".
 2. Post the plan as a `gh issue comment`, in Markdown, with phases as checkboxes. Do not link the private artifact.
-3. Delete the plan artifact so we don't accumulate cruft: the issue comment is now the record. Confirm with the user first (deleting is permanent and breaks the link), then `Artifact` with `action: "delete"` and its `url`. Resolve or answer any open comment threads before deleting, since they go with it.
+3. Delete the plan document so we don't accumulate cruft: the issue comment is now the record. Confirm with the user first (deleting is permanent and breaks the link), then remove it with whatever your agent uses to delete published documents, or delete the local file and say so. Resolve or answer any open comment threads before deleting, since they go with it.
 4. Then offer to start Phase 0 and Phase 1. Do not start until asked.
 
 ## Rules
