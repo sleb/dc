@@ -1,0 +1,5 @@
+paths:
+  .github/workflows/ci.yml:
+    ignore:
+      # deploy-prod is a deliberate `if: false` stub until M8 (LLD 0 P17); the policy test requires it.
+      - constant expression "false" in condition

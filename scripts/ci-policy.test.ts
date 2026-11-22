@@ -106,9 +106,9 @@ describe("C2 permissions (P18)", () => {
     }
   });
   test("secrets, the WIF variables and the staging environment appear only in preview and deploy-staging", () => {
-    expect(JSON.stringify(wf.env ?? {})).not.toMatch(/secrets\.|vars\./);
+    expect(JSON.stringify(wf.env ?? {})).not.toMatch(/\$\{\{\s*(secrets|vars)\./);
     for (const n of jobNames.filter((x) => x !== "preview" && x !== "deploy-staging")) {
-      expect([n, /secrets\.(?!GITHUB_TOKEN)|vars\.WIF|vars\.DEPLOYER/.test(text(n))]).toEqual([n, false]);
+      expect([n, /\$\{\{\s*(secrets\.(?!GITHUB_TOKEN)|vars\.)/.test(text(n))]).toEqual([n, false]);
       expect([n, envName(n) === "staging"]).toEqual([n, false]);
     }
   });
