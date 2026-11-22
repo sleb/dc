@@ -1,35 +1,29 @@
 import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { smoke } from "./smoke";
+import { exitCodeFor, smoke } from "./smoke";
 import type { CallResult, SmokeDeps } from "./smoke";
 
-// V5 to V7 (issue #15): the post-deploy smoke decides pass or fail, so its mapping from what staging answers to an
+// V5 and V6 (issue #15): the post-deploy smoke decides pass or fail, so its mapping from what staging answers to an
 // exit code is tested here without a network. Every dependency that would reach Google is injected.
 
 const PROJECT = "deepcuts-staging";
 const TOKEN = "debug-token-sentinel-1";
 const MINTED = "minted-debug-token-sentinel-2";
-const CUSTOM = "custom-token-sentinel-3";
 const APP_CHECK = "app-check-token-sentinel-4";
-const PROBE_UID = "seat:probe:probe";
 
 type Options = {
   env?: Record<string, string | undefined>;
   ping?: CallResult;
   noToken?: CallResult;
-  diag?: CallResult;
-  uid?: string;
   minted?: string;
   appCheckToken?: string;
   registerError?: Error;
   exchangeError?: Error;
-  signInError?: Error;
-  deleteUserError?: Error;
   deleteTokenError?: Error;
 };
 
 function harness(o: Options = {}) {
-  const rec = { calls: [] as string[], registered: [] as string[], exchanges: [] as string[], tokenDeletes: 0, signIns: [] as string[], userDeletes: 0, lines: [] as string[] };
+  const rec = { calls: [] as string[], registered: [] as string[], exchanges: [] as string[], tokenDeletes: 0, lines: [] as string[] };
   const ok = (result: unknown): CallResult => ({ ok: true, result });
   const deps: Partial<SmokeDeps> = {
     env: o.env ?? { APPCHECK_DEBUG_TOKEN: TOKEN },
@@ -56,18 +50,8 @@ function harness(o: Options = {}) {
     call: async (name, appCheckToken) => {
       rec.calls.push(appCheckToken === undefined ? `${name}:no-token` : `${name}:token`);
       if (appCheckToken !== undefined && appCheckToken !== (o.appCheckToken ?? APP_CHECK)) throw new Error(`call sent App Check token ${appCheckToken}`);
-      if (name === "ping") return appCheckToken === undefined ? (o.noToken ?? { ok: false, status: 401, code: "unauthenticated" }) : (o.ping ?? ok({ ok: true, node: "v22.23.2" }));
-      return o.diag ?? ok({ ok: true, token: CUSTOM });
-    },
-    signInWithCustomToken: async (customToken, appCheckToken) => {
-      rec.signIns.push(customToken);
-      if (appCheckToken !== (o.appCheckToken ?? APP_CHECK)) throw new Error(`sign-in sent App Check token ${appCheckToken}`);
-      if (o.signInError) throw o.signInError;
-      return o.uid ?? PROBE_UID;
-    },
-    deleteSignedInUser: async () => {
-      if (o.deleteUserError) throw o.deleteUserError;
-      rec.userDeletes += 1;
+      if (name !== "ping") throw new Error(`smoke called an unexpected callable: ${name}`);
+      return appCheckToken === undefined ? (o.noToken ?? { ok: false, status: 401, code: "unauthenticated" }) : (o.ping ?? ok({ ok: true, node: "v22.23.2" }));
     },
   };
   return { deps, rec };
@@ -166,47 +150,59 @@ test("V6 a debug token that cannot be deleted fails the run", async () => {
   expect(out.reasons.join(" ")).toContain("RESOURCE_EXHAUSTED");
 });
 
-test("V6 no token value is ever printed", async () => {
+test("V6 no token value is ever printed: not in the outcome lines and not in the failure reasons", async () => {
+  const secrets = [TOKEN, MINTED, APP_CHECK];
+  const assertClean = (text: string) => {
+    for (const secret of secrets) expect(text).not.toContain(secret);
+  };
+
   for (const env of [{ APPCHECK_DEBUG_TOKEN: TOKEN }, {}]) {
     const { deps, rec } = harness({ env });
-    await smoke({ project: PROJECT, diag: true, deps });
-    const printed = rec.lines.join("\n");
-    for (const secret of [TOKEN, MINTED, CUSTOM, APP_CHECK]) expect(printed).not.toContain(secret);
-    expect(printed).toContain(PROBE_UID);
+    const out = await smoke({ project: PROJECT, deps });
+    expect(out).toEqual({ ok: true, reasons: [] });
+    assertClean(rec.lines.join("\n"));
+    assertClean(out.reasons.join("\n"));
+    expect(rec.lines).toContain("ping: ok (node v22.23.2)");
+  }
+
+  // The failure paths are the only ones that can print an error, and Google's messages can echo what we sent: each
+  // error here carries the token, and both the stdout lines and the stderr reasons must still be clean.
+  const cases: { opts: Options; name: string }[] = [
+    { name: "register", opts: { env: {}, registerError: new Error(`POST debugTokens rejected token ${MINTED}`) } },
+    { name: "exchange", opts: { env: {}, exchangeError: new Error(`INVALID_ARGUMENT for ${MINTED}`) } },
+    { name: "delete", opts: { env: {}, deleteTokenError: new Error(`DELETE /v1/projects/p/apps/a/debugTokens/${MINTED} failed`) } },
+    { name: "exchange-env-token", opts: { env: { APPCHECK_DEBUG_TOKEN: TOKEN }, exchangeError: new Error(`INVALID_ARGUMENT for ${TOKEN}`) } },
+  ];
+  for (const c of cases) {
+    const { deps, rec } = harness(c.opts);
+    const out = await smoke({ project: PROJECT, deps });
+    expect(out.ok).toBe(false);
+    assertClean(rec.lines.join("\n"));
+    assertClean(out.reasons.join("\n"));
+    expect(out.reasons.join("\n")).toContain("<redacted>");
   }
 });
 
-test("V7 --diag signs a custom token in as the probe uid and deletes that user", async () => {
-  const { deps, rec } = harness();
-  expect(await smoke({ project: PROJECT, diag: true, deps })).toEqual({ ok: true, reasons: [] });
-  expect(rec.calls).toContain("diag:token");
-  expect(rec.signIns).toEqual([CUSTOM]);
-  expect(rec.userDeletes).toBe(1);
-  expect(rec.lines).toContain(`diag: signed in as ${PROBE_UID}, user deleted`);
+test("V6 exit code 0 for a pass and 1 for a failure, so the CI gate lands on the outcome", async () => {
+  const passed = await smoke({ project: PROJECT, deps: harness().deps });
+  expect(exitCodeFor(passed)).toBe(0);
+
+  const failed = await smoke({ project: PROJECT, deps: harness({ noToken: { ok: true, result: { ok: true, node: "v22.23.2" } } }).deps });
+  expect(exitCodeFor(failed)).toBe(1);
+
+  const errored = await smoke({ project: PROJECT, deps: harness({ env: {}, registerError: new Error("PERMISSION_DENIED") }).deps });
+  expect(exitCodeFor(errored)).toBe(1);
 });
 
-test("V7 without --diag the diag callable is never called", async () => {
-  const { deps, rec } = harness();
-  await smoke({ project: PROJECT, deps });
-  expect(rec.calls.some((c) => c.startsWith("diag"))).toBe(false);
-});
-
-test("V7 a diag failure, a wrong uid, a sign-in failure and a failed delete each fail the run", async () => {
-  const diagFailed = await smoke({ project: PROJECT, diag: true, deps: harness({ diag: { ok: false, status: 500, code: "internal" } }).deps });
-  expect(diagFailed.reasons.join(" ")).toContain("diag");
-
-  const wrongUid = await smoke({ project: PROJECT, diag: true, deps: harness({ uid: "seat:other:seat" }).deps });
-  expect(wrongUid.ok).toBe(false);
-  expect(wrongUid.reasons.join(" ")).toContain("seat:other:seat");
-
-  const signInFailed = await smoke({ project: PROJECT, diag: true, deps: harness({ signInError: new Error("INVALID_CUSTOM_TOKEN") }).deps });
-  expect(signInFailed.reasons.join(" ")).toContain("INVALID_CUSTOM_TOKEN");
-
-  const { deps, rec } = harness({ deleteUserError: new Error("USER_NOT_FOUND") });
-  const deleteFailed = await smoke({ project: PROJECT, diag: true, deps });
-  expect(deleteFailed.ok).toBe(false);
-  expect(deleteFailed.reasons.join(" ")).toContain("USER_NOT_FOUND");
-  expect(rec.userDeletes).toBe(0);
+test("V5 the CLI rejects --diag (the diag callable was removed in #15) and any other unknown flag", () => {
+  const at = (args: string[]) =>
+    Bun.spawnSync(["bun", "scripts/smoke.ts", ...args], { cwd: join(import.meta.dir, ".."), stdin: "ignore" });
+  const diag = at(["--project", PROJECT, "--diag"]);
+  expect(diag.exitCode).toBe(2);
+  expect(diag.stderr.toString()).toContain("unknown argument: --diag");
+  const unknown = at(["--project", PROJECT, "--force"]);
+  expect(unknown.exitCode).toBe(2);
+  expect(unknown.stderr.toString()).toContain("--force");
 });
 
 test("V5 the CLI refuses to run without --project and on an unknown flag", () => {

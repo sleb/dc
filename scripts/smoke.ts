@@ -1,24 +1,23 @@
 // Post-deploy smoke for the staging (or prod) project: the only place that proves the seams the emulators cannot
-// (LLD 0 section 11 steps 15 and 16, P12): real App Check enforcement on a deployed callable, real custom-token
-// signing through IAM `signBlob`, and the Node runtime version.
+// (LLD 0 section 11 step 15, P12): real App Check enforcement on a deployed callable and the Node runtime version.
 //
 //   APPCHECK_DEBUG_TOKEN=... bun scripts/smoke.ts --project deepcuts-staging
-//   bun scripts/smoke.ts --project deepcuts-staging --diag
 //
 // The App Check debug token comes from APPCHECK_DEBUG_TOKEN when it is set (CI, the GitHub `staging` environment
 // secret). Otherwise one is minted and registered for the run, then deleted in the same run; if that registration is
 // refused, the message says which permission is missing and how to supply a token instead. No token value is ever
 // printed or written. Exit codes: 0 pass, 1 fail, 2 usage.
+//
+// Custom-token signing is not checked here: that probe (`diag`) was removed in #15 after it passed on staging, and the
+// extended sign-in probe (epoch claim, disabled user, `deleteUsers`) belongs to the identity step, LLD 4 section 13.
 
 import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 const REGION = "us-central1";
-const PROBE_UID = "seat:probe:probe";
 const APPCHECK_API = "https://firebaseappcheck.googleapis.com/v1";
 const FIREBASE_API = "https://firebase.googleapis.com/v1beta1";
-const IDENTITY_API = "https://identitytoolkit.googleapis.com/v1";
 const ROOT = join(import.meta.dir, "..");
 /** The two codes a callable with `enforceAppCheck` can answer a tokenless request with (LLD 0 section 6). */
 const TOKENLESS_CODES = new Set(["unauthenticated", "failed-precondition"]);
@@ -33,17 +32,13 @@ export interface SmokeDeps {
   mintToken: () => string;
   /** Registers a newly minted debug token; resolves to the function that deletes it. */
   registerDebugToken: (token: string) => Promise<() => Promise<void>>;
-  /** Exchanges a debug token for a real App Check token (the JWT the callables and Auth verify). */
+  /** Exchanges a debug token for a real App Check token (the JWT the callables verify). */
   exchangeDebugToken: (debugToken: string) => Promise<string>;
-  signInWithCustomToken: (customToken: string, appCheckToken: string) => Promise<string>;
-  deleteSignedInUser: () => Promise<void>;
   log: (line: string) => void;
 }
 
 export interface SmokeOptions {
   project: string;
-  /** Also run the `diag` path: custom token, sign-in, then delete the probe user. */
-  diag?: boolean;
   deps?: Partial<SmokeDeps>;
 }
 
@@ -54,6 +49,11 @@ const stringOf = (v: unknown): string => (typeof v === "string" ? v : "");
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 /** Messages can come back from Google with the value we sent; redact it before it is printed. */
 const redact = (e: unknown, ...values: string[]): string => values.reduce((text, value) => (value ? text.replaceAll(value, "<redacted>") : text), message(e));
+
+/** The exit code for an outcome: 0 pass, 1 fail (2 is a usage error, decided before a run starts). */
+export function exitCodeFor(outcome: SmokeOutcome): number {
+  return outcome.ok ? 0 : 1;
+}
 
 async function checkPing(d: SmokeDeps, appCheckToken: string, reasons: string[]): Promise<void> {
   const ping = await d.call("ping", appCheckToken);
@@ -72,41 +72,9 @@ async function checkPing(d: SmokeDeps, appCheckToken: string, reasons: string[])
   else d.log(`no App Check token: rejected (${noToken.code})`);
 }
 
-async function checkDiag(d: SmokeDeps, appCheckToken: string, reasons: string[]): Promise<void> {
-  const diag = await d.call("diag", appCheckToken);
-  if (!diag.ok) {
-    reasons.push(`diag failed: ${diag.code} (HTTP ${diag.status}); if it is a signBlob denial, fn-runtime is missing the self-grant of roles/iam.serviceAccountTokenCreator`);
-    return;
-  }
-  const customToken = stringOf(objectOf(diag.result)["token"]);
-  if (!customToken) {
-    reasons.push("diag returned no custom token");
-    return;
-  }
-  let uid: string;
-  try {
-    uid = await d.signInWithCustomToken(customToken, appCheckToken);
-  } catch (e) {
-    reasons.push(`signInWithCustomToken failed: ${redact(e, customToken)}`);
-    return;
-  }
-  if (uid !== PROBE_UID) {
-    reasons.push(`diag signed in as ${uid}, want ${PROBE_UID}`);
-    return;
-  }
-  try {
-    await d.deleteSignedInUser();
-  } catch (e) {
-    reasons.push(`could not delete the Auth user ${uid}: ${message(e)}`);
-    return;
-  }
-  d.log(`diag: signed in as ${uid}, user deleted`);
-}
-
 export async function smoke(o: SmokeOptions): Promise<SmokeOutcome> {
   const d: SmokeDeps = { ...realDeps(o.project), ...o.deps };
   const reasons: string[] = [];
-  const out = o.diag === true;
 
   let debugToken = (d.env["APPCHECK_DEBUG_TOKEN"] ?? "").trim();
   let release: (() => Promise<void>) | undefined;
@@ -123,8 +91,8 @@ export async function smoke(o: SmokeOptions): Promise<SmokeOutcome> {
     }
   }
 
-  // The callables and Auth verify a real App Check JWT (firebase-admin requires RS256 claims), so the debug token is
-  // exchanged first; sending the debug token itself is rejected with `unauthenticated` (observed on staging, #15).
+  // The callables verify a real App Check JWT (firebase-admin requires RS256 claims), so the debug token is exchanged
+  // first; sending the debug token itself is rejected with `unauthenticated` (observed on staging, #15).
   let appCheckToken = "";
   if (reasons.length === 0) {
     try {
@@ -135,17 +103,15 @@ export async function smoke(o: SmokeOptions): Promise<SmokeOutcome> {
   }
 
   try {
-    if (reasons.length === 0) {
-      await checkPing(d, appCheckToken, reasons);
-      if (out) await checkDiag(d, appCheckToken, reasons);
-    }
+    if (reasons.length === 0) await checkPing(d, appCheckToken, reasons);
   } finally {
     if (release) {
       try {
         await release();
         d.log("App Check debug token: deleted");
       } catch (e) {
-        reasons.push(`could not delete the App Check debug token registered for this run: ${message(e)}`);
+        // The DELETE carries the token's resource name, so this reason is redacted like every other path.
+        reasons.push(`could not delete the App Check debug token registered for this run: ${redact(e, debugToken)}`);
       }
     }
   }
@@ -153,8 +119,8 @@ export async function smoke(o: SmokeOptions): Promise<SmokeOutcome> {
 }
 
 // ---------------------------------------------------------------------------
-// The real effects: HTTP to the deployed callables, the Identity Toolkit REST API and the App Check REST API, with
-// the operator's Application Default Credentials for the App Check admin calls.
+// The real effects: HTTP to the deployed callable and the App Check REST API, with the operator's Application Default
+// Credentials for the App Check admin calls.
 // ---------------------------------------------------------------------------
 
 async function adcToken(): Promise<string> {
@@ -251,7 +217,12 @@ function registerDebugToken(project: string): SmokeDeps["registerDebugToken"] {
       const createdName = stringOf(created["name"]);
       if (!createdName) throw new Error("App Check did not return the new debug token's name");
       return async () => {
-        await request(`${APPCHECK_API}/${createdName}`, { method: "DELETE", headers: await appCheckAdminHeaders(project) });
+        try {
+          await request(`${APPCHECK_API}/${createdName}`, { method: "DELETE", headers: await appCheckAdminHeaders(project) });
+        } catch (e) {
+          // The path carries the token's resource name; a failure here must not put it on stderr.
+          throw new Error(redact(e, debugToken));
+        }
       };
     } catch (e) {
       throw new Error(redact(e, debugToken));
@@ -271,48 +242,7 @@ async function webApiKey(project: string): Promise<string> {
     const key = vars.get("VITE_FIREBASE_API_KEY");
     if (vars.get("VITE_FIREBASE_PROJECT_ID") === project && key) return key;
   }
-  throw new Error(`no apps/web/.env.* names VITE_FIREBASE_PROJECT_ID=${project} with VITE_FIREBASE_API_KEY; the public web config is needed to sign in with a custom token`);
-}
-
-function identityCalls(project: string): Pick<SmokeDeps, "signInWithCustomToken" | "deleteSignedInUser"> {
-  let apiKey = "";
-  let idToken = "";
-  let appCheckToken = "";
-  return {
-    signInWithCustomToken: async (customToken, token) => {
-      appCheckToken = token;
-      apiKey ||= await webApiKey(project);
-      const body = await request(`${IDENTITY_API}/accounts:signInWithCustomToken?key=${apiKey}`, {
-        method: "POST",
-        headers: { "X-Firebase-AppCheck": token },
-        body: { token: customToken, returnSecureToken: true },
-      }).catch((e: unknown) => {
-        throw new Error(redact(e, customToken, token));
-      });
-      idToken = stringOf(body["idToken"]);
-      if (!idToken) throw new Error("signInWithCustomToken returned no idToken");
-      // This endpoint omits `localId` on staging (observed, #15), so the uid is read back server-side with accounts:lookup.
-      const localId = stringOf(body["localId"]);
-      if (localId) return localId;
-      const lookup = await request(`${IDENTITY_API}/accounts:lookup?key=${apiKey}`, {
-        method: "POST",
-        headers: { "X-Firebase-AppCheck": token },
-        body: { idToken },
-      });
-      const uid = stringOf(objectOf(Array.isArray(lookup["users"]) ? lookup["users"][0] : undefined)["localId"]);
-      if (!uid) throw new Error("could not read the signed-in user's uid");
-      return uid;
-    },
-    deleteSignedInUser: async () => {
-      if (!idToken) throw new Error("no signed-in user to delete");
-      apiKey ||= await webApiKey(project);
-      await request(`${IDENTITY_API}/accounts:delete?key=${apiKey}`, {
-        method: "POST",
-        headers: appCheckToken ? { "X-Firebase-AppCheck": appCheckToken } : {},
-        body: { idToken },
-      });
-    },
-  };
+  throw new Error(`no apps/web/.env.* names VITE_FIREBASE_PROJECT_ID=${project} with VITE_FIREBASE_API_KEY; the public web config is needed to exchange a debug token`);
 }
 
 /** The real dependencies. Constructing them touches nothing; only the calls do. */
@@ -323,17 +253,15 @@ export function realDeps(project: string): SmokeDeps {
     mintToken: () => randomUUID(),
     registerDebugToken: registerDebugToken(project),
     exchangeDebugToken: exchangeDebugToken(project),
-    ...identityCalls(project),
     log: (line) => console.log(line),
   };
 }
 
-const USAGE = "usage: bun scripts/smoke.ts --project <projectId> [--diag]";
+const USAGE = "usage: bun scripts/smoke.ts --project <projectId>";
 
-/** `--project` is required; `--diag` adds the custom-token sign-in. Returns an error message on bad arguments. */
-export function parseArgs(argv: string[]): { project: string; diag: boolean } | string {
+/** `--project` is required. Returns an error message on bad arguments. */
+export function parseArgs(argv: string[]): { project: string } | string {
   let project = "";
-  let diag = false;
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === "--project") {
@@ -341,14 +269,12 @@ export function parseArgs(argv: string[]): { project: string; diag: boolean } | 
       if (!value) return "--project needs a value";
       project = value;
       i += 1;
-    } else if (flag === "--diag") {
-      diag = true;
     } else {
       return `unknown argument: ${flag}`;
     }
   }
   if (!project) return "--project is required";
-  return { project, diag };
+  return { project };
 }
 
 if (import.meta.main) {
@@ -360,7 +286,8 @@ if (import.meta.main) {
   const outcome = await smoke(args);
   if (!outcome.ok) {
     for (const reason of outcome.reasons) console.error(`smoke: FAIL ${reason}`);
-    process.exit(1);
+  } else {
+    console.log("smoke: ok");
   }
-  console.log("smoke: ok");
+  process.exit(exitCodeFor(outcome));
 }
