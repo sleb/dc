@@ -1,5 +1,6 @@
 import { expect } from "bun:test";
-import type { Accepted, Actor, Draft, Game, GameDrafts, Player, Rejection, Result } from "../../src/types";
+import { meetsMinimums, totals } from "../../src/rules/playability";
+import type { Accepted, Actor, Draft, DomainEvent, Game, GameDrafts, Player, Rejection, Result } from "../../src/types";
 
 /** One `decide` call and what came out of it, as seen by the global checkers. */
 export interface Step {
@@ -166,8 +167,153 @@ export const checkNoAuthorship: Checker = ({ before, cmd, result, drafts }) => {
   }
 };
 
+// ---------------------------------------------------------------------------------------------------------------------
+// #22: the round checkers (E5 per-zone moves, E6 post-resolve, E7 PLAYING half, E9, E10, E12, E13, E14, E15).
+
+const ROUND_COMMANDS = new Set(["confirmSubmission", "closeSubmissions", "pickWinner"]);
+const accepted = (result: Result<Accepted, Rejection>): Accepted | null => (result.ok ? result.value : null);
+const activeOf = (g: Game): Player[] => g.players.filter((p) => p.status === "active");
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+const sortedKey = (xs: readonly string[]): string => [...xs].sort().join();
+const countOf = (events: readonly DomainEvent[], t: DomainEvent["t"]): number => events.filter((e) => e.t === t).length;
+
+/** E9: before `WinnerPicked`, no event of a round command mentions a submitted card (so none pairs a card with a player). The Engine keeps owners in `submissions` only. */
+export const checkOwnerHidden: Checker = ({ before, cmd, result }) => {
+  const v = accepted(result);
+  if (v === null || !ROUND_COMMANDS.has(cmdType(cmd))) return;
+  const ids = new Set<string>([...(before?.round?.submissions ?? []), ...(v.state.round?.submissions ?? [])].map((s) => s.cardId));
+  const played = (cmd as { cardId?: unknown }).cardId;
+  if (typeof played === "string") ids.add(played);
+  const cut = v.events.findIndex((e) => e.t === "WinnerPicked");
+  const early = JSON.stringify(cut === -1 ? v.events : v.events.slice(0, cut));
+  for (const id of ids) if (early.includes(id)) throw new Error(`an event before WinnerPicked mentions the submitted card ${id}`);
+};
+
+/** E10: `revealOrder` is set exactly when the round is JUDGING, holds the submissions' cards, and does not change while the round stays JUDGING. */
+export const checkRevealOrder: Checker = ({ before, result }) => {
+  const v = accepted(result);
+  const round = v?.state.round ?? null;
+  if (v === null || round === null) return;
+  if (round.phase === "SUBMITTING" && round.revealOrder !== null) throw new Error("a SUBMITTING round has a revealOrder");
+  if (round.phase !== "JUDGING") return;
+  if (round.revealOrder === null) throw new Error("a JUDGING round has no revealOrder");
+  if (sortedKey(round.revealOrder) !== sortedKey(round.submissions.map((s) => s.cardId))) throw new Error("revealOrder is not the submissions' card set");
+  const was = before?.round;
+  if (was?.phase === "JUDGING" && was.number === round.number && !same(was.revealOrder, round.revealOrder)) throw new Error("revealOrder changed after the close");
+};
+
+const reference = (players: readonly Player[], cursor: number | null): Player | undefined => {
+  const active = players.filter((p) => p.status === "active").sort((a, b) => a.joinOrder - b.joinOrder);
+  return cursor === null ? undefined : (active.find((p) => p.joinOrder > cursor) ?? active[0]);
+};
+
+/** E12: a round open has one judge who is active and on the roster; the judge never submits; an unpaused round has a judge; after the first round the judge is the next by joinOrder from the previous cursor (an independent model). */
+export const checkJudges: Checker = ({ before, result }) => {
+  const v = accepted(result);
+  if (v === null) return;
+  const after = v.state;
+  const round = after.round;
+  if (round !== null) {
+    if (round.submissions.some((s) => s.playerId === round.judgeId)) throw new Error("the judge has a submission");
+    if (after.phase === "PLAYING" && !after.paused) {
+      const judge = activeOf(after).find((p) => p.id === round.judgeId);
+      if (judge === undefined) throw new Error("an unpaused round has no active judge");
+      if (!round.roster.includes(judge.id)) throw new Error("the judge is not on the roster");
+    }
+  }
+  if (!v.events.some((e) => e.t === "RoundOpened") || round === null || before?.round == null || v.events.some((e) => e.t === "PlayStarted")) return;
+  const want = reference(after.players, before.judgeCursor);
+  if (want !== undefined && round.judgeId !== want.id) throw new Error(`the judge of round ${round.number} is ${String(round.judgeId)}, rotation says ${want.id}`);
+  if (round.number !== after.history.length + 1) throw new Error("round number is not history.length + 1");
+};
+
+/** E5 per zone, E13: a confirm moves exactly the played card from the player's hand to the submissions; a close moves nothing; a pick gives the round's green card to the card's owner and to nobody else. */
+export const checkRoundMoves: Checker = ({ before, cmd, result }) => {
+  const v = accepted(result);
+  const type = cmdType(cmd);
+  if (v === null || before === null || !ROUND_COMMANDS.has(type) || before.round === null) return;
+  const after = v.state;
+  const handOf = (g: Game, id: string): string[] => g.players.find((p) => p.id === id)?.hand ?? [];
+  if (type === "confirmSubmission") {
+    const subs = after.round?.submissions ?? [];
+    const added = subs[subs.length - 1];
+    if (added === undefined || subs.length !== before.round.submissions.length + 1) throw new Error("a confirm must add exactly one submission");
+    if (new Set(subs.map((s) => s.playerId)).size !== subs.length) throw new Error("two submissions by one player");
+    if (!handOf(before, added.playerId).includes(added.cardId)) throw new Error("the submitted card was not in the player's hand");
+    for (const p of after.players) {
+      const want = p.id === added.playerId ? handOf(before, p.id).filter((c) => c !== added.cardId) : handOf(before, p.id);
+      if (!same(p.hand, want)) throw new Error(`player ${p.id} hand changed unexpectedly by a confirm`);
+    }
+    if (!same(after.pools, before.pools)) throw new Error("a confirm moved a pool");
+  } else if (type === "closeSubmissions") {
+    if (!same(after.players, before.players) || !same(after.pools, before.pools)) throw new Error("a close moved a card");
+  } else {
+    const id = (cmd as { submissionId?: string }).submissionId;
+    const owner = before.round.submissions.find((s) => s.cardId === id)?.playerId;
+    if (owner === undefined) throw new Error("a pick was accepted for a card that is not a submission");
+    for (const p of after.players) {
+      const was = before.players.find((b) => b.id === p.id);
+      const want = p.id === owner ? [...(was?.scorePile ?? []), before.round.greenCardId] : (was?.scorePile ?? []);
+      if (!same(p.scorePile, want)) throw new Error(`player ${p.id} score pile is wrong after a pick`);
+    }
+    if (after.round?.submissions.some((s) => before.round?.submissions.some((b) => b.cardId === s.cardId))) throw new Error("a resolved submission is still on the table");
+  }
+};
+
+/** E6 after a resolve: every active player holds exactly 7 cards (the minimum-size decks of the scenarios force the reshuffle). */
+export const checkTopUp: Checker = ({ cmd, result }) => {
+  const v = accepted(result);
+  if (v === null || cmdType(cmd) !== "pickWinner") return;
+  for (const p of activeOf(v.state)) if (p.hand.length !== 7) throw new Error(`player ${p.id} holds ${p.hand.length} cards after a resolve`);
+};
+
+/** E7, PLAYING half: whenever a game with a target is PLAYING, the minimums hold at the seated count and the green deck is not empty (a round can open). */
+export const checkPlayable: Checker = ({ result }) => {
+  const v = accepted(result);
+  const g = v?.state;
+  if (g === undefined || g.phase !== "PLAYING" || g.target === null) return;
+  const n = g.players.filter((p) => p.status === "writing" || p.status === "ready" || p.status === "active").length;
+  if (!meetsMinimums(totals(g), n, g.target)) throw new Error("PLAYING without the minimums");
+  if (g.pools.greenDeck.length < 1) throw new Error("PLAYING with an empty green deck");
+};
+
+/** E14: at most one `WinnerPicked` per command and never the judge; `history` grows by exactly that count with contiguous round numbers; score piles sum to `history.length` (exact until evictions, #23). */
+export const checkScoring: Checker = ({ before, result }) => {
+  const v = accepted(result);
+  if (v === null) return;
+  const after = v.state;
+  const picks = v.events.filter((e): e is Extract<DomainEvent, { t: "WinnerPicked" }> => e.t === "WinnerPicked");
+  if (picks.length > 1) throw new Error("two WinnerPicked in one command");
+  for (const p of picks) if (p.winnerId === p.judgeId) throw new Error("the judge won their own round");
+  const grew = after.history.length - (before?.history.length ?? 0);
+  if (grew !== picks.length) throw new Error(`history grew by ${grew} with ${picks.length} WinnerPicked`);
+  after.history.forEach((h, i) => { if (h.round !== i + 1) throw new Error(`history[${i}] is round ${h.round}`); });
+  const points = after.players.reduce((n, p) => n + p.scorePile.length, 0);
+  if (points !== after.history.length) throw new Error(`score piles hold ${points} cards, history has ${after.history.length} rounds`);
+};
+
+/** Commands that may be accepted in FINISHED (E15); fixture commands (`fx...`) are the harness's own. */
+const FINISHED_OK = new Set(["castVote", "endGame", "deleteGame"]);
+
+/** E15: FINISHED is terminal: no round, not paused; a finished game accepts only castVote, endGame, deleteGame; GameFinished comes with FINISHED and no RoundOpened. */
+export const checkFinished: Checker = ({ before, cmd, result }) => {
+  const v = accepted(result);
+  if (v === null) return;
+  const after = v.state;
+  if (after.phase === "FINISHED") {
+    // `paused` is recomputed by settle, which runs only when the aggregate changed (a fixture state may carry a stale flag).
+    if (after.round !== null || (v.aggregateChanged && after.paused)) throw new Error("FINISHED with a round or paused");
+    if (v.events.some((e) => e.t === "RoundOpened")) throw new Error("a round opened in FINISHED");
+  }
+  if (countOf(v.events, "GameFinished") > 0 && after.phase !== "FINISHED") throw new Error("GameFinished without FINISHED");
+  if (before?.phase === "FINISHED" && !FINISHED_OK.has(cmdType(cmd)) && !cmdType(cmd).startsWith("fx")) throw new Error(`${cmdType(cmd)} was accepted in FINISHED`);
+};
+
 /** Append-only: later steps push the E5 to E18 checkers here. */
-export const checkers: Checker[] = [checkSerializable, checkVersion, checkUnchangedWhenNotAggregate, checkConservation, checkHands, checkAggregateChanged, checkNoAuthorship];
+export const checkers: Checker[] = [
+  checkSerializable, checkVersion, checkUnchangedWhenNotAggregate, checkConservation, checkHands, checkAggregateChanged, checkNoAuthorship,
+  checkOwnerHidden, checkRevealOrder, checkJudges, checkRoundMoves, checkTopUp, checkPlayable, checkScoring, checkFinished,
+];
 
 /** Run every checker on a step; a failure names the step index and seed so the run can be replayed. */
 export function checkAll(step: Step, list: readonly Checker[] = checkers): void {

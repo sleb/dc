@@ -62,6 +62,33 @@ export const enumerators: Record<string, Enumerator> = {
       .filter((p) => p.status === "writing" && p.writeTarget !== null && drafts[p.id]?.red.length === p.writeTarget.red && drafts[p.id]?.green.length === p.writeTarget.green)
       .map((p) => ({ actor: { kind: "user", uid: p.uid } as Actor, cmd: { type: "finishWriting" } as Command }));
   },
+  // confirmSubmission (gameplay.md "Playing a round"): a SUBMITTING round of an unpaused game; each roster member who is not the judge, still seated active and has not played,
+  // plays any card of their hand (and, with the pitch variant on, the same card with a pitch).
+  confirmSubmission: (g) => {
+    const r = g.round;
+    if (g.phase !== "PLAYING" || g.paused || r === null || r.phase !== "SUBMITTING") return [];
+    return g.players
+      .filter((p) => p.status === "active" && r.roster.includes(p.id) && p.id !== r.judgeId && !r.submissions.some((s) => s.playerId === p.id))
+      .flatMap((p) => p.hand.flatMap((c) => [
+        { actor: { kind: "user", uid: p.uid } as Actor, cmd: { type: "confirmSubmission", cardId: c, expectedVersion: r.changedAtVersion } as Command },
+        ...(g.settings.variants.pitch ? [{ actor: { kind: "user", uid: p.uid } as Actor, cmd: { type: "confirmSubmission", cardId: c, pitch: " a pitch ", expectedVersion: r.changedAtVersion } as Command }] : []),
+      ]));
+  },
+  // closeSubmissions: the judge, or the host, may close a SUBMITTING round of an unpaused game once it holds a submission.
+  closeSubmissions: (g) => {
+    const r = g.round;
+    if (g.phase !== "PLAYING" || g.paused || r === null || r.phase !== "SUBMITTING" || r.submissions.length === 0) return [];
+    const judge = g.players.find((p) => p.id === r.judgeId);
+    const uids = new Set([g.hostId, ...(judge === undefined ? [] : [judge.uid])]);
+    return [...uids].map((uid) => ({ actor: { kind: "user", uid } as Actor, cmd: { type: "closeSubmissions", expectedVersion: r.changedAtVersion } as Command }));
+  },
+  // pickWinner: the judge of a JUDGING round of an unpaused game may pick any revealed card.
+  pickWinner: (g) => {
+    const r = g.round;
+    const judge = r === null ? undefined : g.players.find((p) => p.id === r.judgeId);
+    if (g.phase !== "PLAYING" || g.paused || r === null || r.phase !== "JUDGING" || judge === undefined) return [];
+    return (r.revealOrder ?? []).map((id) => ({ actor: { kind: "user", uid: judge.uid } as Actor, cmd: { type: "pickWinner", submissionId: id, expectedVersion: r.changedAtVersion } as Command }));
+  },
 };
 
 /** A command type that has no enumerator on purpose, with the reason. */
