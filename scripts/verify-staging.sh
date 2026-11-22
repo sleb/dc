@@ -25,7 +25,7 @@ BUDGET_THRESHOLDS="0.5 0.9 1"
 FIRESTORE_LOCATION="nam5"
 TTL_GROUPS="idem outbox notifLog rateLimits deletions joinIdem"
 APIS="cloudfunctions.googleapis.com run.googleapis.com cloudbuild.googleapis.com
-artifactregistry.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com
+artifactregistry.googleapis.com eventarc.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com
 iamcredentials.googleapis.com recaptchaenterprise.googleapis.com firebaseappcheck.googleapis.com
 fcm.googleapis.com fcmregistrations.googleapis.com identitytoolkit.googleapis.com
 firestore.googleapis.com firebase.googleapis.com firebasehosting.googleapis.com

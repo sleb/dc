@@ -78,7 +78,7 @@ Notes from setting up staging:
 - **WIF names.** Pool and provider are both `github`. The staging provider condition is `assertion.repository == '<repo>' && (assertion.environment == 'staging' || assertion.event_name == 'pull_request')`.
 - **The build service account (found in #15).** 2nd gen function builds run as the default compute service account. With `roles/editor` removed (V8) the first deploy failed in Cloud Build with "missing permission on the build service account"; `roles/storage.objectViewer`, `roles/artifactregistry.writer` and `roles/logging.logWriter` are what it needs. `scripts/README.md` lists them.
 - **Artifact Registry cleanup policy (found in #15).** The first functions deploy in a region creates a `gcf-artifacts` repository and then refuses to finish until a cleanup policy exists (`firebase functions:artifacts:setpolicy --location <region>`, 1 day), so a fresh region makes `firebase deploy --only functions` exit 1 even though the functions deployed.
-- **APIs the CLI enabled on its own (found in #15).** `eventarc.googleapis.com` and `firebaseextensions.googleapis.com` were enabled by the CLI during the first functions deploy; `eventarc` belongs in the provisioned list (see `provision-staging.sh`).
+- **APIs the CLI enabled on its own (found in #15).** `eventarc.googleapis.com` and `firebaseextensions.googleapis.com` were enabled by the CLI during the first functions deploy. `eventarc` is now in the provisioned and verified API list (`provision-staging.sh`, `verify-staging.sh` V5); `firebaseextensions` is only a readiness check the CLI makes and is not added.
 
 ## 3. Repository layout
 

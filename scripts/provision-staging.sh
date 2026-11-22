@@ -21,7 +21,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 FIRESTORE_LOCATION="nam5"
 APIS="cloudfunctions.googleapis.com run.googleapis.com cloudbuild.googleapis.com
-artifactregistry.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com
+artifactregistry.googleapis.com eventarc.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com
 iamcredentials.googleapis.com recaptchaenterprise.googleapis.com firebaseappcheck.googleapis.com
 fcm.googleapis.com fcmregistrations.googleapis.com identitytoolkit.googleapis.com
 firestore.googleapis.com firebase.googleapis.com firebasehosting.googleapis.com
