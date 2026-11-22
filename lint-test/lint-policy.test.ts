@@ -53,6 +53,10 @@ describe("L3 engine clock and entropy (P5)", () => {
     ["new Date()", "export const v = new Date();\n"],
     ["Math.random()", "export const v = Math.random();\n"],
     ["performance.now()", "export const v = performance.now();\n"],
+    ["Date() without new", "export const v = Date();\n"],
+    ["Date.now taken by reference", "export const f = Date.now;\n"],
+    ["Math.random taken by reference", "export const f = Math.random;\n"],
+    ["Math['random']()", "export const v = Math['random']();\n"],
   ];
   for (const [name, code] of cases) test(`reports ${name}`, () => reported(ENGINE, code, "no-restricted-syntax"));
   test("allows new Date(0)", () => quiet(ENGINE, "export const v = new Date(0);\n"));
@@ -91,7 +95,7 @@ describe("L4 direction rule (P5, section 3)", () => {
 });
 
 describe("L4b test files may use bun:test in every package (P7)", () => {
-  for (const file of ["packages/contracts/src/x.test.ts", "apps/web/src/x.test.ts"]) {
+  for (const file of ["packages/contracts/src/x.test.ts", "apps/web/src/x.test.ts", "apps/web/src/x.test.tsx"]) {
     test(`allows bun:test in ${file}`, () => quiet(file, imp("bun:test")));
   }
   test("still reports bun:test in a shipped contracts file", () => reported(CONTRACTS, imp("bun:test"), "no-restricted-imports"));
@@ -124,6 +128,7 @@ describe("L6 Store ST2 (P21)", () => {
   test("reports notify directory import (bypass probe)", () => reported(STORE, imp("../notify"), "no-restricted-imports"));
   test("reports identity directory import (bypass probe)", () => reported(STORE, imp("../identity"), "no-restricted-imports"));
   test("reports fetch", () => reported(STORE, "export const v = typeof fetch;\n", "no-restricted-globals"));
+  test("reports Math.random taken by reference", () => reported(STORE, "export const f = Math.random;\n", "no-restricted-syntax", /newSeed/));
   test("reports Math.random()", () => reported(STORE, "export const v = Math.random();\n", "no-restricted-syntax", /newSeed/));
   // The block sets the same rule keys as the base block, so it must re-include the base options (P21 hazard).
   test("still reports onCall import (base re-included)", () => reported(STORE, `import { onCall } from "firebase-functions/v2/https";\nexport default onCall;\n`, "no-restricted-imports", /defineCallable/));
@@ -137,6 +142,7 @@ describe("L6 Store ST2 (P21)", () => {
 describe("L7 notify T3 and sweep T1 (P21)", () => {
   test("notify reports Date.now()", () => reported(NOTIFY, "export const v = Date.now();\n", "no-restricted-syntax"));
   test("notify reports new Date()", () => reported(NOTIFY, "export const v = new Date();\n", "no-restricted-syntax"));
+  test("notify reports Date() without new", () => reported(NOTIFY, "export const v = Date();\n", "no-restricted-syntax"));
   test("notify allows Math.random()", () => quiet(NOTIFY, "export const v = Math.random();\n"));
   test("notify allows new Date(0)", () => quiet(NOTIFY, "export const v = new Date(0);\n"));
   test("notify still reports Bun global (base applies)", () => reported(NOTIFY, "export const v = typeof Bun;\n", "no-restricted-globals"));

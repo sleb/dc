@@ -1,8 +1,7 @@
 // Test harness for the lint and TypeScript policy suite (LLD 0 section 5).
 // Snippets are linted under virtual file paths (no fixture files on disk) with the real eslint.config.js.
 import { ESLint, type Linter } from "eslint";
-import { existsSync } from "node:fs";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 

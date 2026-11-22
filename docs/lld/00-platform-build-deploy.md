@@ -283,10 +283,16 @@ The Functions emulator reads `source` from `firebase.json`, so it runs the same 
 const NODE_IO = ["node:*", "fs", "fs/promises", "path", "os", "child_process", "net", "http", "https", "crypto", "stream", "worker_threads"];
 const FIREBASE = ["firebase", "firebase/*", "firebase-admin", "firebase-admin/*", "firebase-functions", "firebase-functions/*", "@firebase/*", "@google-cloud/*"];
 const BUN = ["bun", "bun:*"];
-const CLOCK_AND_ENTROPY = [
-  { selector: "CallExpression[callee.object.name='Date'][callee.property.name='now']", message: "No clock in engine; use ctx.now." },
+// Member selectors (not call selectors) so `const f = Date.now`, `Math["random"]()` and `Date()` are caught too.
+const CLOCK = [
+  { selector: "MemberExpression[object.name='Date'][property.name='now']", message: "No clock in engine; use ctx.now." },
   { selector: "NewExpression[callee.name='Date'][arguments.length=0]", message: "No clock in engine; use ctx.now." },
-  { selector: "CallExpression[callee.object.name='Math'][callee.property.name='random']", message: "Use the injected Rng." },
+  { selector: "CallExpression[callee.name='Date']", message: "No clock in engine; use ctx.now." },
+];
+const RANDOM = { selector: "MemberExpression[object.name='Math'][property.value='random'], MemberExpression[object.name='Math'][property.name='random']", message: "Use the injected Rng." };
+const CLOCK_AND_ENTROPY = [
+  ...CLOCK,
+  RANDOM,
   { selector: "CallExpression[callee.object.name='performance']", message: "No clock in engine." },
 ];
 // Base restrictions for all of functions/src. A later flat-config block that sets the same rule key
@@ -295,7 +301,7 @@ const CLOCK_AND_ENTROPY = [
 const FN_IMPORT_PATTERNS = [...BUN, "@dc/web"];
 const FN_IMPORT_PATHS = [{ name: "firebase-functions/v2/https", importNames: ["onCall", "onRequest"], message: "Use defineCallable() from api/callable." }];
 const FN_GLOBALS = ["Bun"];
-const TESTS = ["**/*.test.ts"];
+const TESTS = ["**/*.test.ts", "**/*.test.tsx"];
 
 export default [
   { ignores: ["**/dist/**", "**/node_modules/**"] },
@@ -325,10 +331,10 @@ export default [
   { files: ["functions/src/store/**/*.ts"], ignores: TESTS, rules: {
       "no-restricted-imports": ["error", { patterns: [...FN_IMPORT_PATTERNS, "firebase-admin/auth", "firebase-admin/messaging", "**/notify", "**/notify/*", "**/identity", "**/identity/*"], paths: FN_IMPORT_PATHS }],
       "no-restricted-globals": ["error", ...FN_GLOBALS, "fetch"],
-      "no-restricted-syntax": ["error", { selector: "CallExpression[callee.object.name='Math'][callee.property.name='random']", message: "Use deps.newSeed()." }] } },
+      "no-restricted-syntax": ["error", { ...RANDOM, message: "Use deps.newSeed()." }] } },
   // T3 (LLD 6): time enters notifications only through the injected clock.
   { files: ["functions/src/notify/**/*.ts"], ignores: TESTS, rules: {
-      "no-restricted-syntax": ["error", ...CLOCK_AND_ENTROPY.slice(0, 2)] } },
+      "no-restricted-syntax": ["error", ...CLOCK] } },
   // T1 (LLD 6): the sweep holds no game logic; from the Store it may import only listWaitingOn and runCommand.
   // (The notify block above sets only no-restricted-syntax, which the base block does not, so nothing is lost there.)
   // A `patterns` array is all strings or all objects, so the base strings go in as one group. The second store group
@@ -349,6 +355,7 @@ export default [
 - P21. `functions/src/store/**` imports no Auth, FCM, identity or notify module and uses neither `fetch` nor `Math.random` (ST2); `functions/src/notify/**` uses no `Date.now()` or `new Date()` (T3); `functions/src/notify/sweep.ts` imports neither the Engine nor any Store module, except the names `listWaitingOn` and `runCommand` from the store index (T1; enforced by name with `allowImportNames`, and probed against `../store`, `../store/index.js` and `@dc/engine/sub`). Enforced by the lint blocks above; ST2 and T3 also keep their own tests in LLDs 3 and 6. Because flat config replaces (does not merge) a rule key set again by a later matching block, the Store and sweep blocks re-include the base `functions/src` options (`FN_IMPORT_PATTERNS`, `FN_IMPORT_PATHS`, `FN_GLOBALS`), so the `onCall`/`onRequest` import ban (P12) and the Bun ban (P7) still apply inside `functions/src/store` and `functions/src/notify/sweep.ts`. The fixture suite in `lint-test/` (`bun run test:lint`) asserts that an `onCall` import, a `bun:*` import and a `Bun` global in a Store file and in `sweep.ts` are all reported, and that each block fires and stays quiet where it should (issue #10).
 - P7 (lint half). `Bun`, `bun`, `bun:*` appear in no shipped code (`packages/*/src`, `functions/src`, `apps/web/src`). `bun:test` imports are allowed only in `*.test.ts`, `functions/test-integration`, `rules-test`. Build and ops scripts (`functions/scripts`, `scripts`) may use `Bun.*`. `api/callable.ts` is exempt only from the `onCall`/`onRequest` import ban (P12), not from the Bun ban; it has its own block.
 - Warnings are errors (`--max-warnings 0`; unused `eslint-disable` directives are warnings). Type-aware rules enabled: `no-floating-promises`, `no-misused-promises`, `consistent-type-imports`. `*.test.ts` files are exempt from the per-package import and global bans (they run under Bun); the type-aware rules still apply to them.
+- `parserOptions.project` lists the tsconfigs that exist (packages, functions, web, `lint-test`). A step that adds TypeScript outside them (`functions/scripts`, `apps/web/vite.config.ts`, `rules-test`, `e2e`, repo-level `scripts`) adds a tsconfig for it and lists it in the same change, or `bun run lint` fails on that file. The clock and entropy bans are member selectors, so aliasing (`const f = Date.now`) is caught; `globalThis.Date.now()` is not (the engine bans no such receiver, and typecheck isolation covers `window`).
 - Policy tests (`lint-test/`, `bun run test:lint`): feed snippets under virtual file paths to the real `eslint.config.js` (`ESLint.lintText`) and to `tsc -p` on throwaway configs that extend the package configs, and assert each forbidden construct is reported and each permitted one is not. P5's `package.json` dependency check lives there too (`lint-test/engine-deps.ts`).
 
 **TypeScript.** One strict base, per-package `lib` and `types` so the compiler also enforces isolation (an engine file that touches `process` or `setTimeout` fails typecheck, not only lint).

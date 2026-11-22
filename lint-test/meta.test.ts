@@ -39,6 +39,9 @@ describe("T3 engine dependencies (P5)", () => {
   test("the check rejects an extra dependency", () => {
     expect(disallowedDeps({ dependencies: { "@dc/contracts": "workspace:*", zod: "1.0.0", lodash: "4.0.0" } })).toEqual(["lodash"]);
   });
+  test("the check rejects an extra devDependency, peerDependency and optionalDependency", () => {
+    expect(disallowedDeps({ devDependencies: { a: "1" }, peerDependencies: { b: "1" }, optionalDependencies: { c: "1" } })).toEqual(["a", "b", "c"]);
+  });
   test("the check allows no dependencies", () => {
     expect(disallowedDeps({})).toEqual([]);
   });
