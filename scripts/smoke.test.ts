@@ -47,7 +47,7 @@ function harness(o: Options = {}) {
     },
     call: async (name, appCheckToken) => {
       rec.calls.push(appCheckToken === undefined ? `${name}:no-token` : `${name}:token`);
-      if (name === "ping") return (appCheckToken === undefined ? o.noToken : o.ping) ?? ok({ ok: true, node: "v22.23.2" });
+      if (name === "ping") return appCheckToken === undefined ? (o.noToken ?? { ok: false, status: 401, code: "unauthenticated" }) : (o.ping ?? ok({ ok: true, node: "v22.23.2" }));
       return o.diag ?? ok({ ok: true, token: CUSTOM });
     },
     signInWithCustomToken: async (customToken, appCheckToken) => {
