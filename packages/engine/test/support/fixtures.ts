@@ -8,7 +8,7 @@ import type { Enumerator } from "./legal";
 import { HOST_UID, makeGame, userActor } from "./factories";
 
 type Cmd = BaseCommand & { readonly [k: string]: unknown };
-const noEffects = { draftChanges: [], roundRecords: [], redactEnvelope: false } as const;
+const noEffects = (): Pick<Handled, "draftChanges" | "roundRecords" | "redactEnvelope"> => ({ draftChanges: [], roundRecords: [], redactEnvelope: false });
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 /** Host-only, any phase but ENDED; changes nothing but what settle recomputes. */
@@ -16,7 +16,7 @@ export const fxHost: CommandSpec<Cmd> = {
   type: "fxHost",
   phases: ["LOBBY", "WRITING", "PLAYING", "FINISHED"],
   actor: (i) => i.roles.host,
-  handle: (i): Handled => ({ ...noEffects, state: i.state, events: [{ t: "SettingsUpdated", keys: [] }], aggregateChanged: true }),
+  handle: (i): Handled => ({ ...noEffects(), state: i.state, events: [{ t: "SettingsUpdated", keys: [] }], aggregateChanged: true }),
 };
 
 /** Mints a card id and shuffles the red deck: exercises rng, mintId and the redact flag. */
@@ -28,7 +28,7 @@ export const fxShuffle: CommandSpec<Cmd> = {
     const id = mintCardId(i.ctx, i.state.cards);
     const redDeck = i.ctx.rng.shuffle([...i.state.pools.redDeck, id]);
     return {
-      ...noEffects,
+      ...noEffects(),
       redactEnvelope: true,
       state: { ...i.state, cards: { ...i.state.cards, [id]: { kind: "red", text: "minted" } }, pools: { ...i.state.pools, redDeck } },
       events: [],
@@ -59,7 +59,7 @@ export const fxPlay: CommandSpec<Cmd> = {
     if (round === null || me === undefined) throw new EngineInvariantError("fxPlay: no round or player");
     const cardId = str(i.cmd["cardId"]);
     return {
-      ...noEffects,
+      ...noEffects(),
       state: {
         ...i.state,
         players: i.state.players.map((p) => (p.id === me.id ? { ...p, hand: p.hand.filter((c) => c !== cardId) } : p)),
@@ -91,7 +91,7 @@ export const fxDelete: CommandSpec<Cmd> = {
   type: "deleteGame",
   phases: ["LOBBY", "WRITING", "PLAYING", "FINISHED", "ENDED"],
   actor: (i) => i.roles.host,
-  handle: (i): Handled => ({ ...noEffects, state: i.state, events: [{ t: "GameDeleted" }], aggregateChanged: false, deleteGame: true }),
+  handle: (i): Handled => ({ ...noEffects(), state: i.state, events: [{ t: "GameDeleted" }], aggregateChanged: false, deleteGame: true }),
 };
 
 /** The state-creating command: guards 0, 1, 2, 7 and 8 only. */
@@ -102,7 +102,7 @@ export const fxCreate: CreateSpec<Cmd> = {
   payload: (i) => (typeof i.cmd["gameId"] === "string" ? null : reject("INVALID_ARGUMENT")),
   moderation: (i) => (str(i.cmd["hostName"]).includes("badword") ? reject("CONTENT_REJECTED", "PROFANITY") : null),
   handle: (i): Handled => ({
-    ...noEffects,
+    ...noEffects(),
     state: makeGame({ id: str(i.cmd["gameId"]), hostId: str(i.cmd["hostId"]), createdAt: i.ctx.now, version: 0 }),
     events: [{ t: "GameCreated", hostPlayerId: "p_aaaaaaaa" }],
     aggregateChanged: true,
@@ -121,7 +121,7 @@ export const fxOrder: CommandSpec<Cmd> = {
   payload: (i) => (i.cmd["failPayload"] === true ? reject("INVALID_ARGUMENT") : null),
   moderation: (i) => (i.cmd["failModeration"] === true ? reject("CONTENT_REJECTED", "PROFANITY") : null),
   preconditions: (i) => (i.cmd["failPrecond"] === true ? reject("NOT_IN_HAND") : null),
-  handle: (i): Handled => ({ ...noEffects, state: i.state, events: [], aggregateChanged: true }),
+  handle: (i): Handled => ({ ...noEffects(), state: i.state, events: [], aggregateChanged: true }),
 };
 
 /** Handlers that throw: only EngineInvariantError is part of the contract, and decide adds no catch-all. */

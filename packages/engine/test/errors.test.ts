@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DETAIL_BY_CODE, ERROR_CODES } from "@dc/contracts";
+import type { ErrorCode } from "@dc/contracts";
 import { EngineInvariantError, reject } from "../src/errors";
 import type { Rejection } from "../src/types";
 
@@ -12,7 +13,7 @@ describe("V3 reject", () => {
 
   test("every detail in DETAIL_BY_CODE is accepted for its code", () => {
     for (const [code, details] of Object.entries(DETAIL_BY_CODE)) {
-      for (const d of details) expect((reject as (c: string, d?: string) => Rejection)(code, d)).toStrictEqual({ code, detail: d });
+      for (const d of details) expect((reject as (c: ErrorCode, d?: string) => Rejection)(code as ErrorCode, d)).toStrictEqual({ code: code as ErrorCode, detail: d });
     }
     expect(ERROR_CODES.length).toBeGreaterThan(0);
   });

@@ -44,7 +44,8 @@ export const checkSerializable: Checker = ({ result }) => {
 export const checkVersion: Checker = ({ before, result }) => {
   if (!result.ok) return;
   const was = before?.version ?? 0;
-  expect(result.value.state.version).toBe(was + (result.value.aggregateChanged ? 1 : 0));
+  const want = was + (result.value.aggregateChanged ? 1 : 0);
+  if (result.value.state.version !== want) throw new Error(`version is ${result.value.state.version}, expected ${want} (before ${was}, aggregateChanged ${result.value.aggregateChanged})`);
 };
 
 /** Append-only: later steps push the E5 to E18 checkers here. */

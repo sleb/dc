@@ -58,8 +58,8 @@ export function junkCommands(_game: Game): LegalEntry[] {
   for (const [type, payload] of Object.entries(MINIMAL)) {
     const base = { type, ...payload } as unknown as Command;
     out.push({ actor: stranger, cmd: base });
-    out.push({ actor: seat(1), cmd: { ...base, expectedVersion: 0 } as Command });
-    out.push({ actor: { kind: "user", uid: HOST_UID }, cmd: { ...base, cardId: "nope", text: "x".repeat(10_000), red: ["x".repeat(10_000)] } as Command });
+    out.push({ actor: seat(1), cmd: { ...base, expectedVersion: 0 } as unknown as Command });
+    out.push({ actor: { kind: "user", uid: HOST_UID }, cmd: { ...base, cardId: "nope", text: "x".repeat(10_000), red: ["x".repeat(10_000)] } as unknown as Command });
     out.push({ actor: { kind: "system" }, cmd: base });
   }
   return out;

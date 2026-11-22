@@ -1,0 +1,72 @@
+import { waitingFields } from "./rules/waiting";
+import { activePlayers, seated } from "./selectors";
+import type { DomainEvent, Game, Rng } from "./types";
+
+/**
+ * `settle` runs after every aggregate-changing command, before `version` is bumped (LLD 1 section 8.2).
+ * The slots are named and ordered here. Slot 2 (pause flag) and slot 5 (waiting fields) are real in 1.2.
+ * Slots 1, 3, 3a and 4 are no-ops that later steps fill: 1 begin play (#22), 3 recovery activation (#22),
+ * 3a judge assignment (#22), 4 auto-advance (#22); their helpers (beginPlay, activateReady, reassignJudge, closeRound, voidRound) arrive with them.
+ */
+export type SlotId = "1" | "2" | "3" | "3a" | "4" | "5";
+
+export interface SettleEnv {
+  readonly rng: Rng;
+  readonly now: number;
+  /** True once the command or an earlier slot started a new waiting episode; slot 5 reads it. */
+  readonly episodeStarted: boolean;
+}
+
+export interface SettleStep {
+  state: Game;
+  events: readonly DomainEvent[];
+  /** Set by a slot that starts an episode (a void or reopen with an unchanged key, a judge change). OR-ed across slots. */
+  episodeStarted?: boolean;
+}
+
+export interface SettleSlot {
+  readonly id: SlotId;
+  run(state: Game, env: SettleEnv): SettleStep;
+}
+
+const noop = (id: SlotId): SettleSlot => ({ id, run: (state) => ({ state, events: [] }) });
+
+/** `paused` (LLD 1 section 8.1): PLAYING needs 3 active, WRITING needs 3 seated, any other phase is never paused. */
+export function computePaused(g: Game): boolean {
+  if (g.phase === "PLAYING") return activePlayers(g).length < 3;
+  if (g.phase === "WRITING") return seated(g).length < 3;
+  return false;
+}
+
+const pauseFlag: SettleSlot = {
+  id: "2",
+  run: (state) => {
+    const paused = computePaused(state);
+    if (paused === state.paused) return { state, events: [] };
+    return { state: { ...state, paused }, events: [{ t: "PausedChanged", paused }] };
+  },
+};
+
+const waitingSlot: SettleSlot = {
+  id: "5",
+  run: (state, env) => ({ state: { ...state, ...waitingFields(state, env.now, env.episodeStarted) }, events: [] }),
+};
+
+export const SETTLE_SLOTS: readonly SettleSlot[] = [noop("1"), pauseFlag, noop("3"), noop("3a"), noop("4"), waitingSlot];
+
+export function runSlots(slots: readonly SettleSlot[], state: Game, rng: Rng, now: number, episodeStarted: boolean): { state: Game; events: DomainEvent[] } {
+  let current = state;
+  let started = episodeStarted;
+  const events: DomainEvent[] = [];
+  for (const slot of slots) {
+    const step = slot.run(current, { rng, now, episodeStarted: started });
+    current = step.state;
+    events.push(...step.events);
+    started = started || step.episodeStarted === true;
+  }
+  return { state: current, events };
+}
+
+export function settle(state: Game, rng: Rng, now: number, episodeStarted: boolean): { state: Game; events: DomainEvent[] } {
+  return runSlots(SETTLE_SLOTS, state, rng, now, episodeStarted);
+}

@@ -105,13 +105,13 @@ describe("harness: legalCommands, junkCommands, coverage", () => {
   test("junkCommands covers every command type in the contracts", () => {
     const contractTypes = [...CommandEnvelopeSchema.options.map((o) => o.shape.type.value as string), ...SERVER_ONLY_COMMANDS].sort();
     expect([...JUNK_TYPES].sort()).toEqual(contractTypes);
-    const types = new Set(junkCommands(makeGame()).map((e) => e.cmd.type));
+    const types = new Set<string>(junkCommands(makeGame()).map((e) => e.cmd.type));
     expect([...types].sort()).toEqual(contractTypes);
   });
 
   test("fixture enumerators list fxPlay for non-judge roster members without a submission", () => {
     const g = buildGame({ n: 3, phase: "PLAYING", ready: [], handSize: 2, judge: 0, submitted: [false, true, false], paused: false });
-    const plays = legalCommands(g, {}, fixtureEnumerators).filter((e) => e.cmd.type === "fxPlay");
+    const plays = legalCommands(g, {}, fixtureEnumerators).filter((e) => (e.cmd as { type: string }).type === "fxPlay");
     expect(plays).toHaveLength(2); // player 2 only, two cards
     expect(plays.every((e) => e.actor.kind === "user" && e.actor.uid === g.players[2]?.uid)).toBe(true);
   });

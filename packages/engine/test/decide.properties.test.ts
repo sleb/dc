@@ -20,7 +20,10 @@ const realDecide: Decide = makeDecide(REGISTRY);
 const asCommand = (c: unknown): Command => c as Command;
 
 const arbJson: fc.Arbitrary<unknown> = fc.oneof(fc.anything(), fc.jsonValue(), fc.constantFrom(null, undefined, 0, "", [], {}));
-const FIXTURE_TYPES = Object.keys(fixtureRegistry);
+// fxInvariant and fxBug throw on purpose (V3), so X1 runs over the registry without them.
+const { fxInvariant: _i, fxBug: _b, ...totalRegistry } = fixtureRegistry;
+const totalDecide: Decide = makeDecide(totalRegistry);
+const FIXTURE_TYPES = Object.keys(totalRegistry);
 /** Typed junk against the fixture specs: a real type name with arbitrary field values. */
 const arbTyped = fc.record({
   type: fc.constantFrom(...FIXTURE_TYPES, "__proto__", "constructor"),
@@ -49,7 +52,7 @@ describe("X1 decide is total", () => {
   test("arbitrary JSON and typed junk never throw over the fixture registry; a rejection always carries an allowed code", () => {
     assertProperty(fc.property(arbShape, fc.oneof(arbJson, arbTyped), arbActor, (shape, c, actor) => {
       for (const state of [null, buildGame(shape)]) {
-        const r = fixtureDecide(state, asCommand(c), ctxFor({ actor }));
+        const r = totalDecide(state, asCommand(c), ctxFor({ actor }));
         if (!r.ok) expect((ERROR_CODES as readonly string[]).includes(r.error.code)).toBe(true);
       }
     }));
