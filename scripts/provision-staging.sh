@@ -20,7 +20,6 @@ BUDGET_AMOUNT="${BUDGET_AMOUNT:-10}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 FIRESTORE_LOCATION="nam5"
-TTL_GROUPS="idem outbox notifLog rateLimits deletions joinIdem"
 APIS="cloudfunctions.googleapis.com run.googleapis.com cloudbuild.googleapis.com
 artifactregistry.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com
 iamcredentials.googleapis.com recaptchaenterprise.googleapis.com firebaseappcheck.googleapis.com
@@ -94,11 +93,8 @@ step_firestore() { # V3, V4
     log "creating Firestore (Native, $FIRESTORE_LOCATION)"
     gcloud firestore databases create --location="$FIRESTORE_LOCATION" --type=firestore-native --project "$PROJECT"
   fi
-  local g
-  for g in $TTL_GROUPS; do
-    log "TTL on $g.expiresAt"
-    gcloud firestore fields ttls update expiresAt --collection-group="$g" --enable-ttl --async --project "$PROJECT" >/dev/null
-  done
+  # The TTL policies are not set here: `firestore.indexes.json` declares them and `firebase deploy --only firestore`
+  # applies them (#15 proved the deploy honours "ttl": true; see LLD 0 section 11 step 12).
 }
 
 step_iam() { # V8, V9

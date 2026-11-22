@@ -18,7 +18,7 @@ bun run test                    # engine and contracts, functions unit and scrip
 bun run test:lint               # just the policy tests (they prove each lint and tsconfig rule fires); also part of `test`
 bun run test:web                # web tests under happy-dom, in a separate process
 bun run test:rules              # Firestore emulator; inline deny-all rules until #32
-bun run test:integration        # rebuild the bundle, run the Auth, Firestore and Functions emulators against it (ping, diag, Admin write/read)
+bun run test:integration        # rebuild the bundle, run the Auth, Firestore and Functions emulators against it (ping, Admin write/read)
 bun run test:hosting            # build apps/web in emulator mode, serve it on the Hosting emulator, assert headers, cache and the SPA rewrite
 bun run test:e2e                # placeholder: prints "NO SUITE" and exits 0 until Playwright lands (5.1, #45)
 FC_SEED=<n> bun run test        # replay a failed property test; the seed is printed on failure
