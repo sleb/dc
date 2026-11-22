@@ -30,13 +30,14 @@ export function activateReady(game: Game, rng: Rng): { state: Game; events: Doma
  * 1 the hand, then the seat's submission card, are appended to `redDeck`, which is shuffled (a write-in submission, which never was in the hand, goes to `redDiscard` instead);
  * the submission leaves `round.submissions` and `revealOrder` without bumping `changedAtVersion` (Q6);
  * 2 the score pile is appended to `greenDeck`, which is shuffled (red before green, the points leave with the player, U2);
- * 3 a draft is deleted only for a `writing` seat (Q7); 4 `status` is set and hand and pile are emptied; 5 the judge is replaced by `reassignJudge`.
+ * 3 a draft is deleted only for a `writing` seat (Q7); 4 `status` is set and hand and pile are emptied; 5 the judge is replaced by `reassignJudge`, which picks the next active player even when the eviction pauses the game and leaves a null judge only when no candidate exists (LLD 1 8.3).
  * Returns the side-effect events only (`JudgeChanged`); the caller adds `PlayerLeft` or `PlayerRemoved` first. `episodeStarted` is true when the judge changed.
  * LOBBY deletes the record instead and never gets here. Pure.
  */
 export function evictPlayer(game: Game, playerId: PlayerId, status: "left" | "removed", rng: Rng): { state: Game; events: DomainEvent[]; draftChanges: DraftChange[]; episodeStarted: boolean } {
-  const gone = game.players.find((p) => p.id === playerId);
-  if (gone === undefined) throw new EngineInvariantError(`evictPlayer: no player ${playerId}`);
+  const seatedNow = (p: Player): boolean => p.status === "writing" || p.status === "ready" || p.status === "active";
+  const gone = game.players.find((p) => p.id === playerId && seatedNow(p));
+  if (gone === undefined) throw new EngineInvariantError(`evictPlayer: no seated player ${playerId}`);
   const round = game.round;
   const mine = round?.submissions.find((s) => s.playerId === playerId);
   const release: CardId[] = [...gone.hand];
@@ -52,7 +53,7 @@ export function evictPlayer(game: Game, playerId: PlayerId, status: "left" | "re
     : { ...round, submissions: round.submissions.filter((s) => s.playerId !== playerId), revealOrder: round.revealOrder === null ? null : round.revealOrder.filter((c) => c !== mine.cardId) };
   let state: Game = {
     ...game,
-    players: game.players.map((p): Player => (p.id === playerId ? { ...p, status, hand: [], scorePile: [] } : p)),
+    players: game.players.map((p): Player => (p === gone ? { ...p, status, hand: [], scorePile: [] } : p)),
     pools: { ...game.pools, redDeck, redDiscard, greenDeck },
     round: left,
   };

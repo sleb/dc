@@ -123,7 +123,7 @@ export const join: CommandSpec<Of<"join">> = {
   phases: ["LOBBY", "WRITING", "PLAYING"],
   actor: (i) => i.actor.kind === "user" && isString(field(i.cmd, "playerId")) && i.actor.uid === seatUid(i.state.id, field(i.cmd, "playerId") as string),
   payload: ({ state, cmd }) => {
-    const ok = PlayerIdSchema.safeParse(field(cmd, "playerId")).success && isString(field(cmd, "name")) && !state.players.some((p) => p.id === cmd.playerId && seatedStatus(p));
+    const ok = PlayerIdSchema.safeParse(field(cmd, "playerId")).success && isString(field(cmd, "name")) && !state.players.some((p) => p.id === cmd.playerId); // any record, left and removed too: a departed id never comes back mid-game (LOBBY deletes records, so it is the same there)
     return ok ? null : invalid();
   },
   preconditions: ({ state, cmd }) => {
