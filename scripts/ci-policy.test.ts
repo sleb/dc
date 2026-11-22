@@ -145,8 +145,15 @@ describe("C4 deploy commands (P15)", () => {
 });
 
 describe("C5 deploy-staging order (P16)", () => {
-  const order = ["--only firestore", "scripts/wait-indexes.ts --project deepcuts-staging", "--only functions", "--only hosting", "scripts/smoke.ts --project deepcuts-staging"];
-  test("firestore, wait-indexes, functions, hosting, smoke, each in its own step and in that order", () => {
+  const order = [
+    "--only firestore",
+    "scripts/wait-indexes.ts --project deepcuts-staging",
+    "--only functions",
+    "--only hosting",
+    "scripts/ops-apply.ts --project deepcuts-staging",
+    "scripts/smoke.ts --project deepcuts-staging",
+  ];
+  test("firestore, wait-indexes, functions, hosting, ops-apply, smoke, each in its own step and in that order", () => {
     const idx = order.map((o) => indexOfRun("deploy-staging", o));
     for (const [i, o] of order.entries()) expect([o, idx[i]]).not.toEqual([o, -1]);
     expect(idx).toEqual([...idx].sort((a, b) => a - b));
@@ -161,8 +168,11 @@ describe("C5 deploy-staging order (P16)", () => {
     const smoke = steps("deploy-staging").find((s) => s.run?.includes("scripts/smoke.ts"));
     expect(smoke?.env?.["APPCHECK_DEBUG_TOKEN"]).toBe("${{ secrets.APPCHECK_DEBUG_TOKEN }}");
   });
-  test("ops-apply belongs to #17 and is not in the workflow", () => {
-    expect(raw).not.toContain("ops-apply");
+  test("ops-apply is one step in deploy-staging, and no other job runs it", () => {
+    const holders = jobNames.flatMap((n) => runs(n).filter((r) => r.includes("ops-apply")).map((r) => [n, r.trim()] as const));
+    expect(holders).toEqual([["deploy-staging", "bun scripts/ops-apply.ts --project deepcuts-staging"]]);
+    // It fails the deploy when something it declared is missing (P20), so it must not be smuggled into verify.
+    expect(steps("deploy-staging").filter((s) => s.run?.includes("ops-apply")).length).toBe(1);
   });
   test("deploy-staging serialises with itself and never cancels", () => {
     const c = job("deploy-staging").concurrency;
