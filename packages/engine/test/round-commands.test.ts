@@ -380,7 +380,8 @@ describe("E15 FINISHED is terminal (8.8)", () => {
     expect(finished.phase).toBe("FINISHED");
     const seen = new Set<string>();
     for (const { actor, cmd: c } of junkCommands(finished)) {
-      if (actor.kind !== "user" || actor.uid !== HOST_UID || !Object.hasOwn(REGISTRY, c.type)) continue; // the host's entries: the host holds p0's seat
+      const entry = c.type === "markReminded" ? actor.kind === "system" : actor.kind === "user" && actor.uid === HOST_UID; // the host's entries (the host holds p0's seat); markReminded is system only (#24)
+      if (!entry || !Object.hasOwn(REGISTRY, c.type)) continue;
       seen.add(c.type);
       const who = c.type === "join" ? userActor(seatUidOf(GAME_ID, pid(9))) : actor; // join is for the seat uid of its playerId
       const r = decide(deepFreeze(structuredClone(finished)), c, ctxFor({ actor: who }));

@@ -100,6 +100,8 @@ export const enumerators: Record<string, Enumerator> = {
     if (g.phase !== "PLAYING" || g.paused || r === null || r.phase !== "JUDGING" || judge === undefined) return [];
     return (r.revealOrder ?? []).map((id) => ({ actor: { kind: "user", uid: judge.uid } as Actor, cmd: { type: "pickWinner", submissionId: id, expectedVersion: r.changedAtVersion } as Command }));
   },
+  // markReminded (7.4): the system actor, against the state's own episode and generation, in WRITING and PLAYING while an episode runs. Whether it advances depends on the clock (`now >= reminderDueAt`); a call that is not due is a lawful no-op.
+  markReminded: (g) => (g.phase !== "WRITING" && g.phase !== "PLAYING") || g.episode === null ? [] : [{ actor: { kind: "system" }, cmd: { type: "markReminded", episode: g.episode, episodeGen: g.episodeGen } as Command }],
 };
 
 /** A command type that has no enumerator on purpose, with the reason. */

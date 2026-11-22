@@ -40,8 +40,8 @@ const patch = (p: unknown) => ({ type: "updateSettings", patch: p });
 const VARIANTS = { pitch: true, writeIn: true, redraw: false, peoplesChoice: true };
 
 describe("the real registry holds the lobby, writing and round commands", () => {
-  test("keys are the five lobby types, the three writing types (#21), the three round types (#22), and passJudging and endGame (#23)", () => {
-    expect(Object.keys(REGISTRY).sort()).toEqual([...LOBBY_TYPES, "finishWriting", "saveDraft", "startGame", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame"].sort());
+  test("keys are the five lobby types, the three writing types (#21), the three round types (#22), passJudging and endGame (#23), and markReminded (#24)", () => {
+    expect(Object.keys(REGISTRY).sort()).toEqual([...LOBBY_TYPES, "finishWriting", "saveDraft", "startGame", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame", "markReminded"].sort());
   });
 });
 

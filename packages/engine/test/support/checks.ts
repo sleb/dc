@@ -441,10 +441,62 @@ export const checkLateJoin: Checker = ({ before, cmd, result }) => {
   }
 };
 
+const DAY_MS = 86_400_000;
+const EPISODE_EVENTS = new Set(["WritingStarted", "RoundOpened", "SubmissionsClosed", "JudgeChanged", "RoundVoided"]);
+
+/**
+ * X8 (LLD 1 section 4.2), written from the LLD text and not from `rules/waiting.ts`; checked on the state after every command that changed the aggregate:
+ * `waitingOn` equals the table's set (WRITING: seated players still writing; SUBMITTING: roster members, not the judge, still active, with no submission; JUDGING: the judge;
+ * in PLAYING also every seated player still writing; else none); `episode` is null iff paused, nobody is waited on or the phase is not WRITING or PLAYING, and otherwise
+ * `"writing"` or `"{round}:{roundPhase}:{judgeId}"`; `reminderDueAt` and `waitingSince` are null iff `episode` is; `reminderDueAt >= waitingSince + 24 h`.
+ * Transition: an episode starts iff it is non-null and (the key changed, or an event names a boundary (writing start, round open, close, judge change, void; un-pause changes the key), or the
+ * stored clock was missing); then `episodeGen` is +1 and `waitingSince = reminderDueAt - 24 h` is the command's time. Otherwise `episodeGen` and `waitingSince` are unchanged.
+ * A command that is not `markReminded` leaves `reminderDueAt` alone unless an episode started or ended; `markReminded` moves only `reminderDueAt` (strictly later) and `version`.
+ */
+export const checkWaiting: Checker = ({ before, cmd, result }) => {
+  const v = accepted(result);
+  if (v === null || !v.aggregateChanged) return;
+  const a = v.state;
+  const seatedIds = (g: Game, status: string): string[] => g.players.filter((p) => p.status === status).map((p) => p.id);
+  const writers = seatedIds(a, "writing");
+  let want: string[] = [];
+  if (a.phase === "WRITING") want = writers;
+  else if (a.phase === "PLAYING" && a.round !== null) {
+    const r = a.round;
+    const owed = r.phase === "JUDGING"
+      ? (r.judgeId === null ? [] : [r.judgeId])
+      : r.roster.filter((id) => id !== r.judgeId && a.players.some((p) => p.id === id && p.status === "active") && !r.submissions.some((s) => s.playerId === id));
+    want = [...owed, ...writers];
+  } else if (a.phase === "PLAYING") want = writers;
+  if ([...a.waitingOn].sort().join() !== [...want].sort().join() || new Set(a.waitingOn).size !== a.waitingOn.length) throw new Error(`waitingOn is ${JSON.stringify(a.waitingOn)}, the LLD says ${JSON.stringify(want)}`);
+
+  const waits = (a.phase === "WRITING" || a.phase === "PLAYING") && !a.paused && want.length > 0;
+  if ((a.episode !== null) !== waits) throw new Error(`episode is ${JSON.stringify(a.episode)} but the game ${waits ? "waits on someone" : "waits on nobody (paused, empty or another phase)"}`);
+  if ((a.reminderDueAt === null) !== (a.episode === null) || (a.waitingSince === null) !== (a.episode === null)) throw new Error("reminderDueAt and waitingSince must be null iff episode is null");
+  if (a.episode !== null && a.phase === "WRITING" && a.episode !== "writing") throw new Error(`a WRITING episode is "writing", got ${a.episode}`);
+  if (a.episode !== null && a.phase === "PLAYING" && a.round !== null && a.round.judgeId !== null && a.episode !== `${a.round.number}:${a.round.phase}:${a.round.judgeId}`) throw new Error(`episode ${a.episode} does not match the round`);
+  if (a.reminderDueAt !== null && a.waitingSince !== null && a.reminderDueAt < a.waitingSince + DAY_MS) throw new Error("reminderDueAt is less than 24 h after waitingSince");
+  if (before === null) return;
+
+  if (cmdType(cmd) === "markReminded") {
+    if (before.reminderDueAt === null || a.reminderDueAt === null || a.reminderDueAt <= before.reminderDueAt) throw new Error("an accepted markReminded must move reminderDueAt strictly later");
+    assertDeepEqual({ ...a, reminderDueAt: 0, version: 0 }, { ...before, reminderDueAt: 0, version: 0 }, "markReminded changed more than reminderDueAt and version");
+    return;
+  }
+  const started = a.episode !== null && (a.episode !== before.episode || v.events.some((e) => EPISODE_EVENTS.has(e.t)) || before.waitingSince === null || before.reminderDueAt === null);
+  if (started) {
+    if (a.episodeGen !== before.episodeGen + 1) throw new Error(`an episode started but episodeGen went ${before.episodeGen} to ${a.episodeGen}`);
+    if (a.waitingSince === null || a.reminderDueAt !== a.waitingSince + DAY_MS) throw new Error("a started episode must have reminderDueAt = waitingSince + 24 h");
+    return;
+  }
+  if (a.episodeGen !== before.episodeGen) throw new Error(`no episode started but episodeGen went ${before.episodeGen} to ${a.episodeGen}`);
+  if (a.episode !== null && (a.waitingSince !== before.waitingSince || a.reminderDueAt !== before.reminderDueAt)) throw new Error("a running episode's clock changed");
+};
+
 /** Append-only: later steps push the E5 to E18 checkers here. */
 export const checkers: Checker[] = [
   checkSerializable, checkVersion, checkUnchangedWhenNotAggregate, checkConservation, checkHands, checkAggregateChanged, checkNoAuthorship,
-  checkOwnerHidden, checkRevealOrder, checkJudges, checkRoundMoves, checkTopUp, checkPlayable, checkScoring, checkFinished, checkEviction, checkLateJoin,
+  checkOwnerHidden, checkRevealOrder, checkJudges, checkRoundMoves, checkTopUp, checkPlayable, checkScoring, checkFinished, checkEviction, checkLateJoin, checkWaiting,
 ];
 
 /** Run every checker on a step; a failure names the step index and seed so the run can be replayed. */
