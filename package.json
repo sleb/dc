@@ -9,14 +9,16 @@
   ],
   "scripts": {
     "lint": "eslint . --max-warnings 0",
-    "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json && tsc --noEmit -p rules-test/tsconfig.json",
-    "test": "bun test packages functions/src functions/scripts lint-test",
+    "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json && tsc --noEmit -p rules-test/tsconfig.json && tsc --noEmit -p scripts/tsconfig.json && tsc --noEmit -p hosting-test/tsconfig.json",
+    "test": "bun test packages functions/src functions/scripts scripts lint-test",
     "test:lint": "bun test lint-test",
     "test:web": "bun test --preload ./apps/web/test/setup.ts apps/web/src",
     "test:rules": "firebase emulators:exec --only firestore --project demo-deepcuts 'bun test rules-test'",
-    "test:e2e": "echo 'test:e2e: NO SUITE. No end-to-end tests exist yet (Playwright arrives with #14 onward); nothing was run.'",
+    "test:e2e": "echo 'test:e2e: NO SUITE. No end-to-end tests exist yet (Playwright arrives with 5.1, #45); nothing was run.'",
     "build:functions": "bun run --cwd functions build",
-    "test:integration": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bun test functions/test-integration --timeout 30000'"
+    "test:integration": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bun test functions/test-integration --timeout 30000'",
+    "build:web": "bun run --cwd apps/web build --mode staging",
+    "test:hosting": "bun run --cwd apps/web build --mode emulator && firebase emulators:exec --only hosting --project demo-deepcuts 'bun test hosting-test'"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "6.0.0",
