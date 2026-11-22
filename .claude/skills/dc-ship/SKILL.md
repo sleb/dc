@@ -42,7 +42,7 @@ Keep the agent id. When it returns the draft, you rule on each open question (se
 
 Launch a second `general-purpose` agent:
 
-> Run the `dc-implement` skill for issue #N, following the posted plan comment; do not re-plan. Autonomous mode: rule on small deviations yourself, and record each (what differed, how you ruled, why) for the PR body and the LLD edits. Stop and report instead of continuing only when you are blocked on something that needs the user: an interactive login, a fact only they have, or an action the plan did not authorize that spends money or changes shared state. Do not run `/code-review` (the orchestrator does); open the PR once docs are done. Never merge. Final reply, nothing else: PR URL and branch; the red and green results (counts and the gate commands); mutation and idempotence results; deviations with rulings and reasons; "Not proven here" with the step that proves each; defaults chosen that the user might not expect; anything blocked.
+> Run the `dc-implement` skill for issue #N, following the posted plan comment; do not re-plan. Autonomous mode: rule on small deviations yourself, and record each (what differed, how you ruled, why) for the PR body and the LLD edits. Stop and report instead of continuing only when you are blocked on something that needs the user: an interactive login, a fact only they have, or an action the plan did not authorize that spends money or changes shared state. Do not run `/code-review` (the orchestrator does, and posts its findings as PR comments); open the PR once docs are done. Never merge. Final reply, nothing else: PR URL and branch; the red and green results (counts and the gate commands); mutation and idempotence results; deviations with rulings and reasons; "Not proven here" with the step that proves each; defaults chosen that the user might not expect; anything blocked.
 
 Keep the agent id. If it reports a block, ask the user and resume it with `SendMessage`.
 
@@ -57,14 +57,24 @@ Put any problem into the review message in step 4 rather than fixing it yourself
 
 ## 4. Review (you, with a sub-agent doing the fixes)
 
-Run the `code-review` skill at `high` on the branch (it runs in the background and returns findings). When it reports, rule on every finding:
-- **Fix** every real finding, and every nit that is cheap and honest to fix.
-- **Decline** only with a reason (out of scope, owned by a later issue, wrong).
-Add your verification findings from step 3. Send the whole list to the implementation agent with `SendMessage`: each item, your ruling, and the reason. Ask it to fix, re-run its gates and the idempotence pass, push, and append a "Review" section to the PR body listing what was fixed and what was declined and why. Then repeat step 3 briefly. One round is normal; a second only for a real regression.
+The review lives on the PR, so the record of what changed and why stays with the code and the handoff stays short.
+
+**Post.** Run the `code-review` skill at `high --comment` on the PR (it runs in the background and posts its findings as inline PR comments). Then list them: `gh api repos/{owner}/{repo}/pulls/N/comments` for the comment ids and `gh api graphql` (`reviewThreads { id isResolved comments(first:1) { nodes { databaseId body path } } }`) for the thread ids. If a finding could not be anchored to a diff line and was not posted inline, post it yourself as a PR comment so every finding has a thread. Add your step 3 verification findings the same way (inline where they have a line, otherwise a PR comment).
+
+**Rule on every thread.** Reply on the thread with the ruling and the reason:
+- **Fix** every real finding, and every nit that is cheap and honest to fix. Reply `Fix: <one-line reason or the shape of the fix if not obvious>`. Leave it open.
+- **Won't fix** only with a reason (out of scope, owned by a later issue, wrong). Reply `Won't fix: <reason>` and resolve the thread yourself, since nothing further will happen on it.
+
+**Hand off.** Send the implementation agent a short `SendMessage`: the PR number, the ids (or "every open thread marked `Fix:`") to fix, and nothing else. It reads each thread for the location and context. Ask it to, for each thread it was told to fix:
+1. fix it (test first where practical);
+2. reply on the thread with the commit SHA and what changed (`Fixed in <sha>: ...`), or, if it disagrees or deviates, say so and why. It does not resolve; you do;
+3. re-run its gates and the idempotence pass, push, and add a short "Review" section to the PR body that links to the threads (fixed, won't fix and why).
+
+**Close the threads.** After it reports, run step 3 briefly, then read each reply and the commit it cites. If satisfied, resolve the thread (`gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=<threadId>`). If not, reply with what is still wrong and leave it open, and send the agent the thread ids to rework. One round is normal; a second only for a real regression. Finish only when every thread is resolved or deliberately left open and named in the report.
 
 ## 5. Report to the user
 
-Short, in this order: the PR link and the checks result; **rulings I made** (plan questions, deviations, review findings: item, ruling, reason; keep it a table); **escalations** you asked about, or "none"; what the user might not expect (defaults, deviations, LLD edits); what is not proven and which step proves it. Say plainly anything unverified or failing. Offer the merge; do not merge.
+Short, in this order: the PR link and the checks result; **rulings I made** (plan questions, deviations, review findings: item, ruling, reason; keep it a table); **escalations** you asked about, or "none"; what the user might not expect (defaults, deviations, LLD edits); review threads (fixed, won't fix, open); what is not proven and which step proves it. Say plainly anything unverified or failing. Offer the merge; do not merge.
 
 ## 6. Merge
 
