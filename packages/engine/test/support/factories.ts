@@ -3,7 +3,8 @@ import { makeRng } from "../../src/rng";
 
 /** Deterministic ids that satisfy the contracts id formats (p_ + 8 base-32, c_ + 10 base-36, 20 alphanumerics). */
 const B32 = "abcdefghijklmnopqrstuvwxyz234567";
-export const pid = (n: number): PlayerId => `p_aaaaaaa${B32[n % 32] ?? "a"}`;
+/** Two trailing base-32 digits: 1024 distinct ids, and pid(n) for n < 32 is unchanged from the one-digit form. */
+export const pid = (n: number): PlayerId => `p_aaaaaa${B32[Math.floor(n / 32) % 32] ?? "a"}${B32[n % 32] ?? "a"}`;
 export const cid = (n: number): CardId => `c_${n.toString(36).padStart(10, "0")}`;
 export const GAME_ID: GameId = "gameaaaaaaaaaaaaaaaa";
 export const HOST_UID = "host-uid";

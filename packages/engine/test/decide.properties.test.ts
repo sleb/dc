@@ -9,12 +9,14 @@ import { cid, counterMintId, ctxFor, deepFreeze, pid, seatUidOf, GAME_ID, HOST_U
 import { assertProperty } from "./support/fc";
 import { fixtureEnumerators, fixtureRegistry } from "./support/fixtures";
 import { enumerators, exemptions, junkCommands, legalCommands, missingEnumerators } from "./support/legal";
+import type { Enumerator } from "./support/legal";
 import { arbPicks, arbShape, buildGame, runScenario, zeroTime } from "./support/scenario";
 import type { Decide } from "./support/scenario";
+import type { Actor, Game, Rejection } from "../src/types";
 import { checkAll } from "./support/checks";
 
-// The real registry is empty in 1.2: it adds no commands, so the properties run over fixture specs and, for X1, also over the empty registry.
-// Each of #20 to #22 adds its commands to REGISTRY, its enumerators to support/legal.ts, and these properties then cover them.
+// The properties run over the fixture specs (the ladder proof, independent of any real command) and over the real REGISTRY, which holds
+// the lobby commands since #20. #21 and #22 add their rows, their enumerators to support/legal.ts, and these properties then cover them.
 const fixtureDecide: Decide = makeDecide(fixtureRegistry);
 const realDecide: Decide = makeDecide(REGISTRY);
 const asCommand = (c: unknown): Command => c as Command;
@@ -36,15 +38,43 @@ const arbTyped = fc.record({
   failRole: fc.anything(),
   failPayload: fc.anything(),
 }, { requiredKeys: ["type"] });
+/** Typed junk against the real rows: a lobby type with arbitrary field values, and with well-formed ones mixed in so some get past the early guards. */
+const arbRealTyped = fc.record({
+  type: fc.constantFrom(...Object.keys(REGISTRY), "__proto__"),
+  expectedVersion: fc.anything(),
+  gameId: fc.oneof(fc.anything(), fc.constant(GAME_ID)),
+  roomCode: fc.oneof(fc.anything(), fc.constant("BCDF")),
+  hostId: fc.oneof(fc.anything(), fc.constant(HOST_UID)),
+  hostPlayerId: fc.oneof(fc.anything(), fc.constantFrom(pid(0), pid(1))),
+  hostName: fc.oneof(fc.anything(), fc.string()),
+  settings: fc.oneof(fc.anything(), fc.constant(undefined)),
+  patch: fc.oneof(fc.anything(), fc.record({ profanity: fc.constantFrom("on", "off", "x") }, { requiredKeys: [] }), fc.record({ targetOverride: fc.oneof(fc.integer({ min: -2, max: 12 }), fc.constant(null)) }, { requiredKeys: [] })),
+  playerId: fc.oneof(fc.anything(), fc.integer({ min: 0, max: 12 }).map(pid)),
+  name: fc.oneof(fc.anything(), fc.string()),
+}, { requiredKeys: ["type"] });
 const arbActor = fc.constantFrom(userActor(HOST_UID), userActor(seatUidOf(GAME_ID, pid(1))), userActor("stranger"), { kind: "system" as const });
 
 describe("X1 decide is total", () => {
-  test("arbitrary JSON as cmd never throws over the real registry, and is always INVALID_ARGUMENT there (nothing is registered)", () => {
+  test("arbitrary JSON as cmd never throws over the real registry; anything that is not a registered type is INVALID_ARGUMENT", () => {
     assertProperty(fc.property(arbShape, arbJson, arbActor, (shape, c, actor) => {
       for (const state of [null, buildGame(shape)]) {
         const r = realDecide(state, asCommand(c), ctxFor({ actor }));
-        expect(r.ok).toBe(false);
-        if (!r.ok) expect(r.error).toStrictEqual({ code: "INVALID_ARGUMENT" });
+        const type = typeof c === "object" && c !== null && !Array.isArray(c) ? (c as { type?: unknown }).type : undefined;
+        if (typeof type !== "string" || !Object.hasOwn(REGISTRY, type)) {
+          expect(r.ok).toBe(false);
+          if (!r.ok) expect(r.error).toStrictEqual({ code: "INVALID_ARGUMENT" });
+        } else if (!r.ok) expect((ERROR_CODES as readonly string[]).includes(r.error.code)).toBe(true);
+      }
+    }));
+  });
+
+  test("typed junk against the real lobby rows (real type, arbitrary fields) never throws; a rejection carries an allowed code and an acceptance passes every checker", () => {
+    assertProperty(fc.property(arbShape, arbRealTyped, arbActor, fc.integer(), (shape, c, actor, seed) => {
+      for (const state of [null, buildGame(shape)]) {
+        const frozen = state === null ? null : deepFreeze(structuredClone(state));
+        const r = realDecide(frozen, asCommand(c), ctxFor({ actor, rng: makeRng(`${seed}`) }));
+        if (!r.ok) expect((ERROR_CODES as readonly string[]).includes(r.error.code)).toBe(true);
+        else checkAll({ index: 0, seed, before: state, cmd: c, result: r });
       }
     }));
   });
@@ -67,8 +97,6 @@ describe("X1 decide is total", () => {
     }
   });
 
-  // TODO(#20, #21, #22): the real REGISTRY is empty in 1.2, so the test above and the one below are vacuous over it. Each of those
-  // steps must re-point the junk test at the real rows (realDecide with per-guard codes); until then only the fixture run proves the ladder.
   test("the junkCommands list over the fixture registry: each registered type gets its guard code, the rest guard 0", () => {
     const g = buildGame({ n: 4, phase: "PLAYING", ready: [], handSize: 2, judge: 1, submitted: [false, false, true, false], paused: false });
     for (const { actor, cmd } of junkCommands(g)) {
@@ -81,20 +109,48 @@ describe("X1 decide is total", () => {
     }
   });
 
-  test("the junkCommands list is rejected and never throws, with the input state unchanged", () => {
-    const g = buildGame({ n: 4, phase: "PLAYING", ready: [], handSize: 2, judge: 1, submitted: [false, false, true, false], paused: false });
-    const before = structuredClone(g);
-    for (const { actor, cmd } of junkCommands(g)) {
-      const r = realDecide(deepFreeze(structuredClone(g)), cmd, ctxFor({ actor }));
-      expect(r.ok).toBe(false);
+  // The expected code per junk entry is written out from the guard ladder (5.3) and 7.1, not read off the handlers. Acceptances are not assumed away:
+  // the host's updateSettings with an empty patch is legal in LOBBY, WRITING and PLAYING, and a seated player may leave in LOBBY.
+  const LOBBY_REAL = new Set(["createGame", "updateSettings", "join", "leave", "removePlayer"]); // independent of REGISTRY on purpose
+  const expectedReal = (g: Game, actor: Actor, c: Command): Rejection | "accepted" => {
+    if (!LOBBY_REAL.has(c.type)) return { code: "INVALID_ARGUMENT" };
+    if (c.type === "createGame") return { code: "WRONG_PHASE" };
+    const user = actor.kind === "user" ? actor.uid : null;
+    const isHost = user === g.hostId;
+    const seated = g.players.some((p) => p.uid === user && p.status !== "left" && p.status !== "removed");
+    const inLobby = g.phase === "LOBBY";
+    if (c.type === "updateSettings") return isHost ? "accepted" : { code: "NOT_AUTHORIZED" };
+    if (c.type === "join") return { code: "NOT_AUTHORIZED" }; // none of the junk actors holds the seat uid of pid(9)
+    if (c.type === "leave") return !seated ? { code: "NOT_AUTHORIZED" } : inLobby ? "accepted" : { code: "WRONG_PHASE" };
+    // removePlayer: the target pid(9) is not seated in these games
+    return !isHost ? { code: "NOT_AUTHORIZED" } : inLobby ? { code: "NOT_FOUND" } : { code: "WRONG_PHASE" };
+  };
+
+  test("the junkCommands list over the real registry: each entry gets its guard's code (or the lawful acceptance), the input is unchanged", () => {
+    const shapes = [
+      { n: 4, phase: "PLAYING" as const, ready: [], handSize: 2, judge: 1, submitted: [false, false, true, false], paused: false },
+      { n: 4, phase: "LOBBY" as const, ready: [], handSize: 0, judge: 0, submitted: [], paused: false },
+      { n: 4, phase: "WRITING" as const, ready: [], handSize: 0, judge: 0, submitted: [], paused: false },
+    ];
+    for (const shape of shapes) {
+      const g = buildGame(shape);
+      const before = structuredClone(g);
+      for (const { actor, cmd } of junkCommands(g)) {
+        const r = realDecide(deepFreeze(structuredClone(g)), cmd, ctxFor({ actor }));
+        const want = expectedReal(g, actor, cmd);
+        if (want === "accepted") expect(r.ok).toBe(true);
+        else expect(r).toStrictEqual({ ok: false, error: want });
+      }
+      expect(g).toEqual(before);
     }
-    expect(g).toEqual(before);
   });
 });
 
-describe("X2 to X5 over scenarios of legal and junk commands (every step checked by checkAll)", () => {
+const WORLDS: [string, Decide, Readonly<Record<string, Enumerator>>][] = [["fixture", fixtureDecide, fixtureEnumerators], ["real", realDecide, enumerators]];
+
+describe.each(WORLDS)("X2 to X5 over scenarios of legal and junk commands, %s registry (every step checked by checkAll)", (_name, decideFn, table) => {
   const run = (g: ReturnType<typeof buildGame>, picks: Parameters<typeof runScenario>[2], seed: number, opts: Partial<Parameters<typeof runScenario>[3]> = {}) =>
-    runScenario(fixtureDecide, g, picks, { seed, table: fixtureEnumerators, ...opts });
+    runScenario(decideFn, g, picks, { seed, table, ...opts });
 
   test("X2 state stays plain JSON after every step", () => {
     assertProperty(fc.property(arbShape, arbPicks, fc.integer(), (shape, picks, seed) => { run(buildGame(shape), picks, seed); }));
@@ -108,6 +164,20 @@ describe("X2 to X5 over scenarios of legal and junk commands (every step checked
     }));
   });
 
+  test("X4 inputs are deep-frozen and decide neither mutates nor throws a TypeError", () => {
+    assertProperty(fc.property(arbShape, arbPicks, fc.integer(), (shape, picks, seed) => { run(buildGame(shape), picks, seed, { freeze: true }); }));
+  });
+
+  test("X5 two runs with different now are equal after zeroing the five time fields", () => {
+    assertProperty(fc.property(arbShape, arbPicks, fc.integer(), fc.integer({ min: 0, max: 1e12 }), (shape, picks, seed, shift) => {
+      const a = run(buildGame(shape), picks, seed, { now: (i) => 1_000 + i });
+      const b = run(buildGame(shape), picks, seed, { now: (i) => 1_000 + i + shift });
+      expect(b.states.map((s) => (s === null ? null : zeroTime(s)))).toEqual(a.states.map((s) => (s === null ? null : zeroTime(s))));
+    }));
+  });
+});
+
+describe("X3 and X5 on fixture commands that exercise the rng and the clock", () => {
   test("X3 a different seed changes the shuffle order and nothing else", () => {
     const g = buildGame({ n: 3, phase: "WRITING", ready: [true, true, true], handSize: 0, judge: 0, submitted: [], paused: false });
     const withRedDeck = { ...g, cards: Object.fromEntries(Array.from({ length: 12 }, (_, i) => [cid(i), { kind: "red" as const, text: "t" }])), pools: { ...g.pools, redDeck: Array.from({ length: 12 }, (_, i) => cid(i)) } };
@@ -120,18 +190,6 @@ describe("X2 to X5 over scenarios of legal and junk commands (every step checked
     expect(x.value.seed).toBe("seed-a");
   });
 
-  test("X4 inputs are deep-frozen and decide neither mutates nor throws a TypeError", () => {
-    assertProperty(fc.property(arbShape, arbPicks, fc.integer(), (shape, picks, seed) => { run(buildGame(shape), picks, seed, { freeze: true }); }));
-  });
-
-  test("X5 two runs with different now are equal after zeroing the five time fields", () => {
-    assertProperty(fc.property(arbShape, arbPicks, fc.integer(), fc.integer({ min: 0, max: 1e12 }), (shape, picks, seed, shift) => {
-      const a = run(buildGame(shape), picks, seed, { now: (i) => 1_000 + i });
-      const b = run(buildGame(shape), picks, seed, { now: (i) => 1_000 + i + shift });
-      expect(b.states.map((s) => (s === null ? null : zeroTime(s)))).toEqual(a.states.map((s) => (s === null ? null : zeroTime(s))));
-    }));
-  });
-
   test("X5 is not vacuous: now does land in the time fields", () => {
     const g = buildGame({ n: 3, phase: "WRITING", ready: [false, false, false], handSize: 0, judge: 0, submitted: [], paused: false });
     const at = (now: number) => fixtureDecide(g, asCommand({ type: "fxHost" }), ctxFor({ now }));
@@ -141,11 +199,11 @@ describe("X2 to X5 over scenarios of legal and junk commands (every step checked
 });
 
 describe("G1 generator sanity", () => {
-  test("every legalCommands entry is accepted", () => {
+  test.each(WORLDS)("every legalCommands entry is accepted, %s registry", (_name, decideFn, table) => {
     assertProperty(fc.property(arbShape, fc.integer(), (shape, seed) => {
       const g = buildGame(shape);
-      legalCommands(g, {}, fixtureEnumerators).forEach(({ actor, cmd }, i) => {
-        const r = fixtureDecide(g, cmd, ctxFor({ actor, rng: makeRng(`${seed}:${i}`) }));
+      legalCommands(g, {}, table).forEach(({ actor, cmd }, i) => {
+        const r = decideFn(g, cmd, ctxFor({ actor, rng: makeRng(`${seed}:${i}`) }));
         if (!r.ok) throw new Error(`legal command rejected: ${JSON.stringify(cmd)} as ${JSON.stringify(actor)} -> ${JSON.stringify(r.error)}`);
         checkAll({ index: i, seed, before: g, cmd, result: r });
       });
@@ -157,12 +215,44 @@ describe("G1 generator sanity", () => {
     expect(legalCommands(g, {}, fixtureEnumerators).length).toBeGreaterThan(6);
   });
 
-  test("meta: every registered command in the real registry has an enumerator or an explicit exemption", () => {
-    expect(missingEnumerators(REGISTRY, enumerators, exemptions)).toEqual([]);
-    expect(Object.keys(REGISTRY)).toEqual([]); // empty in 1.2; #20 to #22 add rows here
+  test("the real enumerators are not vacuous: a LOBBY of four offers settings, joins, leaves and removals; WRITING offers a profanity patch", () => {
+    const lobby = buildGame({ n: 4, phase: "LOBBY", ready: [], handSize: 0, judge: 0, submitted: [], paused: false });
+    const types = new Set(legalCommands(lobby, {}, enumerators).map((e) => e.cmd.type));
+    expect([...types].sort()).toEqual(["join", "leave", "removePlayer", "updateSettings"]);
+    const writing = buildGame({ n: 4, phase: "WRITING", ready: [false, false, false, false], handSize: 0, judge: 0, submitted: [], paused: false });
+    expect(legalCommands(writing, {}, enumerators).map((e) => e.cmd.type)).toEqual(["updateSettings"]);
   });
 
-  test("meta: a registered command with neither fails the check (test the test)", () => {
+  test("the enumerators stop offering joins at the room cap and at the join cap", () => {
+    const lobby = buildGame({ n: 10, phase: "LOBBY", ready: [], handSize: 0, judge: 0, submitted: [], paused: false });
+    expect(legalCommands(lobby, {}, enumerators).some((e) => e.cmd.type === "join")).toBe(false);
+    const capped = { ...buildGame({ n: 4, phase: "LOBBY", ready: [], handSize: 0, judge: 0, submitted: [], paused: false }), totalJoins: 50 };
+    expect(legalCommands(capped, {}, enumerators).some((e) => e.cmd.type === "join")).toBe(false);
+  });
+
+  test("meta: every registered command in the real registry has an enumerator or an explicit exemption; createGame is the one exemption", () => {
+    expect(missingEnumerators(REGISTRY, enumerators, exemptions)).toEqual([]);
+    expect(Object.keys(exemptions)).toEqual(["createGame"]);
+    expect(Object.keys(enumerators).sort()).toEqual(["join", "leave", "removePlayer", "updateSettings"]);
+  });
+
+  test("meta: a registered lobby command with neither an enumerator nor an exemption fails the check (test the test)", () => {
+    expect(missingEnumerators(REGISTRY, {}, {}).sort()).toEqual(Object.keys(REGISTRY).sort());
+    const { join: _j, ...withoutJoin } = enumerators;
+    expect(missingEnumerators(REGISTRY, withoutJoin, exemptions)).toEqual(["join"]);
+  });
+
+  test("createGame, the exempt command, has its own property: arbitrary settings give an acceptance or INVALID_ARGUMENT and never throw", () => {
+    const create = (settings: unknown) => realDecide(null, asCommand({ type: "createGame", gameId: GAME_ID, roomCode: "BCDF", hostId: HOST_UID, hostPlayerId: pid(0), hostName: "Host", settings }), ctxFor({ actor: userActor(HOST_UID) }));
+    assertProperty(fc.property(fc.oneof(fc.anything(), fc.jsonValue(), fc.record({ targetOverride: fc.integer({ min: -3, max: 14 }), profanity: fc.constantFrom("on", "off", "?") }, { requiredKeys: [] })), (settings) => {
+      const r = create(settings);
+      if (r.ok) checkAll({ index: 0, before: null, cmd: { settings }, result: r });
+      else expect(r.error).toStrictEqual({ code: "INVALID_ARGUMENT" });
+    }));
+    expect(exemptions["createGame"]).toBeString();
+  });
+
+  test("meta: the fixture registry's missing-enumerator check is still sharp", () => {
     expect(missingEnumerators(fixtureRegistry, fixtureEnumerators, {}).sort()).toEqual(["createGame", "fxBug", "fxInvariant", "fxOrder"]);
     expect(missingEnumerators({ ...fixtureRegistry, fxNew: fixtureRegistry["fxHost"] as never }, { ...fixtureEnumerators }, { createGame: "creates", fxBug: "x", fxInvariant: "x", fxOrder: "x" })).toEqual(["fxNew"]);
   });
