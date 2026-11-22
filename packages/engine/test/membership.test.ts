@@ -353,3 +353,31 @@ describe("V5 leave and removePlayer mid-game: the scenarios of E17 (8.5)", () =>
     expect(v.events).toEqual([{ t: "PlayerLeft", playerId: pid(1) }]);
   });
 });
+
+describe("review: a departed id cannot come back mid-game", () => {
+  test("leave, rejoin attempt with the same playerId (INVALID_ARGUMENT, no second record), then the live seat's second leave still works for others", () => {
+    const g = roundGame({ judge: 1, extra: { writeCounts: { red: 10, green: 8 } } });
+    const left = accepted(g, { type: "leave" }, seat(3)).state;
+    expect(rejected(left, { type: "join", playerId: pid(3), name: "Back Again" }, seat(3))).toStrictEqual({ code: "INVALID_ARGUMENT" });
+    const removed = accepted(g, { type: "removePlayer", playerId: pid(3) }).state;
+    expect(rejected(removed, { type: "join", playerId: pid(3), name: "Back Again" }, seat(3))).toStrictEqual({ code: "INVALID_ARGUMENT" });
+    expect(left.players.filter((p) => p.id === pid(3))).toHaveLength(1);
+  });
+
+  test("evictPlayer looks up a seated record only: a departed id is an invariant error and never rewrites the stale record", () => {
+    const g = park(roundGame({ judge: 1 }), 3, "left");
+    expect(() => membership.evictPlayer(g, pid(3), "removed", recordingRng("s"))).toThrow(/no seated player/);
+    const dup: Game = { ...g, players: [...g.players, { ...player(g, 3), status: "active", hand: [cid(1)] }] };
+    const out = membership.evictPlayer(dup, pid(3), "left", recordingRng("s"));
+    expect(out.state.players[3]?.status).toBe("left");
+    expect(out.state.players[4]).toMatchObject({ status: "left", hand: [] });
+  });
+
+  test("the judge is evicted and two actives remain (paused): the next judge is still picked, with JudgeChanged, as LLD 8.3 says (null only with no candidate)", () => {
+    const g = roundGame({ n: 3, judge: 0 });
+    const v = accepted(g, { type: "leave" }, host);
+    expect(v.state.paused).toBe(true);
+    expect(v.events.map((e) => e.t)).toEqual(["PlayerLeft", "JudgeChanged", "PausedChanged"]);
+    expect(v.state.round?.judgeId).toBe(pid(1));
+  });
+});
