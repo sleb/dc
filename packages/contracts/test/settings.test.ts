@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Settings } from "../src/index";
 import { SettingsPatchSchema } from "../src/index";
 
 const ok = (v: unknown) => SettingsPatchSchema.safeParse(v).success;
@@ -33,5 +34,13 @@ describe("C9 settings patch", () => {
   });
   test("empty patch parses; every key is optional", () => {
     expect(ok({})).toBe(true);
+  });
+});
+
+describe("Settings type", () => {
+  test("requires every key, with no undefined", () => {
+    // @ts-expect-error missing keys and undefined values are compile errors
+    const bad: Settings = { targetOverride: undefined };
+    expect(bad).toBeDefined();
   });
 });

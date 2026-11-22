@@ -33,5 +33,10 @@ export const RejectionSchema = z.strictObject({
   /** RATE_LIMITED only. */
   retryAfterMs: z.number().int().positive().optional(),
   sv: z.number().int(),
+}).superRefine((r, ctx) => {
+  // detail must belong to this reason; codes absent from DETAIL_BY_CODE never carry one.
+  if (r.detail === undefined) return;
+  const allowed: readonly string[] = (DETAIL_BY_CODE as Partial<Record<string, readonly string[]>>)[r.reason] ?? [];
+  if (!allowed.includes(r.detail)) ctx.addIssue({ code: "custom", path: ["detail"], message: `detail ${r.detail} is not valid for ${r.reason}` });
 });
 export type Rejection = z.infer<typeof RejectionSchema>;

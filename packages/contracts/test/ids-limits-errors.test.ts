@@ -101,6 +101,17 @@ describe("C8 error closure", () => {
     }
     expect(ok(RejectionSchema, { ok: false, reason: "STALE", version: 0, detail: "nope", sv: 1 })).toBe(false);
   });
+  test("detail must belong to the reason", () => {
+    for (const [reason, details] of Object.entries(DETAIL_BY_CODE)) {
+      for (const other of Object.values(DETAIL_BY_CODE).flat()) {
+        const expected = (details as readonly string[]).includes(other);
+        expect(ok(RejectionSchema, { ok: false, reason, version: 0, detail: other, sv: 1 })).toBe(expected);
+      }
+    }
+    expect(ok(RejectionSchema, { ok: false, reason: "STALE", version: 1, detail: "finished", sv: 1 })).toBe(false);
+    expect(ok(RejectionSchema, { ok: false, reason: "ROOM_FULL", version: 1, detail: "seat_replaced", sv: 1 })).toBe(false);
+    expect(ok(RejectionSchema, { ok: false, reason: "NAME_TAKEN", version: 1, detail: "own_card", sv: 1 })).toBe(false);
+  });
   test("RejectionSchema is strict and requires version and sv", () => {
     const base = { ok: false, reason: "STALE", version: 3, sv: 1 };
     expect(ok(RejectionSchema, base)).toBe(true);

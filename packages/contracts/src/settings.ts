@@ -11,13 +11,16 @@ export const WriteCountsOverrideSchema = z
   .object({ red: z.number().int().min(0).max(10), green: z.number().int().min(0).max(10) })
   .nullable();
 
-/** Nested objects are complete or absent (LLD 1 replaces them wholesale; never merged). */
-export const SettingsPatchSchema = z.object({
-  targetOverride: TargetOverrideSchema.optional(),
-  profanity: ProfanitySchema.optional(),
-  variants: VariantsSchema.optional(),
-  spectators: SpectatorsSchema.optional(),
-  writeCountsOverride: WriteCountsOverrideSchema.optional(),
+/** The full settings object (LLD 1 `Settings`); every key present. */
+export const SettingsSchema = z.object({
+  targetOverride: TargetOverrideSchema,
+  profanity: ProfanitySchema,
+  variants: VariantsSchema,
+  spectators: SpectatorsSchema,
+  writeCountsOverride: WriteCountsOverrideSchema,
 });
+export type Settings = z.infer<typeof SettingsSchema>;
+
+/** Every key optional; nested objects are complete or absent (LLD 1 replaces them wholesale; never merged). */
+export const SettingsPatchSchema = SettingsSchema.partial();
 export type SettingsPatch = z.infer<typeof SettingsPatchSchema>;
-export type Settings = Required<SettingsPatch>;
