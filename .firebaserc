@@ -1,0 +1,6 @@
+{
+  "projects": {
+    "default": "deepcuts-staging",
+    "staging": "deepcuts-staging"
+  }
+}

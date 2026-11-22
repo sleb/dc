@@ -1,0 +1,10 @@
+# Secret scanning config (LLD 0 P13). Extends the default rules.
+# The only credential-shaped values allowed in the repo are the Firebase web config and the
+# reCAPTCHA Enterprise site key, which are public by design. They live only in these env files.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public client config (Firebase web config, reCAPTCHA site key)"
+# Only files that exist. Add apps/web/.env.production (M8) and .env.emulator when they are created.
+paths = ['''^apps/web/\.env\.staging$''']
