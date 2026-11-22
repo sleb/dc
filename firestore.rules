@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Deny-all until #32. Clients never read or write Firestore directly: views and the session docs come from
+    // callables, with Firestore App Check enforcement as the second lock (LLD 0 section 2, LLD 3 section 3).
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
