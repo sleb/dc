@@ -223,9 +223,10 @@ v7() {
 
 v8() {
   need_project || return 0
-  local fn ci
+  local fn ci compute_sa
   fn="$(gcloud iam service-accounts describe "$FN_SA" --format='value(email)' 2>/dev/null)"
   ci="$(gcloud iam service-accounts describe "$CI_SA" --format='value(email)' 2>/dev/null)"
+  compute_sa="$(project_number)-compute@developer.gserviceaccount.com"
   [ -n "$fn" ] || bad "service account missing: $FN_SA"
   [ -n "$ci" ] || bad "service account missing: $CI_SA"
   if [ -n "$fn" ]; then
@@ -244,9 +245,15 @@ v8() {
   gcloud iam service-accounts get-iam-policy "$PROJECT@appspot.gserviceaccount.com" --format=json 2>/dev/null \
     | jqr '.bindings[]? | select(.role == "roles/iam.serviceAccountUser") | .members[]' \
     | grep -qx "serviceAccount:$CI_SA" || bad "ci-deployer lacks roles/iam.serviceAccountUser on $PROJECT@appspot.gserviceaccount.com"
+  # The Cloud Functions 2nd gen API sets the build identity to the default compute service account, so the deployer
+  # needs ActAs on that account as well as on the appspot one (found in the first push-to-main deploy, #69; #67 had
+  # granted only the appspot half). Service-account level, not project-wide.
+  gcloud iam service-accounts get-iam-policy "$compute_sa" --format=json 2>/dev/null \
+    | jqr '.bindings[]? | select(.role == "roles/iam.serviceAccountUser") | .members[]' \
+    | grep -qx "serviceAccount:$CI_SA" || bad "ci-deployer lacks roles/iam.serviceAccountUser on $compute_sa"
   [ -z "$ci" ] || same_set "ci-deployer project roles" "$(roles_of "serviceAccount:$CI_SA")" $CI_ROLES
   local compute
-  compute="serviceAccount:$(project_number)-compute@developer.gserviceaccount.com"
+  compute="serviceAccount:$compute_sa"
   if roles_of "$compute" | grep -qx 'roles/editor'; then
     bad "default compute service account still has roles/editor"
   fi
@@ -368,7 +375,7 @@ check V4  "TTL on expiresAt for the six groups, ACTIVE" v4
 check V5  "All required APIs enabled" v5
 check V6  "Identity Platform: Email link + Anonymous only, auto-cleanup, authorized domains" v6
 check V7  "Web app, App Check reCAPTCHA Enterprise, enforcement, debug token" v7
-check V8  "fn-runtime and ci-deployer roles, self-grant, compute SA has no Editor and only the build roles" v8
+check V8  "fn-runtime and ci-deployer roles, self-grant, deployer ActAs on the runtime, appspot and compute SAs, compute SA has no Editor and only the build roles" v8
 check V9  "No user-managed service account keys" v9
 check V10 "WIF pool/provider restricted to repo, staging environment and variables" v10
 check V11 "Secrets exist, fn-runtime is the only secret-level reader; APPCHECK_DEBUG_TOKEN in env" v11
