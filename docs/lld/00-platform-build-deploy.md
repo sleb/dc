@@ -140,7 +140,7 @@ Root `package.json` (the scripts marked "this step" exist now; the rest arrive w
     "test:e2e": "echo 'test:e2e: NO SUITE. ...'",   // #13 placeholder: exits 0 and says no suite ran; stays a placeholder until Playwright arrives in 5.1 (#45), which replaces it with the line below
     // "test:e2e": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bunx playwright test'",
     "build:functions": "bun run --cwd functions build",             // issue #11
-    "build:web": "bun run --cwd apps/web build --mode staging",   // #14; apps/web's `build` is plain `vite build`, so a mode is always passed (production waits for .env.production, M8)
+    "build:web": "bun run --cwd apps/web build --mode staging",   // #14; apps/web's `build` is plain `vite build`, so a mode is always passed (production waits for .env.production, M8; until then `--mode production` fails because `vite.config.ts` requires `VITE_APP_ENV`)
     "dev": "firebase emulators:start --project demo-deepcuts"
   }
 }
@@ -205,8 +205,8 @@ The Firebase CLI uploads the `source` directory and runs `npm install` in Cloud 
     "public": "apps/web/dist",
     "rewrites": [{ "source": "**", "destination": "/index.html" }],
     "headers": [
+      { "source": "**", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
       { "source": "/assets/**", "headers": [{ "key": "Cache-Control", "value": "public,max-age=31536000,immutable" }] },
-      { "source": "/{index.html,sw.js,manifest.webmanifest}", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
       { "source": "**", "headers": [{ "key": "Referrer-Policy", "value": "no-referrer" }] }
     ]
   },
@@ -218,6 +218,8 @@ The Firebase CLI uploads the `source` directory and runs `npm install` in Cloud 
 ```
 
 `.firebaserc`: `{ "projects": { "default": "deepcuts-staging", "staging": "deepcuts-staging", "prod": "deepcuts-prod" } }`. Deploys always pass `--project` explicitly in CI; the default is for humans and is never `prod`.
+
+Cache headers match the request path, not the rewrite destination, so `/` and deep links such as `/g/{id}` are not covered by a rule naming `index.html`. The `**` no-cache rule therefore comes first and `/assets/**` immutable after it; when rules overlap the later one wins (shown on the emulator in #14, `hosting-test`). 
 
 The `Referrer-Policy: no-referrer` header keeps the rejoin URL (and any path carrying a game id) from leaking in `Referer` (LLD 4, LLD 7 conflict 12). The SPA rewrite needs no `/__/` exclusion: `/__/*` (Firebase Auth helper paths) is a reserved Hosting namespace that wins over rewrites, shown on the Hosting emulator in #14 (`hosting-test`) and confirmed on live Hosting in #17. The Hosting emulator port is 5002, not Firebase's default 5000, because macOS AirPlay Receiver listens on 5000. The service worker is the single `/sw.js` (vite-plugin-pwa `injectManifest`), which also handles FCM background messages; there is no `/firebase-messaging-sw.js`.
 

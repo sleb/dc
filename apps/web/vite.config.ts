@@ -10,5 +10,8 @@ export default defineConfig(({ command, mode }) => {
   if (command === "build" && mode !== "staging" && loadEnv(mode, import.meta.dirname, "VITE_")[TOKEN_VAR]) {
     throw new Error(`${TOKEN_VAR} is set for a "${mode}" build. The debug token is allowed only in staging builds; unset it.`);
   }
+  if (command === "build" && !loadEnv(mode, import.meta.dirname, "VITE_")["VITE_APP_ENV"]) {
+    throw new Error(`No VITE_APP_ENV for mode "${mode}": apps/web/.env.${mode} is missing or incomplete.`);
+  }
   return { plugins: [react(), tailwindcss()] };
 });

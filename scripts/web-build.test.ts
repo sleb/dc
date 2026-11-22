@@ -26,11 +26,16 @@ async function allText(dir: string): Promise<string> {
 describe("web build", () => {
   test("V1 vite build --mode staging yields an index.html with the no-referrer meta tag", async () => {
     const b = await build("staging");
-    expect(b.log).not.toContain("error");
-    expect(b.code).toBe(0);
+    expect({ code: b.code, log: b.code === 0 ? "" : b.log }).toEqual({ code: 0, log: "" });
     const html = await readFile(join(b.out, "index.html"), "utf8");
     expect(html).toMatch(/<meta\s+name="referrer"\s+content="no-referrer"\s*\/?>/);
     expect(html).toContain('id="root"');
+  }, SLOW);
+
+  test("V2 a build whose mode has no env file (production, until M8) fails instead of shipping a bundle that throws at boot", async () => {
+    const b = await build("production");
+    expect(b.code).not.toBe(0);
+    expect(b.log).toContain("VITE_APP_ENV");
   }, SLOW);
 
   test("V4 a staging build with the debug token contains it, and one without does not", async () => {

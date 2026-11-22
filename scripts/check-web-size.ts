@@ -15,7 +15,7 @@ function entryRefs(html: string): string[] {
     const isScript = /^<script\b/i.test(tag);
     const rel = /\brel=["']?([\w-]+)/i.exec(tag)?.[1]?.toLowerCase();
     if (!isScript && rel !== "modulepreload" && rel !== "stylesheet") continue;
-    const url = /\b(?:src|href)=["']([^"']+)["']/i.exec(tag)?.[1];
+    const url = /\s(?:src|href)=["']([^"']+)["']/i.exec(tag)?.[1]?.split(/[?#]/)[0];
     if (url && !/^[a-z][a-z0-9+.-]*:|^\/\//i.test(url)) refs.push(posix.normalize(url).replace(/^\/+/, ""));
   }
   return refs;
@@ -38,6 +38,7 @@ export async function checkWebSize(dist: string): Promise<string[]> {
   let entry = gzipSize(html);
   const inEntry = new Set<string>(["index.html"]);
   for (const ref of entryRefs(html.toString("utf8"))) {
+    if (inEntry.has(ref)) continue;
     inEntry.add(ref);
     try {
       entry += gzipSize(await readFile(join(dist, ref)));

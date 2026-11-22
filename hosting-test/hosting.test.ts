@@ -24,8 +24,8 @@ describe("hosting", () => {
     }
   });
 
-  test("V7 index.html and sw.js are no-cache", async () => {
-    for (const path of ["/index.html", "/sw.js"]) {
+  test("V7 the shell is no-cache on /, /index.html and a deep link", async () => {
+    for (const path of ["/", "/index.html", "/g/abc123"]) {
       expect((await get(path)).headers.get("cache-control")).toBe("no-cache");
     }
   });

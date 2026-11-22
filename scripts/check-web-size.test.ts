@@ -74,6 +74,12 @@ describe("check-web-size", () => {
     expect(problems.join("\n")).toContain("vendor-b2.js");
   });
 
+  test("S10 a file referenced twice counts once; query strings are stripped; data-src is ignored", async () => {
+    const html = HTML.replace("</head>", '<link rel="modulepreload" href="/assets/index-a1.js?v=1"><script data-src="/assets/nope.js"></script></head>');
+    const problems = await checkWebSize(await dist({ "index.html": html, "assets/index-a1.js": noise(150_000), "assets/vendor-b2.js": noise(120_000) }));
+    expect(problems).toEqual([]);
+  });
+
   test("S8 measures gzip, not raw bytes", async () => {
     expect(await checkWebSize(await dist({ "assets/index-a1.js": "a".repeat(2_000_000) }))).toEqual([]);
   });

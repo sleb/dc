@@ -19,7 +19,7 @@ Public config is committed as Vite `.env.<mode>` files in this directory and rea
 |---|---|---|
 | `.env.staging` | `staging` | Real staging Firebase web config and reCAPTCHA Enterprise site key (public by design). |
 | `.env.emulator` | `emulator` | Project `demo-deepcuts` with placeholder keys. App Check is skipped. |
-| `.env.production` | `production` | Not created yet (M8). A `production` build fails until it exists. |
+| `.env.production` | `production` | Not created yet (M8). `vite build --mode production` fails (no `VITE_APP_ENV`) until it exists. |
 
 `firebase/config.ts` `readConfig` validates the keys and names a missing one.
 

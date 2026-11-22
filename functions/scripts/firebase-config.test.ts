@@ -52,8 +52,8 @@ test("F4 firebase.json hosting serves apps/web/dist with the SPA rewrite, cache 
     public: "apps/web/dist",
     rewrites: [{ source: "**", destination: "/index.html" }],
     headers: [
+      { source: "**", headers: [{ key: "Cache-Control", value: "no-cache" }] },
       { source: "/assets/**", headers: [{ key: "Cache-Control", value: "public,max-age=31536000,immutable" }] },
-      { source: "/{index.html,sw.js,manifest.webmanifest}", headers: [{ key: "Cache-Control", value: "no-cache" }] },
       { source: "**", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] },
     ],
   });
