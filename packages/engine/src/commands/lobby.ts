@@ -1,4 +1,4 @@
-// The lobby commands (LLD 1 sections 7.1, 7.2, 8.5): createGame, updateSettings, join, leave, removePlayer.
+// The lobby and membership commands (LLD 1 sections 7.1, 7.2, 8.5, 9.4): createGame, updateSettings, join, leave, removePlayer (join, leave and removePlayer also run mid-game since #23).
 // Moderation (guard 8) is not wired for createGame and join until #25, so names are stored trimmed and otherwise as given.
 import { MAX_SEATED, MAX_TOTAL_JOINS, PlayerIdSchema, RoomCodeSchema, GameIdSchema, SettingsPatchSchema } from "@dc/contracts";
 import type { Command, Settings } from "@dc/contracts";

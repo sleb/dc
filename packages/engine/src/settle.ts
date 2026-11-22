@@ -39,7 +39,7 @@ export interface SettleSlot {
 }
 
 /** Slot 1 (8.2): WRITING, at least 3 seated, every seated player ready and the minimums met at the frozen target: begin play. A null target or writeCounts never begins play.
- * When every seated player is ready but the minimums fail, nothing happens: the game stays in WRITING (LLD 1 sections 8.2 and 9.4). #23 owns the test. */
+ * When every seated player is ready but the minimums fail, nothing happens: the game stays in WRITING (LLD 1 sections 8.2 and 9.4; tested in stalls.test.ts, #23). */
 const beginPlaySlot: SettleSlot = {
   id: "1",
   run: (state, env) => {
