@@ -73,9 +73,13 @@ export async function build(root: string, opts: BuildOptions = {}): Promise<void
   }
 
   // Function params: the CLI reads .env, .env.<projectId> and .env.local from the functions *source*
-  // directory, which is dist. Mirror functions/.env* into dist exactly (stale copies removed first).
-  for (const f of (await readdir(dist)).filter(isEnvFile)) await rm(join(dist, f));
-  for (const f of (await readdir(root)).filter(isEnvFile)) await copyFile(join(root, f), join(dist, f));
+  // directory, which is dist. Mirror functions/.env* into dist exactly (stale copies removed; unchanged files are left alone).
+  const sources = (await readdir(root)).filter(isEnvFile);
+  for (const f of (await readdir(dist)).filter(isEnvFile)) if (!sources.includes(f)) await rm(join(dist, f));
+  for (const f of sources) {
+    const [from, to] = [await readFile(join(root, f)), await readFile(join(dist, f)).catch(() => null)];
+    if (to === null || !from.equals(to)) await copyFile(join(root, f), join(dist, f));
+  }
 
   if (opts.check ?? true) {
     const problems = await checkBundle(root);
@@ -86,6 +90,7 @@ export async function build(root: string, opts: BuildOptions = {}): Promise<void
 if (import.meta.main) {
   try {
     await build(join(import.meta.dir, ".."));
+    console.log("build: ok");
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exit(1);
