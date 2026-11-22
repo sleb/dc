@@ -36,6 +36,8 @@ roles/secretmanager.secretAccessor roles/logging.logWriter roles/cloudtrace.agen
 CI_ROLES="roles/firebase.admin roles/cloudfunctions.developer roles/cloudscheduler.admin
 roles/artifactregistry.writer roles/serviceusage.serviceUsageConsumer
 roles/monitoring.editor roles/logging.configWriter"
+# The default compute service account builds 2nd gen functions, so it keeps exactly the build roles (#15).
+COMPUTE_BUILD_ROLES="roles/storage.objectViewer roles/artifactregistry.writer roles/logging.logWriter"
 WIF_POOL="github"
 WIF_PROVIDER="github"
 SECRETS="RATE_LIMIT_HASH_SALT LOG_HASH_SALT SEAT_DERIVATION_KEY"
@@ -238,9 +240,12 @@ v8() {
     fi
   fi
   [ -z "$ci" ] || same_set "ci-deployer project roles" "$(roles_of "serviceAccount:$CI_SA")" $CI_ROLES
-  if roles_of "serviceAccount:$(project_number)-compute@developer.gserviceaccount.com" | grep -qx 'roles/editor'; then
+  local compute
+  compute="serviceAccount:$(project_number)-compute@developer.gserviceaccount.com"
+  if roles_of "$compute" | grep -qx 'roles/editor'; then
     bad "default compute service account still has roles/editor"
   fi
+  same_set "default compute service account build roles" "$(roles_of "$compute")" $COMPUTE_BUILD_ROLES
 }
 
 v9() {
@@ -267,7 +272,8 @@ v10() {
     [ "$issuer" = "https://token.actions.githubusercontent.com" ] || bad "WIF issuer is '$issuer'"
     echo "$cond" | grep -q "assertion.repository == '$REPO'" || bad "WIF condition does not restrict to repository $REPO"
     echo "$cond" | grep -q "assertion.environment == '$ENV_NAME'" || bad "WIF condition lacks the P4 environment == '$ENV_NAME' clause"
-    echo "$cond" | grep -q "pull_request" || bad "WIF condition lacks the same-repository pull_request clause"
+    # A pull_request claim cannot express "same repository": GitHub sets `repository` to the base repo for fork PRs.
+    echo "$cond" | grep -q "pull_request" && bad "WIF condition admits pull_request events, which fork PRs satisfy"
     gcloud iam service-accounts get-iam-policy "$CI_SA" --format=json 2>/dev/null \
       | jqr '.bindings[]? | select(.role == "roles/iam.workloadIdentityUser") | .members[]' \
       | grep -q "attribute.repository/$REPO\$" || bad "ci-deployer has no workloadIdentityUser binding for $REPO"
@@ -354,7 +360,7 @@ check V4  "TTL on expiresAt for the six groups, ACTIVE" v4
 check V5  "All required APIs enabled" v5
 check V6  "Identity Platform: Email link + Anonymous only, auto-cleanup, authorized domains" v6
 check V7  "Web app, App Check reCAPTCHA Enterprise, enforcement, debug token" v7
-check V8  "fn-runtime and ci-deployer roles, self-grant, compute SA has no Editor" v8
+check V8  "fn-runtime and ci-deployer roles, self-grant, compute SA has no Editor and only the build roles" v8
 check V9  "No user-managed service account keys" v9
 check V10 "WIF pool/provider restricted to repo, staging environment and variables" v10
 check V11 "Secrets exist, fn-runtime is the only secret-level reader; APPCHECK_DEBUG_TOKEN in env" v11
