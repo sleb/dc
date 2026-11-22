@@ -113,8 +113,9 @@ describe("harness: checkUnchangedWhenNotAggregate", () => {
 });
 
 describe("harness: legalCommands, junkCommands, coverage", () => {
-  test("the real enumerator table starts empty, so legalCommands is empty", () => {
-    expect(legalCommands(makeGame(), {})).toEqual([]);
+  test("the real enumerator table covers the lobby commands only (#20): a LOBBY game has legal commands, a FINISHED one has none", () => {
+    expect(legalCommands(makeGame(), {}).length).toBeGreaterThan(0);
+    expect(legalCommands(makeGame({ phase: "FINISHED" }), {})).toEqual([]);
   });
 
   test("missingEnumerators lists registered types with neither an enumerator nor an exemption", () => {

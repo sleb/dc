@@ -84,7 +84,7 @@ describe("E7 writeCounts (9.3), one test per worked example", () => {
 
 // The independent implementation: a search instead of a closed form, a lookup instead of a chain of ternaries.
 const refRMin = (n: number): number => 7 * n + (2 * n > 7 ? 2 * n : 7);
-const refTarget = (n: number): number => [8, 8, 8, 8, 7, 6, 5, 4, 4, 4, 4][n] ?? 4;
+const refTarget = (n: number): number => [8, 8, 8, 8, 8, 7, 6, 5, 4, 4, 4][n] ?? 4;
 const smallest = (have: number, per: number, need: number): number => { let k = 0; while (have + per * k < need) k++; return k; };
 
 describe("E7 property: the formulas against an independent implementation", () => {

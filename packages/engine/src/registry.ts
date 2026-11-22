@@ -1,4 +1,5 @@
 import type { Command } from "@dc/contracts";
+import { createGame, join, leave, removePlayer, updateSettings } from "./commands/lobby";
 import type { Actor, Ctx, Game, Handled, Phase, Rejection, Roles } from "./types";
 
 /** What every spec needs of a command: its `type` and the optional `expectedVersion` (LLD 1 section 7). Real commands are the `Command` union from @dc/contracts. */
@@ -52,5 +53,5 @@ export interface CreateSpec<C extends BaseCommand = Command> {
 export type AnySpec = CommandSpec<BaseCommand> | CreateSpec<BaseCommand>;
 export type Registry = Readonly<Record<string, AnySpec>>;
 
-/** The real registry. Empty in 1.2: #20 adds the lobby commands, #21 writing, #22 rounds. */
-export const REGISTRY: Registry = {};
+/** The real registry: the lobby commands since #20; #21 adds writing, #22 rounds. */
+export const REGISTRY: Registry = { createGame, updateSettings, join, leave, removePlayer };

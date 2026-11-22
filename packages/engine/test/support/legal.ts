@@ -1,3 +1,4 @@
+import { MAX_SEATED, MAX_TOTAL_JOINS } from "@dc/contracts";
 import type { Command } from "@dc/contracts";
 import type { Registry } from "../../src/registry";
 import type { Actor, Game, GameDrafts } from "../../src/types";
@@ -10,10 +11,44 @@ export type Enumerator = (game: Game, drafts: GameDrafts) => LegalEntry[];
  * `legalCommands` is written independently of `decide`, from gameplay.md (LLD 1 section 15.1).
  * One enumerator per command type, added by the step that implements the command. Append-only.
  */
-export const enumerators: Record<string, Enumerator> = {};
+export const enumerators: Record<string, Enumerator> = {
+  // updateSettings: the host may change any setting in LOBBY, and the profanity filter in WRITING and PLAYING (gameplay.md, host controls).
+  updateSettings: (g) => {
+    const host: Actor = { kind: "user", uid: g.hostId };
+    const patches: Record<string, unknown>[] = [{ profanity: g.settings.profanity === "on" ? "off" : "on" }];
+    if (g.phase === "LOBBY") {
+      patches.push(
+        {},
+        { targetOverride: 5 },
+        { targetOverride: null },
+        { variants: { pitch: true, writeIn: true, redraw: true, peoplesChoice: true } },
+        { spectators: { enabled: true, vote: true } },
+      );
+      if (Object.keys(g.cards).length > 0) patches.push({ writeCountsOverride: { red: 1, green: 1 } });
+    } else if (g.phase !== "WRITING" && g.phase !== "PLAYING") return [];
+    return patches.map((patch) => ({ actor: host, cmd: { type: "updateSettings", patch } as Command }));
+  },
+  // join: a LOBBY with room, under the join cap, for a player id and a name nobody has.
+  join: (g) => {
+    const seated = g.players.filter((p) => p.status === "writing" || p.status === "ready" || p.status === "active");
+    if (g.phase !== "LOBBY" || seated.length >= MAX_SEATED || g.totalJoins >= MAX_TOTAL_JOINS) return [];
+    let k = 20;
+    while (g.players.some((p) => p.id === pid(k))) k++;
+    const taken = new Set(seated.map((p) => p.name.toLowerCase().replace(/\s+/g, "")));
+    let n = 0;
+    while (taken.has(`guest${n}`)) n++;
+    return [{ actor: seat(k), cmd: { type: "join", playerId: pid(k), name: `Guest ${n}` } as Command }];
+  },
+  // leave: every seated player may leave a LOBBY, the host's seat included.
+  leave: (g) => (g.phase !== "LOBBY" ? [] : g.players.filter((p) => p.status === "writing").map((p) => ({ actor: { kind: "user", uid: p.uid } as Actor, cmd: { type: "leave" } as Command }))),
+  // removePlayer: the host may remove any seated player from a LOBBY, their own seat included.
+  removePlayer: (g) => (g.phase !== "LOBBY" ? [] : g.players.filter((p) => p.status === "writing").map((p) => ({ actor: { kind: "user", uid: g.hostId } as Actor, cmd: { type: "removePlayer", playerId: p.id } as Command }))),
+};
 
 /** A command type that has no enumerator on purpose, with the reason. */
-export const exemptions: Record<string, string> = {};
+export const exemptions: Record<string, string> = {
+  createGame: "it makes the aggregate, so there is no state to enumerate from; the G1 file runs its own property over arbitrary settings",
+};
 
 /** Every command a state accepts, from every enumerator in `table`. */
 export function legalCommands(game: Game, drafts: GameDrafts, table: Readonly<Record<string, Enumerator>> = enumerators): LegalEntry[] {
