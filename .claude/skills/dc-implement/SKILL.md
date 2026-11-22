@@ -45,7 +45,7 @@ Reconcile the LLD sections, open questions, interface tables, and any README wit
 
 Standalone: run `/code-review high` on the branch (it runs in the background and returns a list of findings). Fix every real finding, including the nits that are cheap and honest to fix; for any you decline, say why in the PR. Re-run verification and the idempotence pass after the fixes.
 
-Launched by `/dc-ship` (a sub-agent brief says so): do not run the review yourself. Open the PR, report, and stay resumable. The orchestrator runs the review, rules on the findings and sends them back as a message; fix what it says to fix, re-run verification and the idempotence pass, push, and add a "Review" section to the PR body (fixed, declined and why).
+Launched by `/dc-ship` (a sub-agent brief says so): do not run the review yourself. Open the PR, report, and stay resumable. The orchestrator runs the review, rules on the findings and sends them back as a message; the findings are PR review threads and the message names which to fix. Read each thread for its location and context, fix it, reply on the thread with the commit SHA and what changed (`Fixed in <sha>: ...`), and do not resolve it (the orchestrator resolves). Re-run verification and the idempotence pass, push, and add a short "Review" section to the PR body linking the threads (fixed, declined and why).
 
 ## 6. PR and close-out
 
