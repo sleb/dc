@@ -117,7 +117,7 @@ dc/
   hosting-test/                # bun tests against the Hosting emulator (`bun run test:hosting`); own tsconfig.json
   e2e/                         # Playwright
   ops/                         # metrics, alert policies, dashboard JSON (section 9)
-  scripts/                     # repo-level Bun scripts (smoke.ts, ops-apply.ts, wait-indexes.ts, check-web-size.ts); not shipped
+  scripts/                     # repo-level scripts (smoke.ts, ops-apply.ts (#17), wait-indexes.ts, check-web-size.ts, scan-secrets.ts, install-betterleaks.sh, check-bundle-no-bun.sh, log-sentinels.ts, run-integration-sentinels.ts) and the workflow policy test ci-policy.test.ts; not shipped
   docs/
 ```
 
@@ -342,14 +342,14 @@ export default [
 | Functions build scripts (`build`, `check-bundle`; fixtures and a fake `npm`) | `bun test functions/scripts` (in `bun run test`) | Bun | every PR |
 | Lint and compiler policy | `bun test lint-test` (in `bun run test`; `test:lint` alone) | Bun | every PR |
 | Web unit (happy-dom, Testing Library) | `bun run test:web` | Bun, separate process so `happy-dom` globals never reach engine or functions tests | every PR |
-| Rules | `bun run test:rules` | Firestore emulator (needs Java; developed on a newer JDK, CI pins 21 in #16). Until #32 the one suite passes inline deny-all rules; `firestore.rules` and the P10 checks are #32 | every PR |
-| Function integration | `bun run test:integration` | Auth + Firestore + Functions emulators, **Node bundle** (Firestore added in #13; needs Java; one Admin SDK write and read, real collections from #32) | every PR |
-| Hosting config (headers, cache, SPA rewrite, `/__/`) | `bun run test:hosting` | Hosting emulator serving an `--mode emulator` build of `apps/web/dist` | not in CI until #16 adds it |
+| Rules | `bun run test:rules` | Firestore emulator (needs Java; developed on a newer JDK, CI pins temurin 21). Until #32 the one suite passes inline deny-all rules; `firestore.rules` and the P10 checks are #32 | every PR |
+| Function integration | `bun run test:integration`; CI runs `bun run test:integration:logs`, which wraps it in the P19 log-sentinel harness | Auth + Firestore + Functions emulators, **Node bundle** (Firestore added in #13; needs Java; one Admin SDK write and read, real collections from #32) | every PR |
+| Hosting config (headers, cache, SPA rewrite, `/__/`) | `bun run test:hosting` | Hosting emulator serving an `--mode emulator` build of `apps/web/dist` (overwrites that directory, so it runs in the `emulator` job, never after a `build:web` in the same job) | every PR (`emulator`, #16) |
 | Web build and size (`vite build` per mode, App Check token guard, `check-web-size`) | `bun test scripts` (in `bun run test`) | Bun, runs `vite build` into temp dirs | every PR |
-| End to end (Playwright, chromium) | `bun run test:e2e` (a placeholder that exits 0 and prints "NO SUITE" until Playwright arrives in 5.1, #45) | Same emulators, `vite preview` built with `--mode emulator` (`apps/web/.env.emulator`) | every PR |
+| End to end (Playwright, chromium) | `bun run test:e2e` (a placeholder that exits 0 and prints "NO SUITE" until Playwright arrives in 5.1, #45) | Same emulators, `vite preview` built with `--mode emulator` (`apps/web/.env.emulator`) | **not in CI until #45** (#16 leaves it out: a no-op that prints NO SUITE proves nothing) |
 | Post-deploy smoke | `bun scripts/smoke.ts` | Real staging or prod | after each deploy |
 
-- P9. Integration and e2e suites run against `functions/dist/index.cjs` through the Functions emulator, never against `functions/src` imported under Bun. `test:integration` rebuilds the bundle first, and the CI job runs it under Node with Bun absent from `PATH` for the emulator process (the test runner itself is Bun). This is the control for the "Bun-built functions deployed to Node" risk in tech-stack section 10.
+- P9. Integration and e2e suites run against `functions/dist/index.cjs` through the Functions emulator, never against `functions/src` imported under Bun. `test:integration` rebuilds the bundle first, and the bundle itself is proven to load under Node with Bun off `PATH` by a `verify` step right after `build:functions` (`scripts/check-bundle-no-bun.sh`, P7). The emulator process in `emulator` still runs with Bun on `PATH` (the test runner is Bun); the bundle load under a Bun-free `PATH` is the control. This is the control for the "Bun-built functions deployed to Node" risk in tech-stack section 10.
 - P10. Rules suites cover every denial in tech-stack section 5 (aggregate, drafts, outbox, events, idem, `joinIdem`, `roomCodes`, `pushSubs`, another player's view, `views/spectator` when `enabled` is false) and fail if any of them reads or writes successfully. A CI step lists the collections named in `firestore.rules` and the suites fail if one has no denial test.
 - P11. Tests use deterministic seeds: engine property tests take `FC_SEED` from the environment and print it on failure, so a CI failure is reproducible locally.
 - Emulator specifics. The Firestore emulator needs Java 21 (`actions/setup-java`, temurin); emulator binaries are cached at `~/.cache/firebase/emulators`. Integration tests connect with `FIRESTORE_EMULATOR_HOST` and `FIREBASE_AUTH_EMULATOR_HOST` (set by `emulators:exec`). The Functions emulator runs with `skipTokenVerification`: it does not verify an App Check token, but with `enforceAppCheck: true` it still rejects (`unauthenticated`) a request that carries no `X-Firebase-AppCheck` header (found in issue #12; the emulator is not blind to enforcement, only to token validity). Integration tests therefore attach a well-formed unsigned token through the SDK's `CustomProvider`. The suite cannot prove real enforcement (a forged or expired token is accepted); that is covered by P12 plus the post-deploy smoke test (a call with no App Check token must be rejected).
@@ -366,7 +366,7 @@ export default [
 | CI credentials | None stored. GitHub OIDC to Workload Identity Federation (P3) | Repository variables hold only the provider and service account names: `WIF_PROVIDER_STAGING`, `DEPLOYER_SA_STAGING` (set; prod equivalents in M8). GitHub environments: `staging` (exists, holds `APPCHECK_DEBUG_TOKEN`), `production` (M8) |
 | App Check debug tokens | GitHub environment secrets (`staging`, `production`) | `APPCHECK_DEBUG_TOKEN` used by `scripts/smoke.ts`; the preview job's web build step exposes the `staging` value to Vite as `VITE_APPCHECK_DEBUG_TOKEN` (step `env`, never an env file) |
 
-- P13. No secret value is committed. CI runs `betterleaks` (config `.betterleaks.toml`) on every PR; Secret Manager secrets are created out of band (`gcloud secrets create`) and read only by `fn-runtime`. Firebase web config and reCAPTCHA site keys are public by design and are the only credential-shaped values in the repo.
+- P13. No secret value is committed. CI runs `betterleaks` 1.10.1 (config `.betterleaks.toml`) on every PR, in `verify`, over the **source tree only** (`git ls-files --cached --others --exclude-standard`, `scripts/scan-secrets.ts`), never over build output: `apps/web/dist` legitimately holds the public web config inlined in the bundle, which the allowlist (the one source env file) does not cover. The binary is installed by `scripts/install-betterleaks.sh`, which pins the version and verifies the release asset's sha256; a mismatch installs nothing and fails the job; Secret Manager secrets are created out of band (`gcloud secrets create`) and read only by `fn-runtime`. Firebase web config and reCAPTCHA site keys are public by design and are the only credential-shaped values in the repo.
 - P14. Staging and prod secrets are distinct values. Function code has no `if (project === ...)` branches; behavior differences come only from params.
 - Preview builds are public URLs on the staging project, so they embed the staging App Check debug token via `VITE_APPCHECK_DEBUG_TOKEN`. Only the preview build sets it; the `deploy-staging` live build and every prod build leave it unset and rely on reCAPTCHA Enterprise. Staging data is disposable and the token is rotatable; this is accepted (see Open questions).
 
@@ -381,136 +381,21 @@ One workflow, `.github/workflows/ci.yml`. Pull requests from forks run `verify` 
 | push tag `v*.*.*` | `verify`, `emulator`, `check-tag`, then `deploy-prod` (environment `production`, required reviewer) |
 | `workflow_dispatch` with input `ref` (an existing release tag, e.g. `v1.4.2`) | Rollback or redeploy: same as a tag push, built from that tag: `verify`, `emulator`, `check-tag`, then `deploy-prod` behind the same `production` approval |
 
-```yaml
-name: ci
-on:
-  pull_request:
-  push: { branches: [main], tags: ["v*.*.*"] }
-  workflow_dispatch:
-    inputs:
-      ref: { description: "Release tag to deploy to prod (rollback), e.g. v1.4.2", required: true, type: string }
-env:
-  # Every job checks out this ref: the dispatched tag, or the pushed ref / PR merge ref.
-  DEPLOY_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.ref) || github.ref }}
-concurrency:
-  group: ci-${{ inputs.ref || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}   # never cancel a deploy
-permissions: { contents: read }
+The workflow is `.github/workflows/ci.yml` (built in #16); this section states the design and `scripts/ci-policy.test.ts` asserts it over the parsed YAML on every PR, with `actionlint` (pinned in the README) for syntax. The shape:
 
-jobs:
-  verify:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with: { ref: "${{ env.DEPLOY_REF }}" }
-      - uses: oven-sh/setup-bun@v2
-        with: { bun-version-file: .bun-version }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: bun install --frozen-lockfile
-      - run: bun run lint
-      - run: bun run typecheck
-      - run: bun test packages functions/src
-      - run: bun run test:web
-      - run: bun run build:functions
-      - run: bun run build:web
-      - run: bun scripts/check-web-size.ts   # entry for /g/:id within 300 KB (LLD 7 WC16, 300 KB gzip)
-      - run: git diff --exit-code
-      - uses: gitleaks/gitleaks-action@v2
-      - uses: actions/upload-artifact@v4
-        with: { name: web-dist, path: apps/web/dist }
+- Workflow level: triggers as in the table; `env.DEPLOY_REF` is `refs/tags/<inputs.ref>` for a dispatch, `github.sha` for a push to a branch (so `deploy-staging` builds the commit `verify` and `emulator` ran on even if `main` has moved since), and `github.ref` otherwise (a pushed tag, the pull request merge ref), and **every** checkout uses it; `concurrency.group: ci-${{ inputs.ref || github.ref }}` with `cancel-in-progress` true only for `pull_request`. With `cancel-in-progress: false`, GitHub still replaces a *pending* run in the same group with a newer one, so under a burst of pushes to `main` an intermediate commit may get no CI result at all; the deploy still converges on the latest commit, which is accepted; `permissions: { contents: read }`; every job on `ubuntu-24.04`.
+- `verify`: checkout, setup-bun (`.bun-version`), setup-node 22, `bun install --frozen-lockfile`, install and run the secret scan (P13, before anything is built), `bun run lint`, `bun run typecheck`, `bun run test` (**not** the old sketch line `bun test packages functions/src`: `bun run test` also runs `functions/scripts`, `scripts` and `lint-test`), `bun run test:web`, `bun run build:functions`, `scripts/check-bundle-no-bun.sh` (P7), `bun run build:web`, `bun scripts/check-web-size.ts`, `git diff --exit-code` (P8, last, so it sees what every earlier step wrote). No web artifact is uploaded: nothing downstream consumed it, and deploy rebuilds from the same commit.
+- `emulator`: setup-java temurin 21, the `~/.cache/firebase/emulators` cache keyed on `bun.lock`, `bun run test:rules`, `bun run test:integration:logs` (P19), `bun run test:hosting`. No Playwright and no `test:e2e` until #45.
+- `preview`: `if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository`, `needs: [verify, emulator]`, `environment: staging`, permissions `contents: read`, `id-token: write`, `pull-requests: write`. Builds with `bun run build:web` where **only that step** carries `VITE_APPCHECK_DEBUG_TOKEN: ${{ secrets.APPCHECK_DEBUG_TOKEN }}`, authenticates with `google-github-actions/auth` (`vars.WIF_PROVIDER_STAGING`, `vars.DEPLOYER_SA_STAGING`), runs `bunx firebase hosting:channel:deploy pr-<n> --project deepcuts-staging --expires 7d --non-interactive --json`, reads the URL from the JSON, and upserts one PR comment (marker `<!-- dc-preview -->`, `gh api` with the workflow token) so a new push updates it instead of adding another.
+- `deploy-staging`: `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`, `needs: [verify, emulator]`, `environment: staging`, job `concurrency: deploy-staging` (never cancels, so two staging deploys cannot interleave), permissions `contents: read`, `id-token: write`. Steps in P16 order, each its own step: `build:functions`, `build:web`, `bunx firebase deploy --only firestore --project deepcuts-staging --non-interactive`, `bun scripts/wait-indexes.ts --project deepcuts-staging --timeout-min 30`, `--only functions`, `--only hosting`, then `bun scripts/smoke.ts --project deepcuts-staging` with `APPCHECK_DEBUG_TOKEN` from the environment secret. The old sketch's `ops-apply` line is **not** here: `scripts/ops-apply.ts` and its CI step belong to #17.
+- `check-tag`: for a tag push or a dispatch, `needs: [verify, emulator]`; a step asserts `$DEPLOY_REF` matches `^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$`, then a `fetch-depth: 0` checkout asserts `git merge-base --is-ancestor "$(git rev-parse HEAD)" origin/main` (P17). Real, and covered by the policy test; its live run waits for the first tag.
+- `deploy-prod`: a **guarded stub** until M8: `if: false`, `needs: [check-tag]`, no environment, no `id-token`, no cloud step, so nothing can reach the `production` environment before the M8 wiring exists. M8 removes the guard and adds the approval gate, the prod WIF variables and the same steps as `deploy-staging` (including `wait-indexes`) with `--project deepcuts-prod`, `--mode production` and a job `concurrency: { group: deploy-prod, cancel-in-progress: false }`. `actionlint` flags a constant `if: false`; `.github/actionlint.yaml` ignores exactly that message for this file.
 
-  emulator:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with: { ref: "${{ env.DEPLOY_REF }}" }
-      - uses: oven-sh/setup-bun@v2
-        with: { bun-version-file: .bun-version }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: 21 }
-      - uses: actions/cache@v4
-        with: { path: ~/.cache/firebase/emulators, key: "emulators-${{ hashFiles('bun.lock') }}" }
-      - run: bun install --frozen-lockfile
-      - run: bun run test:rules
-      - run: bun run test:integration
-      - run: bunx playwright install --with-deps chromium
-      - run: bun run test:e2e
-
-  preview:
-    # Same-repo PRs only; the job also runs in the `staging` environment, which is the only route WIF accepts (P4).
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    needs: [verify, emulator]
-    runs-on: ubuntu-24.04
-    environment: staging
-    permissions: { contents: read, id-token: write, pull-requests: write }
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with: { bun-version-file: .bun-version }
-      - run: bun install --frozen-lockfile
-      - run: bun run --cwd apps/web build --mode staging
-        env: { VITE_APPCHECK_DEBUG_TOKEN: "${{ secrets.APPCHECK_DEBUG_TOKEN }}" }   # preview only (section 7)
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
-          service_account: ${{ vars.DEPLOYER_SA_STAGING }}
-      - run: bunx firebase hosting:channel:deploy pr-${{ github.event.number }} --project deepcuts-staging --expires 7d
-      # a follow-up step comments the channel URL on the PR
-
-  deploy-staging:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [verify, emulator]
-    runs-on: ubuntu-24.04
-    environment: staging
-    permissions: { contents: read, id-token: write }
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with: { bun-version-file: .bun-version }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: bun install --frozen-lockfile
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
-          service_account: ${{ vars.DEPLOYER_SA_STAGING }}
-      - run: bun run build:functions && bun run --cwd apps/web build --mode staging
-      # order matters (P16): rules and indexes, wait for READY, then functions, then hosting
-      - run: bunx firebase deploy --only firestore --project deepcuts-staging --non-interactive
-      - run: bun scripts/wait-indexes.ts --project deepcuts-staging --timeout-min 30
-      - run: bunx firebase deploy --only functions --project deepcuts-staging --non-interactive
-      - run: bunx firebase deploy --only hosting --project deepcuts-staging --non-interactive
-      - run: bun scripts/ops-apply.ts --project deepcuts-staging
-      - run: bun scripts/smoke.ts --project deepcuts-staging
-        env: { APPCHECK_DEBUG_TOKEN: "${{ secrets.APPCHECK_DEBUG_TOKEN }}" }
-
-  check-tag:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [verify, emulator]
-    runs-on: ubuntu-24.04
-    steps:
-      - run: '[[ "$DEPLOY_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $DEPLOY_REF"; exit 1; }'
-      - uses: actions/checkout@v4
-        with: { ref: "${{ env.DEPLOY_REF }}", fetch-depth: 0 }
-      - run: git merge-base --is-ancestor "$(git rev-parse HEAD)" origin/main
-
-  deploy-prod:
-    needs: [check-tag]
-    runs-on: ubuntu-24.04
-    environment: production
-    concurrency: { group: deploy-prod, cancel-in-progress: false }   # a tag push and a rollback never deploy at once
-    permissions: { contents: read, id-token: write }
-    # same steps as deploy-staging (including wait-indexes) with checkout `ref: ${{ env.DEPLOY_REF }}`,
-    # --project deepcuts-prod, --mode production and prod WIF variables
-```
 
 - P15. Deploys use `--non-interactive`, an explicit `--project`, and no `--force` (so a deploy that would delete a function fails and a human decides).
-- P16. Deploy order is Firestore rules and indexes, then functions, then Hosting. Between the Firestore and functions steps, `scripts/wait-indexes.ts` polls `gcloud firestore indexes composite list` and `gcloud firestore fields ttls list` (every 30 s; there is no `fields list`) until every composite index is `READY` and the six TTL field configs are `ACTIVE`, and fails the deploy after its timeout (30 min) without deploying functions. A `CREATING` state is retried; `NEEDS_REPAIR`, a missing config, a non-zero `gcloud` exit or the timeout fails at once, naming the offender. The wait is its own step; it does not rely on the later `ops-apply` step.
+- P16. Deploy order is Firestore rules and indexes, then functions, then Hosting. Between the Firestore and functions steps, `scripts/wait-indexes.ts` polls `gcloud firestore indexes composite list` and `gcloud firestore fields ttls list` (every 30 s; there is no `fields list`) until every composite index is `READY` and the six TTL field configs are `ACTIVE`, and fails the deploy after its timeout (30 min) without deploying functions. A `CREATING` state is retried; `NEEDS_REPAIR`, a missing config, a non-zero `gcloud` exit or the timeout fails at once, naming the offender. The wait is its own step; it does not rely on any later step.
 - P17. Prod deploys only from a tag whose commit is an ancestor of `main` and only after an approval on the `production` environment. This holds for both prod paths: a tag push and a `workflow_dispatch` rollback both go through `check-tag` (the ref must match `refs/tags/v*.*.*` and its commit must be an ancestor of `origin/main`) and the `production` environment gate. Prod is rebuilt from the tag with the same `bun.lock`, not copied from staging; the web build differs by `--mode` anyway.
-- P18. Third-party actions are pinned to a major version at minimum; the workflow has `permissions: contents: read` by default and grants `id-token: write` only on deploy jobs.
+- P18. Third-party actions are pinned to a major version at minimum; the workflow has `permissions: contents: read` by default and grants `id-token: write` only on `preview` and `deploy-staging` (the prod stub has none until M8). Fork pull requests cannot reach `preview` (same-repo `if`) nor the `staging` environment, so the credentials a fork run sees are none; secrets and the WIF variables appear only in those two jobs (asserted).
 - PR previews run the staging backend as it stands on `main`. A PR that changes function or contract behavior is verified by the emulator jobs, not by its preview (see Open questions).
 - Rollback: run the `ci` workflow by hand (`workflow_dispatch`, Actions tab or `gh workflow run ci -f ref=v1.4.1`) with `ref` set to the previous release tag. The workflow checks out that tag in every job, reruns `verify` and `emulator`, then `check-tag` and `deploy-prod` behind the same `production` approval, so functions, web, Firestore rules and indexes all return to that tag's versions. A rollback across a contract or data-shape change still has to respect the LLD 5 version policy. Data is never rolled back by CI. Staging has no dispatch path; it is rolled back by reverting on `main`.
 - Node and Bun are both pinned (`node-version: 22`, `.bun-version`); `firebase-tools` is a pinned root devDependency so CLI behavior is identical locally and in CI.
@@ -539,7 +424,7 @@ Mirrors HLD 4.5 and tech-stack section 9; this LLD fixes the conventions.
 
 **Forbidden in any log line, error message or `HttpsError` detail** (P19): card text and drafts; display names; emails; seat tokens, rejoin secrets or anything from a URL fragment; Firebase ID tokens and custom tokens; FCM tokens and push endpoints; raw IPs; pitch text; and anything linking a submission to its owner before the result is committed (no `cardId` paired with `playerId` for `confirmSubmission`, no `revealOrder`, no `submissionId` to owner mapping). Unhandled errors are logged as `Error` objects (so Error Reporting groups them) with the message scrubbed of request payloads.
 
-- P19. An integration test plays a full game with sentinel strings in every user-supplied field (display names `NAME-SENTINEL-*`, card text `CARD-SENTINEL-*`, an email `sentinel@example.test`), captures all Functions emulator log output, and fails if any sentinel appears. This is the log half of R1.
+- P19. (Harness landed in #16; the full-game scenario lands with #40 and #44.) Today `functions/test-integration/sentinels.test.ts` sends sentinel strings in every user-supplied field of one accepted `ping` and one rejected call, and `bun run test:integration:logs` (`scripts/run-integration-sentinels.ts`) captures everything the emulators print plus `firebase-debug.log` and fails if a sentinel appears (`scripts/log-sentinels.ts`; it reports file and line, never the line). Proven by a mutation: a `console.log(req.data)` in `ping` fails the run. The target form: an integration test plays a full game with sentinel strings in every user-supplied field (display names `NAME-SENTINEL-*`, card text `CARD-SENTINEL-*`, an email `sentinel@example.test`), captures all Functions emulator log output, and fails if any sentinel appears. This is the log half of R1.
 
 **Log-based metrics** (definitions in `ops/metrics/*.yaml`, applied idempotently by `scripts/ops-apply.ts`):
 
@@ -573,11 +458,11 @@ Mirrors HLD 4.5 and tech-stack section 9; this LLD fixes the conventions.
 | API health | the LLD 5 section 9 alerts (invalid-request share, `CLIENT_OUTDATED`, `ip.unresolved`, `api.detail.stripped`, `code_ip` spike, App Check denials) |
 | Budget | thresholds in section 2 |
 
-- P20. `ops-apply` is idempotent and runs on every staging and prod deploy; a metric or alert present in `ops/` but absent in the project after the run fails the deploy. Log retention uses the default 30-day bucket.
+- P20. `ops-apply` is idempotent and runs on every staging and prod deploy (its deploy step is added by #17, not #16); a metric or alert present in `ops/` but absent in the project after the run fails the deploy. Log retention uses the default 30-day bucket.
 
 ## 10. Production readiness checks (rolled up)
 
-Checked by CI where marked: P5 and P21 lint (CI), P6 and P7 bundle and `exports.json` (CI), P9 to P11 test suites including `test:web` (CI), P12 `defineCallable` wrapper (CI lint, LLD 5 registry tests), P13 secret scan (CI), WC16 web size via `check-web-size.ts` (CI), P15 to P18 workflow (review), P19 log sentinels (CI), P1, P3, P4, P20 and the section 2 table including Identity Platform, the six TTL groups and the FCM APIs (manual checklist at project creation, re-verified by the walkthrough below).
+Checked by CI where marked: P5 and P21 lint (CI), P6 and P7 bundle and `exports.json` (CI), P9 to P11 test suites including `test:web` (CI), P12 `defineCallable` wrapper (CI lint, LLD 5 registry tests), P13 secret scan (CI), WC16 web size via `check-web-size.ts` (CI), P15 to P18 workflow (the policy test `scripts/ci-policy.test.ts`, CI), P19 log sentinels (CI, harness over `ping` and a rejected call; a full game with #40 and #44), P1, P3, P4, P20 and the section 2 table including Identity Platform, the six TTL groups and the FCM APIs (manual checklist at project creation, re-verified by the walkthrough below).
 
 ## 11. First staging deploy, step by step
 
@@ -608,7 +493,7 @@ Goal: prove the riskiest seam (Bun monorepo, bundle, Node runtime, IAM custom to
 16. Custom-token sign-in is no longer a step in `smoke.ts`: the `diag` probe ran here in #15, passed (the `signBlob` self-grant works on the deployed runtime, and the handler had to create the default admin app explicitly because `firebase-functions` makes its own named app), and was then removed. The extended probe — `{ ep: 0 }` claim, `updateUser` disabled, a second custom-token sign-in refused, `deleteUsers` — belongs to the identity step's own smoke case (LLD 4 section 13); there is no `--diag` flag.
 17. Remove `diag` (and, in #15, the throwaway `beforeEmailSent`), redeploy functions with `--non-interactive`. The CLI refuses to delete functions in that mode: run `bunx firebase functions:delete diag --region us-central1 --project deepcuts-staging --force` (and `beforeEmailSent --region us-east1`) first, or the deploy aborts with "deletion cannot proceed in non-interactive mode". Then run `bun scripts/smoke.ts --project deepcuts-staging` again — the smoke runs twice in total, once with the probes and once without, so their removal is proven. Deleting a blocking function does **not** clear its Identity Platform registration: `PATCH identitytoolkit admin/v2/projects/<p>/config?updateMask=blockingFunctions` with `{"blockingFunctions":{}}` does (found in #15).
 18. Run `bun scripts/ops-apply.ts --project deepcuts-staging`; confirm the dashboard and alert policies exist, and that `ping` produced a structured log line visible in Logs Explorer with `event` set.
-19. Open a PR; confirm `verify`, `emulator`, `preview` pass and the preview URL loads. Merge; confirm `deploy-staging` repeats steps 12 to 15 from CI under Workload Identity Federation with no keys.
+19. Open a PR; confirm `verify`, `emulator`, `preview` pass and the preview URL loads. Merge; confirm `deploy-staging` repeats steps 12 to 15 from CI under Workload Identity Federation with no keys. **Proven by #16** (run links in its PR; see the PR body for the results). Step 18 (`ops-apply`) is not part of the CI deploy until #17.
 
 **Known failure modes**
 
@@ -629,7 +514,7 @@ Goal: prove the riskiest seam (Bun monorepo, bundle, Node runtime, IAM custom to
 
 ## Open questions / conflicts
 
-1. **Preview channels share the staging backend.** The HLD and tech-stack say "Hosting preview channels for each PR" but do not say which backend they call. Here previews hit staging functions from `main`, so a PR that changes the callable contract cannot be previewed end to end. Options: accept (chosen), or deploy per-PR function codebases (cost and cleanup overhead). Needs a decision before the first contract change.
+1. **Preview channels share the staging backend.** The HLD and tech-stack say "Hosting preview channels for each PR" but do not say which backend they call. Here previews hit staging functions from `main`, so a PR that changes the callable contract cannot be previewed end to end. Options: accept (chosen), or deploy per-PR function codebases (cost and cleanup overhead). Needs a decision before the first contract change (decision #8, still open; #16 built previews on the shared staging backend and settles nothing on it).
 2. **Lockfile for the generated functions package.** Tech-stack section 8 specifies only a minimal `package.json` with pinned direct deps. Transitive dependencies of `firebase-admin` and `firebase-functions` then resolve at build time and are not reviewed. This LLD generates `dist/package-lock.json` per build (not committed); committing it is a possible tightening.
 3. **Debug App Check token in public preview builds.** Needed so preview and smoke traffic passes App Check, but it is visible in the bundle. Acceptable only because staging is disposable; prod never gets one in a web build (the prod smoke token lives only in the GitHub `production` environment).
 4. **Firestore App Check enforcement.** Tech-stack section 7 mentions App Check on callables only. This LLD also enforces it on Firestore reads (the client's view-document listeners), which means the web client must initialize App Check before attaching listeners (LLD 7), and the emulator does not exercise it.

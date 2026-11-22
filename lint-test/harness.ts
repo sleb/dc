@@ -19,6 +19,11 @@ const SYNTAX_ONLY = {
   },
 } as const;
 
+const TYPED_SERVICE = {
+  files: ["**/*.ts", "**/*.tsx"],
+  languageOptions: { parserOptions: { project: null, projectService: true, tsconfigRootDir: ROOT } },
+} as const;
+
 let syntaxOnly: ESLint | undefined;
 let typed: ESLint | undefined;
 
@@ -44,7 +49,10 @@ export async function lint(filePath: string, code: string): Promise<Linter.LintM
 
 /** Lints with the unmodified config. `filePath` must be a file that exists and is in a tsconfig. */
 export async function lintTyped(filePath: string, code: string): Promise<Linter.LintMessage[]> {
-  if (configPresent) typed ??= make([]);
+  // The type-aware tests use the project service: with the `project` glob list, typescript-eslint's watch program kept
+  // the on-disk text of the file instead of the snippet on Linux (it passed on macOS), so nothing was ever reported there.
+  // The rules and their severities are still the real config's.
+  if (configPresent) typed ??= make([TYPED_SERVICE as unknown as Linter.Config]);
   return run(typed, filePath, code);
 }
 

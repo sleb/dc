@@ -1,0 +1,198 @@
+# CI/CD (LLD 0 section 8, issue #16). The policy test scripts/ci-policy.test.ts asserts the properties below over this
+# file; `actionlint` checks the syntax. Fork pull requests run verify and emulator only: no secrets, no credentials.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Release tag to deploy to prod (rollback), e.g. v1.4.2"
+        required: true
+        type: string
+
+env:
+  # Every checkout uses this ref: the dispatched tag; the pushed commit for a branch push (github.sha, so every job builds
+  # the commit verify and emulator ran on even if main has moved); otherwise github.ref (a pushed tag, the PR merge ref).
+  DEPLOY_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.ref) || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && github.sha) || github.ref }}
+
+concurrency:
+  group: ci-${{ inputs.ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }} # never cancel a deploy
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_REF }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      # P13: pinned, checksum-verified betterleaks over the source tree, before anything is built.
+      - name: Install betterleaks
+        run: |
+          bash scripts/install-betterleaks.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Secret scan (source tree)
+        run: bun scripts/scan-secrets.ts
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run test:web
+      - run: bun run build:functions
+      - name: Bundle loads under Node with Bun off PATH (P7)
+        run: bash scripts/check-bundle-no-bun.sh functions
+      - run: bun run build:web
+      - run: bun scripts/check-web-size.ts
+      - run: git diff --exit-code
+
+  emulator:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_REF }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: emulators-${{ hashFiles('bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - run: bun run test:rules
+      # P19: the integration suite plus the log-sentinel harness over what the emulators print.
+      - run: bun run test:integration:logs
+      # Builds apps/web/dist in emulator mode, so it must not run after a build that needs that directory.
+      - run: bun run test:hosting
+
+  preview:
+    # Same-repo pull requests only. The job runs in the `staging` environment, the only route Workload Identity
+    # Federation accepts (P4); fork pull requests cannot enter it.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: [verify, emulator]
+    runs-on: ubuntu-24.04
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_REF }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: Build the preview (embeds the staging debug token, LLD 0 section 7)
+        run: bun run build:web
+        env:
+          VITE_APPCHECK_DEBUG_TOKEN: ${{ secrets.APPCHECK_DEBUG_TOKEN }}
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
+          service_account: ${{ vars.DEPLOYER_SA_STAGING }}
+      - name: Deploy the preview channel
+        id: channel
+        run: |
+          bunx firebase hosting:channel:deploy pr-${{ github.event.number }} --project deepcuts-staging --expires 7d --non-interactive --json > "$RUNNER_TEMP/channel.json"
+          url="$(jq -r '.result | to_entries[0].value.url' "$RUNNER_TEMP/channel.json")"
+          case "$url" in https://*) ;; *) echo "no preview URL in the deploy output"; exit 1 ;; esac
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+      - name: Comment the preview URL (one comment per pull request, updated in place)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.number }}
+          URL: ${{ steps.channel.outputs.url }}
+        run: |
+          marker='<!-- dc-preview -->'
+          body="$marker"$'\n'"Preview: $URL"$'\n'"(staging backend as on main; expires in 7 days)"
+          id="$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.body | startswith(\"$marker\")) | .id] | first // empty")"
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$id" -f body="$body" > /dev/null
+          else
+            gh api --method POST "repos/$REPO/issues/$PR/comments" -f body="$body" > /dev/null
+          fi
+
+  deploy-staging:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [verify, emulator]
+    runs-on: ubuntu-24.04
+    environment: staging
+    concurrency:
+      group: deploy-staging # two staging deploys never interleave
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_REF }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
+          service_account: ${{ vars.DEPLOYER_SA_STAGING }}
+      - run: bun run build:functions
+      - run: bun run build:web
+      # Order matters (P16): rules and indexes, wait for READY, then functions, then hosting, then the smoke test.
+      - run: bunx firebase deploy --only firestore --project deepcuts-staging --non-interactive
+      - run: bun scripts/wait-indexes.ts --project deepcuts-staging --timeout-min 30
+      - run: bunx firebase deploy --only functions --project deepcuts-staging --non-interactive
+      - run: bunx firebase deploy --only hosting --project deepcuts-staging --non-interactive
+      - run: bun scripts/smoke.ts --project deepcuts-staging
+        env:
+          APPCHECK_DEBUG_TOKEN: ${{ secrets.APPCHECK_DEBUG_TOKEN }}
+
+  check-tag:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [verify, emulator]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: The ref is a release tag
+        run: '[[ "$DEPLOY_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $DEPLOY_REF"; exit 1; }'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_REF }}
+          fetch-depth: 0
+      - name: The tag commit is an ancestor of main (P17)
+        run: git merge-base --is-ancestor "$(git rev-parse HEAD)" origin/main
+
+  # A guarded stub until M8 (P17). It names no environment, takes no cloud credentials and never runs. M8 removes the
+  # guard and adds the approval gate, the prod credentials and the deploy steps (same as deploy-staging).
+  deploy-prod:
+    if: false
+    needs: [check-tag]
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "deploy-prod is a stub until M8"
+          exit 1

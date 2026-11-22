@@ -17,6 +17,7 @@
     "test:e2e": "echo 'test:e2e: NO SUITE. No end-to-end tests exist yet (Playwright arrives with 5.1, #45); nothing was run.'",
     "build:functions": "bun run --cwd functions build",
     "test:integration": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bun test functions/test-integration --timeout 30000'",
+    "test:integration:logs": "bun scripts/run-integration-sentinels.ts",
     "build:web": "bun run --cwd apps/web build --mode staging",
     "test:hosting": "bun run --cwd apps/web build --mode emulator && firebase emulators:exec --only hosting --project demo-deepcuts 'bun test hosting-test'"
   },
