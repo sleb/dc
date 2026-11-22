@@ -42,7 +42,7 @@ test("T2 registry options: region, service account, App Check, command runtime s
 });
 
 test("T2 the built function's __endpoint carries the same options", async () => {
-  const mod = (await import("../index")) as Record<string, { __endpoint: Record<string, unknown> }>;
+  const mod = (await import("../index")) as unknown as Record<string, { __endpoint: Record<string, unknown> }>;
   for (const name of callables) {
     const ep = mod[name]?.__endpoint;
     expect(ep).toBeDefined();
