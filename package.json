@@ -11,12 +11,15 @@
     "lint": "eslint . --max-warnings 0",
     "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json",
     "test:lint": "bun test lint-test",
-    "build:functions": "bun run --cwd functions build"
+    "build:functions": "bun run --cwd functions build",
+    "test:integration": "bun run build:functions && firebase emulators:exec --only auth,functions --project demo-deepcuts 'bun test functions/test-integration --timeout 30000'"
   },
   "devDependencies": {
     "@types/bun": "1.4.5",
     "@types/node": "22.20.5",
     "eslint": "10.15.0",
+    "firebase": "13.4.0",
+    "firebase-tools": "15.37.0",
     "typescript": "6.0.3",
     "typescript-eslint": "8.73.0"
   }
