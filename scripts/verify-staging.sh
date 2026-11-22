@@ -14,12 +14,13 @@ exec </dev/null
 PROJECT="${PROJECT:-deepcuts-staging}"
 REPO="${REPO:-sleb/dc}"
 ENV_NAME="${ENV_NAME:-staging}"
+ENV_SUFFIX="${ENV_SUFFIX:-STAGING}"   # GitHub variable suffix: WIF_PROVIDER_<suffix>, DEPLOYER_SA_<suffix>
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # ---------------------------------------------------------------------------
 # Expected state (the single declarative block; provision-staging.sh mirrors it)
 # ---------------------------------------------------------------------------
-BUDGET_AMOUNT=10
+BUDGET_AMOUNT="${BUDGET_AMOUNT:-10}"
 BUDGET_THRESHOLDS="0.5 0.9 1"
 FIRESTORE_LOCATION="nam5"
 TTL_GROUPS="idem outbox notifLog rateLimits deletions joinIdem"
@@ -275,8 +276,8 @@ v10() {
   gh api "repos/$REPO/environments/$ENV_NAME" >/dev/null 2>&1 || bad "GitHub environment '$ENV_NAME' does not exist on $REPO"
   local vars
   vars="$(gh variable list --repo "$REPO" --json name --jq '.[].name' 2>/dev/null)"
-  echo "$vars" | grep -qx WIF_PROVIDER_STAGING || bad "GitHub variable WIF_PROVIDER_STAGING is not set"
-  echo "$vars" | grep -qx DEPLOYER_SA_STAGING || bad "GitHub variable DEPLOYER_SA_STAGING is not set"
+  echo "$vars" | grep -qx "WIF_PROVIDER_$ENV_SUFFIX" || bad "GitHub variable WIF_PROVIDER_$ENV_SUFFIX is not set"
+  echo "$vars" | grep -qx "DEPLOYER_SA_$ENV_SUFFIX" || bad "GitHub variable DEPLOYER_SA_$ENV_SUFFIX is not set"
 }
 
 v11() {
@@ -307,16 +308,16 @@ env_has_keys() { # env_has_keys <file> <keys...>
 }
 
 v12() {
-  env_has_keys apps/web/.env.staging $WEB_ENV_KEYS
-  env_has_keys functions/.env.deepcuts-staging $FN_ENV_KEYS
+  env_has_keys "apps/web/.env.$ENV_NAME" $WEB_ENV_KEYS
+  env_has_keys "functions/.env.$PROJECT" $FN_ENV_KEYS
   if [ -f "$ROOT/.firebaserc" ]; then
     [ "$(jqr --arg p "$PROJECT" '.projects | to_entries | map(select(.value == $p)) | length' "$ROOT/.firebaserc")" -ge 1 ] 2>/dev/null \
       || bad ".firebaserc has no alias for $PROJECT"
   else
     bad ".firebaserc does not exist"
   fi
-  if [ -f "$ROOT/apps/web/.env.staging" ]; then
-    grep -Eq "^VITE_FIREBASE_PROJECT_ID=$PROJECT\$" "$ROOT/apps/web/.env.staging" || bad "apps/web/.env.staging VITE_FIREBASE_PROJECT_ID is not $PROJECT"
+  if [ -f "$ROOT/apps/web/.env.$ENV_NAME" ]; then
+    grep -Eq "^VITE_FIREBASE_PROJECT_ID=$PROJECT\$" "$ROOT/apps/web/.env.$ENV_NAME" || bad "apps/web/.env.$ENV_NAME VITE_FIREBASE_PROJECT_ID is not $PROJECT"
   fi
 }
 
@@ -334,6 +335,14 @@ v14() {
   echo "$sites" | grep -qx "projects/$PROJECT/sites/$PROJECT" || bad "default Hosting site $PROJECT does not exist"
 }
 
+# Prime the caches in this shell (the helpers are called inside $(...) and cannot fill them).
+TOKEN="$(gcloud auth print-access-token 2>/dev/null || true)"
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)' 2>/dev/null || true)"
+if [ -n "$PROJECT_NUMBER" ]; then
+  IAM_POLICY="$(gcloud projects get-iam-policy "$PROJECT" --format=json 2>/dev/null || true)"
+  APP_ID="$(firebase apps:list WEB --project "$PROJECT" --json 2>/dev/null | jqr '.result[0].appId // empty')"
+fi
+
 # ---------------------------------------------------------------------------
 echo "Verifying project: $PROJECT (repo $REPO)"
 for t in gcloud firebase gh jq curl; do have "$t" || echo "WARNING: $t is not installed; dependent checks will fail"; done
@@ -348,7 +357,7 @@ check V7  "Web app, App Check reCAPTCHA Enterprise, enforcement, debug token" v7
 check V8  "fn-runtime and ci-deployer roles, self-grant, compute SA has no Editor" v8
 check V9  "No user-managed service account keys" v9
 check V10 "WIF pool/provider restricted to repo, staging environment and variables" v10
-check V11 "Secrets exist and only fn-runtime reads; APPCHECK_DEBUG_TOKEN in env" v11
+check V11 "Secrets exist, fn-runtime is the only secret-level reader; APPCHECK_DEBUG_TOKEN in env" v11
 check V12 "Committed config files have the required keys" v12
 check V13 "No secret value committed (betterleaks)" v13
 check V14 "Default Hosting site exists" v14

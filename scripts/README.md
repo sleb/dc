@@ -26,9 +26,9 @@ Steps, in dependency order: `project firebase apis firestore iam wif secrets web
 - Nothing needs the console. The only human decision is which billing account to use.
 - TTL policies show `CREATING` for a few minutes before `ACTIVE`; V4 fails until then.
 - New projects take a minute or two before IAM is consistent; if a command fails with `USER_PROJECT_DENIED`, retry.
-- Secret values (three Secret Manager secrets, the App Check debug token) are generated and piped; they are never printed, written to disk or committed. Rotating one means creating a new secret version by hand.
+- Secret values (three Secret Manager secrets, the App Check debug token) are generated and piped over stdin; they are never printed, passed as command-line arguments, written to disk or committed. Rotating one means creating a new secret version by hand.
 - Public client config (Firebase web config, reCAPTCHA site key) is committed in `apps/web/.env.staging`; `.betterleaks.toml` allowlists exactly that path.
 
 ## Prod (M8)
 
-Both scripts take `PROJECT=deepcuts-prod`. Prod differs in: budget `BUDGET_AMOUNT=25`, `ENV_NAME=production`, the WIF condition (P4: `environment == 'production'` only), and the variable and file names (`*_PROD`, `.env.production`, `functions/.env.deepcuts-prod`). Those parameters are not yet wired through; do that in M8 rather than guessing now.
+Parameters: `PROJECT=deepcuts-prod BUDGET_AMOUNT=25 ENV_NAME=production ENV_SUFFIX=PROD`. These now drive the budget, GitHub environment and variable names, and the env file names. Still staging-only, to do in M8: the WIF attribute condition in `provision-staging.sh` (P4 prod: `environment == 'production'` only) and the matching verify clauses in V10, and the `.firebaserc` alias. Do not run `provision-staging.sh wif` against prod until then.

@@ -15,6 +15,7 @@ export CLOUDSDK_CORE_DISABLE_PROMPTS=1
 PROJECT="${PROJECT:-deepcuts-staging}"
 REPO="${REPO:-sleb/dc}"
 ENV_NAME="${ENV_NAME:-staging}"
+ENV_SUFFIX="${ENV_SUFFIX:-STAGING}"   # GitHub variable suffix: WIF_PROVIDER_<suffix>, DEPLOYER_SA_<suffix>
 BUDGET_AMOUNT="${BUDGET_AMOUNT:-10}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -151,15 +152,16 @@ step_wif() { # V10
   log "GitHub environment and variables"
   gh api -X PUT "repos/$REPO/environments/$ENV_NAME" >/dev/null
   local provider="projects/$number/locations/global/workloadIdentityPools/$WIF_POOL/providers/$WIF_PROVIDER"
-  gh variable set WIF_PROVIDER_STAGING --repo "$REPO" --body "$provider"
-  gh variable set DEPLOYER_SA_STAGING --repo "$REPO" --body "$CI_SA"
+  gh variable set "WIF_PROVIDER_$ENV_SUFFIX" --repo "$REPO" --body "$provider"
+  gh variable set "DEPLOYER_SA_$ENV_SUFFIX" --repo "$REPO" --body "$CI_SA"
 }
 
 api() { # api <METHOD> <url> [json-body]; prints the response, fails on an HTTP error
   local token
   token="$(gcloud auth print-access-token)"
-  curl -sS --fail-with-body -X "$1" -H "Authorization: Bearer $token" -H "x-goog-user-project: $PROJECT" \
-    -H "Content-Type: application/json" ${3:+-d "$3"} "$2"
+  # The body goes over stdin so a secret in it never appears in the process list.
+  printf '%s' "${3:-}" | curl -sS --fail-with-body -X "$1" -H "Authorization: Bearer $token" \
+    -H "x-goog-user-project: $PROJECT" -H "Content-Type: application/json" --data-binary @- "$2"
 }
 
 step_webapp() { # V7 (web app)
@@ -174,7 +176,12 @@ step_webapp() { # V7 (web app)
 step_auth() { # V6. Upgrading to Identity Platform needs billing (done in step project).
   local base="https://identitytoolkit.googleapis.com"
   log "Identity Platform upgrade (idempotent)"
-  api POST "$base/v2/projects/$PROJECT/identityPlatform:initializeAuth" '{}' >/dev/null || log "initializeAuth refused (already upgraded, or console upgrade needed)"
+  local out
+  if ! out="$(api POST "$base/v2/projects/$PROJECT/identityPlatform:initializeAuth" '{}' 2>&1)"; then
+    # Re-running on an upgraded project is expected to be refused; anything else must be visible.
+    echo "$out" | grep -qi "already" || { echo "initializeAuth failed: $out" >&2; return 1; }
+    log "already upgraded"
+  fi
   log "providers, anonymous auto-cleanup"
   api PATCH "$base/admin/v2/projects/$PROJECT/config?updateMask=signIn.email,signIn.anonymous,autodeleteAnonymousUsers" \
     '{"signIn":{"email":{"enabled":true,"passwordRequired":false},"anonymous":{"enabled":true}},"autodeleteAnonymousUsers":true}' >/dev/null
@@ -198,13 +205,17 @@ step_appcheck() { # V7. Debug token value is generated here, piped to GitHub, ne
     log "App Check enforcement: $svc"
     api PATCH "$ac/services/$svc?updateMask=enforcementMode" '{"enforcementMode":"ENFORCED"}' >/dev/null
   done
-  if [ "$(api GET "$ac/apps/$app/debugTokens" | jq '.debugTokens | length // 0')" = "0" ]; then
-    log "registering a debug token and storing it in GitHub environment $ENV_NAME"
+  # Gate on the GitHub secret, the only copy of the token. Store it first, then register, so a
+  # failed `gh` call leaves nothing registered and a re-run starts clean.
+  if gh secret list --env "$ENV_NAME" --repo "$REPO" --json name --jq '.[].name' 2>/dev/null | grep -qx APPCHECK_DEBUG_TOKEN; then
+    log "debug token already stored in GitHub environment $ENV_NAME"
+  else
+    log "creating a debug token and storing it in GitHub environment $ENV_NAME"
     local tok
     tok="$(uuidgen | tr 'A-Z' 'a-z')"
-    api POST "$ac/apps/$app/debugTokens" "{\"displayName\":\"ci-smoke\",\"token\":\"$tok\"}" >/dev/null
     gh api -X PUT "repos/$REPO/environments/$ENV_NAME" >/dev/null
     printf '%s' "$tok" | gh secret set APPCHECK_DEBUG_TOKEN --env "$ENV_NAME" --repo "$REPO"
+    api POST "$ac/apps/$app/debugTokens" "{\"displayName\":\"ci-smoke\",\"token\":\"$tok\"}" >/dev/null
   fi
 }
 
@@ -213,9 +224,14 @@ step_config() { # V12. Public client config only (P13): web config and reCAPTCHA
   app="$(firebase apps:list WEB --project "$PROJECT" --json | jq -r '.result[0].appId')"
   cfg="$(firebase apps:sdkconfig WEB "$app" --project "$PROJECT" --json | jq '.result.sdkConfig // .result')"
   site="$(gcloud recaptcha keys list --project "$PROJECT" --format=json | jq -r '.[] | select(.displayName == "'"$PROJECT"'-web") | .name' | head -1 | sed 's#.*/##')"
+  [ -n "$site" ] || { echo "no reCAPTCHA key found; run the appcheck step first" >&2; return 1; }
   mkdir -p "$ROOT/apps/web" "$ROOT/functions"
-  cat > "$ROOT/apps/web/.env.staging" <<EOF
-VITE_APP_ENV=staging
+  # Never overwrite a committed file: values may have been tuned since it was generated.
+  write_once() { # write_once <path>  (content on stdin)
+    if [ -e "$1" ]; then log "$1 exists, leaving it"; cat >/dev/null; else cat > "$1"; fi
+  }
+  write_once "$ROOT/apps/web/.env.$ENV_NAME" <<EOF
+VITE_APP_ENV=$ENV_NAME
 VITE_FUNCTIONS_REGION=us-central1
 VITE_FIREBASE_API_KEY=$(jq -r .apiKey <<<"$cfg")
 VITE_FIREBASE_AUTH_DOMAIN=$(jq -r .authDomain <<<"$cfg")
@@ -225,14 +241,14 @@ VITE_FIREBASE_MESSAGING_SENDER_ID=$(jq -r .messagingSenderId <<<"$cfg")
 VITE_FIREBASE_APP_ID=$(jq -r .appId <<<"$cfg")
 VITE_RECAPTCHA_SITE_KEY=$site
 EOF
-  cat > "$ROOT/functions/.env.$PROJECT" <<EOF
+  write_once "$ROOT/functions/.env.$PROJECT" <<EOF
 APP_ORIGIN=https://$PROJECT.web.app
 CODE_WINDOW_MS=259200000
 CODE_LOOKUP_ENABLED=true
 TRUSTED_HOPS=0
 COMMAND_MIN_INSTANCES=0
 EOF
-  cat > "$ROOT/.firebaserc" <<EOF
+  write_once "$ROOT/.firebaserc" <<EOF
 {
   "projects": {
     "default": "$PROJECT",

@@ -48,7 +48,7 @@ The self-grant of `iam.serviceAccountTokenCreator` is what lets `admin.auth().cr
 
 ### 2.1 Setup checklist
 
-`scripts/verify-staging.sh` asserts every row (read-only, exits 0 only if all pass); `scripts/provision-staging.sh` creates them idempotently. Both take `PROJECT=` so the same checks run against prod in M8. See [scripts/README.md](../../scripts/README.md).
+`scripts/verify-staging.sh` asserts every row (read-only, exits 0 only if all pass); `scripts/provision-staging.sh` creates them idempotently. Both take `PROJECT=`, `ENV_NAME`, `ENV_SUFFIX` and `BUDGET_AMOUNT`; prod additionally needs its P4 WIF condition wired in M8, which is not done yet. See [scripts/README.md](../../scripts/README.md).
 
 | Check | Item | staging | prod |
 |---|---|---|---|
@@ -62,7 +62,7 @@ The self-grant of `iam.serviceAccountTokenCreator` is what lets `admin.auth().cr
 | V8 | `fn-runtime` and `ci-deployer` have exactly the roles above, self-grant, `serviceAccountUser` on `fn-runtime`, compute SA has no `Editor` | [x] | [ ] |
 | V9 | No user-managed service account keys | [x] | [ ] |
 | V10 | WIF pool and provider restricted to this repo with the P4 condition; GitHub environment and variables | [x] | [ ] |
-| V11 | Three secrets exist and only `fn-runtime` can read them; `APPCHECK_DEBUG_TOKEN` in the GitHub environment | [x] | [ ] |
+| V11 | Three secrets exist and `fn-runtime` is the only principal bound on each secret (V11 checks secret-level bindings; project-level owners can still read); `APPCHECK_DEBUG_TOKEN` in the GitHub environment | [x] | [ ] |
 | V12 | `apps/web/.env.<mode>`, `functions/.env.<projectId>` and `.firebaserc` have the required keys | [x] | [ ] |
 | V13 | No secret value committed (betterleaks, config `.betterleaks.toml`) | [x] | [ ] |
 | V14 | Default Hosting site exists | [x] | [ ] |
@@ -378,11 +378,11 @@ export default [
 |---|---|---|
 | Public client config | Committed `apps/web/.env.staging`, `.env.production`, `.env.emulator` (Vite's own `.env.[mode]` names in the default `envDir`, the web workspace root), loaded by `vite build --mode <mode>`. `*.local` env files are gitignored and never used by CI | Firebase web config, reCAPTCHA Enterprise site key, functions region, `VITE_APP_ENV` |
 | Function parameters (non-secret) | `defineString`/`defineInt`/`defineBoolean` params with committed `functions/.env.deepcuts-staging`, `functions/.env.deepcuts-prod`. The CLI reads `.env.<projectId>` (or `.env.<alias>`) from the functions source directory, which is `functions/dist`, so `build.ts` copies every `functions/.env*` into `dist` (section 4). Files are named by project id because CI always passes `--project <projectId>` | `REMINDER_SWEEP_CRON`, rate-limit numbers (LLD 5 7.3), `APP_ORIGIN` (per env; base of invite and rejoin URLs), `CODE_WINDOW_MS` (default 72 h), `CODE_LOOKUP_ENABLED` (kill switch, default true), `TRUSTED_HOPS` (proxy hops for IP derivation, LLD 5 7.2), `COMMAND_MIN_INSTANCES` (0 staging, 1 prod) |
-| Secrets | Secret Manager via `defineSecret`, bound per function that needs it | `RATE_LIMIT_HASH_SALT` (IP hashing for counters, R2/A4), `LOG_HASH_SALT` (the id hash in logs), `SEAT_DERIVATION_KEY` (32 random bytes; derives seat secrets, LLD 4; rotating it invalidates every outstanding rejoin link, so it is rotated only deliberately) |
+| Secrets | Secret Manager via `defineSecret`, bound per function that needs it | `RATE_LIMIT_HASH_SALT` (IP hashing for counters, R2/A4), `LOG_HASH_SALT` (the id hash in logs), `SEAT_DERIVATION_KEY` (32 random bytes, stored base64-encoded as text, so code must base64-decode it; derives seat secrets, LLD 4; rotating it invalidates every outstanding rejoin link, so it is rotated only deliberately) |
 | CI credentials | None stored. GitHub OIDC to Workload Identity Federation (P3) | Repository variables hold only the provider and service account names: `WIF_PROVIDER_STAGING`, `DEPLOYER_SA_STAGING` (set; prod equivalents in M8). GitHub environments: `staging` (exists, holds `APPCHECK_DEBUG_TOKEN`), `production` (M8) |
 | App Check debug tokens | GitHub environment secrets (`staging`, `production`) | `APPCHECK_DEBUG_TOKEN` used by `scripts/smoke.ts`; the preview job's web build step exposes the `staging` value to Vite as `VITE_APPCHECK_DEBUG_TOKEN` (step `env`, never an env file) |
 
-- P13. No secret value is committed. CI runs `gitleaks` on every PR; Secret Manager secrets are created out of band (`gcloud secrets create`) and read only by `fn-runtime`. Firebase web config and reCAPTCHA site keys are public by design and are the only credential-shaped values in the repo.
+- P13. No secret value is committed. CI runs `betterleaks` (config `.betterleaks.toml`) on every PR; Secret Manager secrets are created out of band (`gcloud secrets create`) and read only by `fn-runtime`. Firebase web config and reCAPTCHA site keys are public by design and are the only credential-shaped values in the repo.
 - P14. Staging and prod secrets are distinct values. Function code has no `if (project === ...)` branches; behavior differences come only from params.
 - Preview builds are public URLs on the staging project, so they embed the staging App Check debug token via `VITE_APPCHECK_DEBUG_TOKEN`. Only the preview build sets it; the `deploy-staging` live build and every prod build leave it unset and rely on reCAPTCHA Enterprise. Staging data is disposable and the token is rotatable; this is accepted (see Open questions).
 
