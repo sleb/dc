@@ -39,7 +39,7 @@ bun test functions/src functions/scripts   # unit and build-script tests
 bun run test:integration                   # from the repo root
 ```
 
-`bun test functions` alone also picks up `test-integration/`, which needs the emulators; use the paths above. `test:integration` rebuilds `dist`, starts the Auth and Functions emulators (`firebase emulators:exec`, no Java needed) and runs `test-integration/` against the Node bundle. The emulator does not verify App Check tokens but rejects a call with none, so the tests send a well-formed unsigned token; enforcement itself is proven only by the staging smoke test. The Firestore emulator joins in #13.
+`bun test functions` alone also picks up `test-integration/`, which needs the emulators; use the paths above. `test:integration` rebuilds `dist`, starts the Auth, Firestore and Functions emulators (`firebase emulators:exec`; the Firestore emulator needs Java) and runs `test-integration/` against the Node bundle. The emulator does not verify App Check tokens but rejects a call with none, so the tests send a well-formed unsigned token; enforcement itself is proven only by the staging smoke test. `firestore.test.ts` writes and reads one document with the Admin SDK; real collections come with #32.
 
 ### Build script tests
 
