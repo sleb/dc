@@ -22,15 +22,19 @@ The user's invocation of `/dc-ship` authorizes everything `/dc-plan` and `/dc-im
 - contradicts a decision the user made, or reopens a decision issue (#5, #6, #7 and the like);
 - changes the scope of a neighbouring issue, or the product, taste or priorities in a way the docs do not settle.
 
-When in doubt between "rule" and "escalate", rule if the choice is cheap to reverse in review, escalate if not.
+Escalation is by reversibility and documentation, not by how unsure you feel:
+- **Settled by the docs or an earlier user decision:** rule, whatever the stakes.
+- **Docs silent or conflicting, cheap to change in review** (a name, a layout, a test choice): rule, log it.
+- **Docs silent or conflicting, costly to change later** (a data shape other steps build on, a public interface, a dependency choice): rule only if one option is clearly better; otherwise ask. Whichever way, put it at the top of the final report under "rulings most worth a look".
+- **Hard to undo, or a criterion above:** ask.
 
 ## 1. Plan (sub-agent)
 
 Launch one `general-purpose` agent (`Agent`) with this brief, filled in:
 
-> Run the `dc-plan` skill for issue #N. Autonomous mode, overriding the skill's review steps: do not publish an artifact and do not wait for approval. Instead (a) rule on every open question yourself, using the LLDs, HLD and tracking issue, choosing your own recommendation; (b) rewrite the issue's "Done when" if the plan calls for it, keeping Work, Implements, Blocked by and the footer; (c) post the plan as an issue comment, exactly as the skill's step 6 describes. Do not start any implementation or branch work. Escalate instead of ruling only for: money or hard-to-reverse shared state, facts only the user has, contradicting an earlier user decision or a decision issue, or changing a neighbouring issue's scope. If you escalate, do not post; return the question. Public-thread hygiene applies. Final reply, nothing else: (1) comment URL; (2) the acceptance rewrite, old and new, one line each; (3) rulings table: question, ruling, one-line reason; (4) escalations (question, options, your recommendation) or "none"; (5) top risks; (6) what the plan declares "Not proven here".
+> Run the `dc-plan` skill for issue #N. Autonomous mode, overriding the skill's review steps: do not publish an artifact and do not wait for approval. Instead (a) do NOT post anything yet: draft the plan and its open questions, and return them; the orchestrator rules, then resumes you to post. Each open question gets the options, your recommendation, the reason (cite the LLD, HLD or issue that settles it), and a reversibility note (cheap to change in review, costly, or hard to undo). Do not ask the user anything; (b) when resumed with rulings, fold them in, rewrite the issue's "Done when" if the plan calls for it (keeping Work, Implements, Blocked by and the footer), and post the plan as an issue comment, exactly as the skill's step 6 describes. Do not start any implementation or branch work. Public-thread hygiene applies. First reply, nothing else: (1) the proposed acceptance rewrite, old and new, one line each; (2) the open questions as above; (3) top risks; (4) what the plan declares "Not proven here". Reply after posting: the comment URL and any change from the draft.
 
-Keep the agent id. If it returns escalations, ask the user, then resume the same agent with `SendMessage` carrying the answers, and let it finish and post.
+Keep the agent id. When it returns the draft, you rule on each open question (see Authority): normally accept its recommendation when the docs settle it, overrule when the docs or an earlier user decision say otherwise, and escalate per the criteria. Ask the user for the escalations only, then resume the same agent with `SendMessage` carrying every ruling and reason, and let it post. Keep the table of questions, rulings and reasons for the final report.
 
 **Check the plan.** Read the posted comment (`gh issue view N --comments`). Confirm it has the TDD mapping, a verification matrix tied to the acceptance criteria, phases with gates and commit messages, a docs table, risks, and a "Not proven here" line, and that nothing private is in it. If a ruling looks wrong, message the agent to amend it and say why; do not rewrite the plan yourself.
 
