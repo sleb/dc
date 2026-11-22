@@ -9,12 +9,17 @@
   ],
   "scripts": {
     "lint": "eslint . --max-warnings 0",
-    "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json",
+    "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json && tsc --noEmit -p rules-test/tsconfig.json",
+    "test": "bun test packages functions/src functions/scripts lint-test",
     "test:lint": "bun test lint-test",
+    "test:web": "bun test --preload ./apps/web/test/setup.ts apps/web/src",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-deepcuts 'bun test rules-test'",
+    "test:e2e": "echo 'test:e2e: NO SUITE. No end-to-end tests exist yet (Playwright arrives with #14 onward); nothing was run.'",
     "build:functions": "bun run --cwd functions build",
-    "test:integration": "bun run build:functions && firebase emulators:exec --only auth,functions --project demo-deepcuts 'bun test functions/test-integration --timeout 30000'"
+    "test:integration": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bun test functions/test-integration --timeout 30000'"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "6.0.0",
     "@types/bun": "1.4.5",
     "@types/node": "22.20.5",
     "eslint": "10.15.0",

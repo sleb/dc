@@ -33,7 +33,7 @@ export default [
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
-        project: ["packages/*/tsconfig.json", "packages/*/tsconfig.test.json", "functions/tsconfig.json", "functions/tsconfig.test.json", "apps/web/tsconfig.json", "apps/web/tsconfig.test.json", "lint-test/tsconfig.json"],
+        project: ["packages/*/tsconfig.json", "packages/*/tsconfig.test.json", "functions/tsconfig.json", "functions/tsconfig.test.json", "apps/web/tsconfig.json", "apps/web/tsconfig.test.json", "lint-test/tsconfig.json", "rules-test/tsconfig.json"],
         tsconfigRootDir: import.meta.dirname,
       },
     },
