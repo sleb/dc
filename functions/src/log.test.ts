@@ -1,11 +1,13 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as logger from "firebase-functions/logger";
 import { log } from "./log";
 
 // LLD 0 section 9: the logger takes a typed field set; unknown keys are a type error and are dropped at runtime.
 const written: Record<string, unknown>[] = [];
-const spy = spyOn(logger, "write").mockImplementation((entry) => void written.push({ ...entry }));
+let spy: ReturnType<typeof spyOn>;
+beforeEach(() => void (spy = spyOn(logger, "write").mockImplementation((entry) => void written.push({ ...entry }))));
 afterEach(() => (written.length = 0));
+afterAll(() => spy.mockRestore());
 
 test("T4 a typed line carries its fields", () => {
   log({ event: "api.done", callable: "ping", principalKind: "none", outcome: "ok", latencyMs: 3 });

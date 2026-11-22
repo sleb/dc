@@ -95,8 +95,31 @@ test("T3 a non-HttpsError throw reaches the client as internal with no message o
   expect(JSON.stringify([err.message, err.details])).not.toContain("CARD-SENTINEL");
   expect(done()).toHaveLength(1);
   expect(done()[0]).toMatchObject({ callable: "test-throws", outcome: "error" });
-  expect(JSON.stringify(lines)).not.toContain("SECRET-MESSAGE");
+  // The cause is logged for Error Reporting (message and stack), the request data is not.
+  const errLines = lines.filter((l) => l.event === "api.error");
+  expect(errLines).toHaveLength(1);
+  expect(String(errLines[0]?.message)).toContain("SECRET-MESSAGE");
   expect(JSON.stringify(lines)).not.toContain("CARD-SENTINEL");
+});
+
+test("T3 client faults are logged as rejected, not error", async () => {
+  const fn = defineCallable({ name: "test-rejected", allow: ["seat"], runtime: RT.command, handler: async () => ({ ok: true as const }) });
+  await call(fn).catch(() => null);
+  expect(done()[0]).toMatchObject({ outcome: "rejected", reason: "unauthenticated", severity: "WARNING" });
+  expect(done()[0]).not.toHaveProperty("principalKind");
+});
+
+test("T1 a duplicate callable name is refused", () => {
+  defineCallable({ name: "test-dup", allow: ["guest"], runtime: RT.command, handler: async () => ({ ok: true as const }) });
+  expect(() => defineCallable({ name: "test-dup", allow: ["guest"], runtime: RT.command, handler: async () => ({ ok: true as const }) })).toThrow(/duplicate/);
+});
+
+test("T3 a logger failure after a successful handler does not fail the call", async () => {
+  const fn = defineCallable({ name: "test-logfail", allow: ["guest"], runtime: RT.command, handler: async () => ({ ok: true as const }) });
+  spyOn(logger, "write").mockImplementation(() => {
+    throw new Error("log down");
+  });
+  expect(await call(fn)).toEqual({ ok: true });
 });
 
 test("T3 an HttpsError thrown by a handler keeps its code", async () => {
@@ -110,5 +133,5 @@ test("T3 an HttpsError thrown by a handler keeps its code", async () => {
   });
   const err = (await call(fn).then(() => null, (e: unknown) => e)) as HttpsError;
   expect(err.code).toBe("not-found");
-  expect(done()[0]).toMatchObject({ outcome: "error" });
+  expect(done()[0]).toMatchObject({ outcome: "rejected", reason: "not-found" });
 });
