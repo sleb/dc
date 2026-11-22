@@ -118,7 +118,7 @@ describe("X1 decide is total", () => {
   // The expected code per junk entry is written out from the guard ladder (5.3) and 7.1, not read off the handlers. Acceptances are not assumed away:
   // the host's updateSettings with an empty patch is legal in LOBBY, WRITING and PLAYING, and a seated player may leave in LOBBY.
   const LOBBY_REAL = new Set(["createGame", "updateSettings", "join", "leave", "removePlayer", "startGame", "saveDraft", "finishWriting", "confirmSubmission", "closeSubmissions", "pickWinner"]); // independent of REGISTRY on purpose
-  /** The round commands, from the guard ladder (5.3) and 7.1: 2 actor, 3 stale, 4 phase, 5 pause, 6 role, 9 preconditions (the junk payloads are well-typed, so guard 7 passes). */
+  /** The round commands, from the guard ladder (5.3) and 7.1: 2 actor, 3 stale, 4 phase, 5 pause, 6 role, 9 preconditions 7 expectedVersion required as an integer (the junk bases carry none, so they stop here once past 6). */
   const expectedRound = (g: Game, actor: Actor, c: Command): Rejection | "accepted" => {
     const user = actor.kind === "user" ? actor.uid : null;
     const me = g.players.find((p) => p.uid === user && p.status !== "left" && p.status !== "removed");
@@ -131,17 +131,21 @@ describe("X1 decide is total", () => {
     if (g.phase !== "PLAYING" || r === null || r.phase !== want) return { code: "WRONG_PHASE" };
     if (g.paused) return { code: "PAUSED" };
     const isJudge = me !== undefined && r.judgeId === me.id;
+    const versionBad = !Number.isInteger(v);
     if (c.type === "confirmSubmission") {
       if (isJudge) return { code: "NOT_AUTHORIZED" };
       if (me === undefined || !r.roster.includes(me.id)) return { code: "NOT_AUTHORIZED", detail: "sitting_out" };
+      if (versionBad) return { code: "INVALID_ARGUMENT" };
       if (r.submissions.some((s) => s.playerId === me.id)) return { code: "ALREADY_SUBMITTED" };
       return me.hand.includes((c as { cardId: string }).cardId) ? "accepted" : { code: "NOT_IN_HAND" };
     }
     if (c.type === "closeSubmissions") {
       if (!isJudge && !isHost) return { code: "NOT_AUTHORIZED" };
+      if (versionBad) return { code: "INVALID_ARGUMENT" };
       return r.submissions.length === 0 ? { code: "NOT_PLAYABLE", detail: "no_submissions" } : "accepted";
     }
     if (!isJudge) return { code: "NOT_AUTHORIZED" };
+    if (versionBad) return { code: "INVALID_ARGUMENT" };
     return r.revealOrder?.includes((c as { submissionId: string }).submissionId) === true ? "accepted" : { code: "NOT_FOUND" };
   };
   const expectedReal = (g: Game, actor: Actor, c: Command): Rejection | "accepted" => {

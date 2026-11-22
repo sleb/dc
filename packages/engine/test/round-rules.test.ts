@@ -336,6 +336,14 @@ describe("S4 settle slot 4: auto-advance (8.2)", () => {
     expect(settle(paused, scriptedRng([]), 1, false).state.round?.phase).toBe("SUBMITTING");
   });
 
+  test("the auto-advance loop has an iteration cap: a step beyond it is an EngineInvariantError, not a hang", () => {
+    const g = roundGame({ submitted: [1, 2, 3] }); // needs exactly one step
+    const slot = SETTLE_SLOTS.find((s) => s.id === "4");
+    const env = () => ({ rng: recordingRng("cap"), now: 1, episodeStarted: false });
+    expect(() => slot?.run(g, { ...env(), maxAdvanceSteps: 0 })).toThrow(EngineInvariantError);
+    expect(slot?.run(g, { ...env(), maxAdvanceSteps: 1 }).events).toHaveLength(1);
+  });
+
   test("void branch (fixture only: it needs a roster with nobody expected): nobody expected and nothing submitted voids the round and opens a replacement", () => {
     const g = roundGame({ n: 4, greenDeck: 5 });
     const thin = { ...g, round: { ...(g.round as NonNullable<Game["round"]>), roster: [pid(0)] } };

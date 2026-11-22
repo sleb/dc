@@ -164,8 +164,20 @@ describe("R1 confirmSubmission: guard ladder (5.3, 7.1)", () => {
     expect(rejected(late, confirm(cid(400)), as(4))).toStrictEqual({ code: "PAUSED" });
     expect(accepted(g, { ...confirm(cid(200)), expectedVersion: V }, as(2)).events).toHaveLength(1); // not stale at equality
     expect(accepted(g, { ...confirm(cid(200)), expectedVersion: V + 100 }, as(2)).events).toHaveLength(1);
-    const noVersion = { type: "confirmSubmission", cardId: cid(200) };
-    expect(accepted(g, noVersion, as(2)).events).toHaveLength(1); // an absent expectedVersion is not stale
+  });
+
+  test("guard 7: expectedVersion is required for the stale-checked commands and must be a finite integer (the contracts schema requires a non-negative integer): absent, NaN, Infinity and a fraction are INVALID_ARGUMENT, never a skipped STALE", () => {
+    const g = submitting({ submitted: [2] });
+    const j = judging();
+    const bad = [undefined, Number.NaN, Number.POSITIVE_INFINITY, V + 0.5];
+    const without = (cmd: object) => Object.fromEntries(Object.entries(cmd).filter(([k]) => k !== "expectedVersion"));
+    for (const v of bad) {
+      const set = (cmd: object) => (v === undefined ? without(cmd) : { ...cmd, expectedVersion: v });
+      expect(rejected(g, set(confirm(cid(200))), as(2))).toStrictEqual({ code: "INVALID_ARGUMENT" });
+      expect(rejected(g, set(close), as(1))).toStrictEqual({ code: "INVALID_ARGUMENT" });
+      expect(rejected(j, set(pick(cid(206))), as(1))).toStrictEqual({ code: "INVALID_ARGUMENT" });
+    }
+    expect(rejected(g, without(confirm(cid(200))), ctxFor({ actor: userActor("stranger") }))).toStrictEqual({ code: "NOT_AUTHORIZED" }); // still only after guards 2 to 6
   });
 
   test("guard 7: a non-number expectedVersion is INVALID_ARGUMENT, after guards 2 to 6; a non-string cardId or pitch is INVALID_ARGUMENT; junk never reaches guard 9", () => {
@@ -197,6 +209,14 @@ describe("P1 the pitch (7.1, an interim until #25 wires Moderation)", () => {
     expect(accepted(withPitch(true), confirm(cid(200), { pitch: `  ${"x".repeat(140)}  ` }), as(2)).state.round?.submissions[0]?.pitch).toHaveLength(140);
     expect(rejected(withPitch(true), confirm(cid(200), { pitch: "x".repeat(141) }), as(2))).toStrictEqual({ code: "INVALID_ARGUMENT" });
     expect(rejected(withPitch(false), confirm(cid(200), { pitch: "x".repeat(141) }), as(2))).toStrictEqual({ code: "INVALID_ARGUMENT" });
+  });
+
+  test("the limit counts code points (TEXT_LIMITS, LLD 11), not UTF-16 units: 140 astral characters are accepted, 141 are INVALID_ARGUMENT", () => {
+    const astral = (n: number) => "\u{1F600}".repeat(n); // 2 UTF-16 units each
+    const ok = accepted(withPitch(true), confirm(cid(200), { pitch: ` ${astral(140)} ` }), as(2)).state.round?.submissions[0]?.pitch;
+    expect([...(ok ?? "")]).toHaveLength(140);
+    expect(rejected(withPitch(true), confirm(cid(200), { pitch: astral(141) }), as(2))).toStrictEqual({ code: "INVALID_ARGUMENT" });
+    expect(rejected(withPitch(false), confirm(cid(200), { pitch: astral(141) }), as(2))).toStrictEqual({ code: "INVALID_ARGUMENT" });
   });
 
   test("a blank pitch is no pitch: accepted with the variant off, and stored as no key", () => {
