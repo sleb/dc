@@ -15,7 +15,6 @@ type Of<T extends Command["type"]> = Extract<Command, { type: T }>;
 const effects = (): Pick<Handled, "draftChanges" | "roundRecords" | "redactEnvelope" | "aggregateChanged"> =>
   ({ draftChanges: [], roundRecords: [], redactEnvelope: false, aggregateChanged: true });
 const invalid = (): Rejection => reject("INVALID_ARGUMENT");
-const field = (cmd: object, key: string): unknown => (cmd as Record<string, unknown>)[key];
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 
 /** The actor's seat. Guard 2 (`roles.playerId !== null`) has already run, so a seat exists. */
