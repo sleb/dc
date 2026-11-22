@@ -67,7 +67,8 @@ Keep the plan specific to this issue. Use real LLD IDs (P-numbers, section numbe
 Only when the user says to:
 1. If the acceptance rewrite was approved, update the issue body (`gh issue edit N --body-file`), keeping Work, Implements, Blocked by and the footer, replacing "Done when".
 2. Post the plan as a `gh issue comment`, in Markdown, with phases as checkboxes. Do not link the private artifact.
-3. Then offer to start Phase 0 and Phase 1. Do not start until asked.
+3. Delete the plan artifact so we don't accumulate cruft: the issue comment is now the record. Confirm with the user first (deleting is permanent and breaks the link), then `Artifact` with `action: "delete"` and its `url`. Resolve or answer any open comment threads before deleting, since they go with it.
+4. Then offer to start Phase 0 and Phase 1. Do not start until asked.
 
 ## Rules
 
@@ -75,4 +76,4 @@ Only when the user says to:
 - **Be honest about limits.** If a check only proves presence and not runtime behaviour, say which later step proves it. Don't claim a seam is proven.
 - **Account facts matter.** A personal Google account has no GCP organization, so org policies can't be set. Ask about account facts that change the design.
 - **Stay in scope.** One step is one PR. Leave other environments and neighbouring steps (for example prod, M8) out, and say so.
-- **Never start work early.** Planning ends at the posted comment.
+- **Never start work early.** Planning ends at the posted comment and the artifact cleanup.
