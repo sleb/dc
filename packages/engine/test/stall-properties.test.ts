@@ -61,7 +61,7 @@ describe("E12, E17, E18 over seeded games with churn (every checker after every 
           else if (e.t === "PlayerJoined" && before !== null && before !== undefined && before.phase !== "LOBBY") bump(`late-join:${before.phase}`);
           else if (e.t === "RoundVoided") bump("void");
           else if (e.t === "GameEnded") bump(`end:${before?.phase ?? "?"}`);
-          else if (e.t === "PlayerActivated" && before !== null && before !== undefined && before.phase === "PLAYING" && before.paused) bump("recovery-activation");
+          else if (e.t === "PlayerActivated" && before !== null && before !== undefined && before.phase === "PLAYING" && !r.value.events.some((x) => x.t === "RoundOpened")) bump("recovery-activation");
         }
       });
     }
@@ -81,7 +81,8 @@ describe("E12, E17, E18 over seeded games with churn (every checker after every 
 describe("E17 through the real commands: a departed seat holds nothing and the zones still conserve", () => {
   test("a table of 4 to 6 in PLAYING: every seat leaves, one at a time, in a random order; after each, the departed hold nothing and E5 holds", () => {
     assertProperty(fc.property(fc.integer({ min: 4, max: 6 }), fc.shuffledSubarray([0, 1, 2, 3, 4, 5], { minLength: 3, maxLength: 6 }), fc.integer(), fc.constantFrom("SUBMITTING", "JUDGING"), (n, order, seed, phase) => {
-      let g = roundGame({ n, judge: Math.abs(seed) % n, submitted: [1, 2, 3].filter((i) => i < n), phase });
+      const judge = Math.abs(seed) % n;
+      let g = roundGame({ n, judge, submitted: [1, 2, 3].filter((i) => i < n && i !== judge), phase });
       let k = 0;
       for (const who of order.filter((i) => i < n)) {
         const p = g.players[who];

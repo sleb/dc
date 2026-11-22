@@ -374,7 +374,7 @@ describe("R4 pickWinner (7.1, 8.3)", () => {
 });
 
 describe("E15 FINISHED is terminal (8.8)", () => {
-  test("every registered command is WRONG_PHASE in FINISHED for the host (who holds a seat), and the finished game stays as it was", () => {
+  test("every registered command but endGame is WRONG_PHASE in FINISHED for the host (who holds a seat), and the finished game stays as it was", () => {
     const g = roundGame({ target: 2, scores: [0, 0, 1, 0], history: PRIOR, judge: 1, submitted: [2, 3], phase: "JUDGING" });
     const finished = accepted(g, pick(cid(206)), as(1)).state;
     expect(finished.phase).toBe("FINISHED");
@@ -384,6 +384,7 @@ describe("E15 FINISHED is terminal (8.8)", () => {
       seen.add(c.type);
       const who = c.type === "join" ? userActor(seatUidOf(GAME_ID, pid(9))) : actor; // join is for the seat uid of its playerId
       const r = decide(deepFreeze(structuredClone(finished)), c, ctxFor({ actor: who }));
+      if (c.type === "endGame") { expect(r.ok).toBe(true); continue; } // E15: endGame is the one accepted command (#23); castVote and deleteGame are not registered yet
       expect(r).toStrictEqual({ ok: false, error: { code: "WRONG_PHASE" } });
     }
     expect([...seen].sort()).toEqual(Object.keys(REGISTRY).sort());

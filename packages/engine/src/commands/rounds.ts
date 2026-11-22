@@ -1,6 +1,6 @@
 // The round commands (LLD 1 sections 7.1, 7.2, 8.2, 8.3): confirmSubmission, closeSubmissions, pickWinner.
 // Moderation (guard 8) is not wired until #25, so a pitch is stored trimmed and the Engine enforces only the 140-code-point limit and the variant switch.
-// `writeIn`, `redraw`, `castVote`, `importDeck` and `deleteGame` have no owner in M1 and stay unregistered (guard 0, INVALID_ARGUMENT); `passJudging` is #23.
+// `writeIn`, `redraw`, `castVote`, `importDeck` and `deleteGame` have no owner in M1 and stay unregistered (guard 0, INVALID_ARGUMENT); `passJudging` and `endGame` are in stalls.ts (#23).
 import type { Command } from "@dc/contracts";
 import { TEXT_LIMITS } from "@dc/contracts";
 import { reject } from "../errors";
@@ -27,7 +27,7 @@ const inRound = (phase: Round["phase"]) => (i: Input<Command>): Rejection | null
  * Guard 7, shared: these commands are stale-checked and the contracts envelope requires `expectedVersion` for them (a non-negative integer),
  * so it must be a finite integer here. Guard 3 skips anything else, so an absent, NaN or fractional value must not get past guard 7.
  */
-const versionOk = (cmd: object): boolean => Number.isInteger(field(cmd, "expectedVersion"));
+export const versionOk = (cmd: object): boolean => Number.isInteger(field(cmd, "expectedVersion"));
 
 /** The pitch after trimming: undefined for none (absent or blank), a string otherwise; null when it is not usable (not a string, over the limit). */
 function pitchOf(cmd: object): string | undefined | null {

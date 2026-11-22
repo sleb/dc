@@ -4,9 +4,11 @@ import { MAX_SEATED, MAX_TOTAL_JOINS, PlayerIdSchema, RoomCodeSchema, GameIdSche
 import type { Command, Settings } from "@dc/contracts";
 import { reject } from "../errors";
 import type { CommandSpec, CreateSpec } from "../registry";
+import { evictPlayer } from "../rules/membership";
+import { lateJoinerRequirement } from "../rules/playability";
 import { seatUid } from "../roles";
 import { seated } from "../selectors";
-import type { Game, Handled, Player, Rejection } from "../types";
+import type { Ctx, Game, Handled, Player, PlayerId, Rejection } from "../types";
 
 type Of<T extends Command["type"]> = Extract<Command, { type: T }>;
 
@@ -118,7 +120,7 @@ export const updateSettings: CommandSpec<Of<"updateSettings">> = {
 
 export const join: CommandSpec<Of<"join">> = {
   type: "join",
-  phases: ["LOBBY"], // #23 widens this to WRITING and PLAYING
+  phases: ["LOBBY", "WRITING", "PLAYING"],
   actor: (i) => i.actor.kind === "user" && isString(field(i.cmd, "playerId")) && i.actor.uid === seatUid(i.state.id, field(i.cmd, "playerId") as string),
   payload: ({ state, cmd }) => {
     const ok = PlayerIdSchema.safeParse(field(cmd, "playerId")).success && isString(field(cmd, "name")) && !state.players.some((p) => p.id === cmd.playerId && seatedStatus(p));
@@ -143,7 +145,8 @@ export const join: CommandSpec<Of<"join">> = {
       status: "writing",
       hand: [],
       scorePile: [],
-      writeTarget: null,
+      // LOBBY: nothing to write yet. WRITING and PLAYING: the late joiner's requirement (9.4), recorded once and never recomputed.
+      writeTarget: state.phase === "LOBBY" ? null : lateJoinerRequirement(state, seated(state).length + 1),
       writeProgress: { red: 0, green: 0 },
       powerUsage: { writeIn: false, redraw: false },
     };
@@ -153,25 +156,29 @@ export const join: CommandSpec<Of<"join">> = {
 
 const seatedStatus = (p: Player): boolean => p.status === "writing" || p.status === "ready" || p.status === "active";
 
+/**
+ * A seat leaves or is removed. In LOBBY the record is deleted (host powers rest on `hostId`); in WRITING and PLAYING `evictPlayer` runs (8.5) and
+ * the departure event comes first, then the eviction's side effects.
+ */
+function depart(state: Game, id: PlayerId, status: "left" | "removed", ctx: Ctx): Handled {
+  const event = status === "left" ? ({ t: "PlayerLeft", playerId: id } as const) : ({ t: "PlayerRemoved", playerId: id } as const);
+  if (state.phase === "LOBBY") return { ...effects(), state: { ...state, players: state.players.filter((p) => p.id !== id) }, events: [event] };
+  const out = evictPlayer(state, id, status, ctx.rng);
+  return { ...effects(), state: out.state, events: [event, ...out.events], draftChanges: out.draftChanges, ...(out.episodeStarted ? { episodeStarted: true } : {}) };
+}
+
 export const leave: CommandSpec<Of<"leave">> = {
   type: "leave",
-  phases: ["LOBBY"], // #23 widens this and adds eviction
+  phases: ["LOBBY", "WRITING", "PLAYING"],
   actor: (i) => i.roles.playerId !== null,
-  handle: ({ state, roles }) => {
-    const id = roles.playerId as string;
-    return { ...effects(), state: { ...state, players: state.players.filter((p) => p.id !== id) }, events: [{ t: "PlayerLeft", playerId: id }] };
-  },
+  handle: ({ state, roles, ctx }) => depart(state, roles.playerId as string, "left", ctx),
 };
 
 export const removePlayer: CommandSpec<Of<"removePlayer">> = {
   type: "removePlayer",
-  phases: ["LOBBY"], // #23 widens this and adds eviction
+  phases: ["LOBBY", "WRITING", "PLAYING"],
   actor: (i) => i.roles.host,
   payload: ({ cmd }) => (isString(field(cmd, "playerId")) ? null : invalid()),
   preconditions: ({ state, cmd }) => (state.players.some((p) => p.id === cmd.playerId && seatedStatus(p)) ? null : reject("NOT_FOUND")),
-  handle: ({ state, cmd }) => ({
-    ...effects(),
-    state: { ...state, players: state.players.filter((p) => p.id !== cmd.playerId) },
-    events: [{ t: "PlayerRemoved", playerId: cmd.playerId }],
-  }),
+  handle: ({ state, cmd, ctx }) => depart(state, cmd.playerId, "removed", ctx),
 };

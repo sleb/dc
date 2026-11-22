@@ -370,7 +370,7 @@ describe("S4 settle slot 4: auto-advance (8.2)", () => {
     expect(settle(j, scriptedRng([]), 1, false).events).toEqual([]);
     const nobody = { ...roundGame({ submitted: [1, 2, 3] }) };
     const headless = { ...nobody, round: { ...(nobody.round as NonNullable<Game["round"]>), judgeId: null } };
-    expect(settle(headless, scriptedRng([]), 1, false).events).toEqual([]);
+    expect(SETTLE_SLOTS.find((s) => s.id === "4")?.run(headless, { rng: scriptedRng([]), now: 1, episodeStarted: false }).events).toEqual([]); // slot 4 leaves it to slot 3a (#23)
   });
 
   test("settle on a game with no round, or outside PLAYING, changes nothing here", () => {

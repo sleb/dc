@@ -416,7 +416,7 @@ export const checkEviction: Checker = ({ before, cmd, result, actor }) => {
 
 /**
  * E18: a `writing` or `ready` player never holds a card, a point or a submission; a newly active player holds 7 cards and 0 points; every activation comes with
- * `RoundOpened`, `PlayStarted` or a paused-recovery activation (the game was PLAYING and paused); a seat that joined this command is `writing` with no points.
+ * `RoundOpened`, `PlayStarted` or a paused-recovery activation (the game was PLAYING and paused, or an eviction in this command paused it); a seat that joined this command is `writing` with no points.
  */
 export const checkLateJoin: Checker = ({ before, cmd, result }) => {
   const v = accepted(result);
@@ -428,7 +428,8 @@ export const checkLateJoin: Checker = ({ before, cmd, result }) => {
     if (after.round?.submissions.some((s) => s.playerId === p.id) === true) throw new Error(`${p.status} player ${p.id} has a submission`);
   }
   const activated = v.events.filter((e): e is Extract<DomainEvent, { t: "PlayerActivated" }> => e.t === "PlayerActivated");
-  const recovery = before?.phase === "PLAYING" && before.paused;
+  // Paused recovery (slot 3): the game was paused, or this very command (an eviction) paused it and the ready players recovered it within the same settle.
+  const recovery = before?.phase === "PLAYING" && (before.paused || EVICTIONS.has(cmdType(cmd)));
   if (activated.length > 0 && !recovery && !v.events.some((e) => e.t === "RoundOpened" || e.t === "PlayStarted")) throw new Error("PlayerActivated with no round boundary and no paused recovery");
   for (const e of activated) {
     const p = after.players.find((q) => q.id === e.playerId);
