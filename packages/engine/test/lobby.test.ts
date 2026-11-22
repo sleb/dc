@@ -40,8 +40,8 @@ const patch = (p: unknown) => ({ type: "updateSettings", patch: p });
 const VARIANTS = { pitch: true, writeIn: true, redraw: false, peoplesChoice: true };
 
 describe("the real registry holds the lobby, writing and round commands", () => {
-  test("keys are the five lobby types, the three writing types (#21), the three round types (#22), passJudging and endGame (#23), and markReminded (#24)", () => {
-    expect(Object.keys(REGISTRY).sort()).toEqual([...LOBBY_TYPES, "finishWriting", "saveDraft", "startGame", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame", "markReminded"].sort());
+  test("keys are the five lobby types, the three writing types (#21), the three round types (#22), passJudging and endGame (#23), markReminded (#24) and removeCard (#25)", () => {
+    expect(Object.keys(REGISTRY).sort()).toEqual([...LOBBY_TYPES, "finishWriting", "saveDraft", "startGame", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame", "markReminded", "removeCard"].sort());
   });
 });
 
@@ -288,8 +288,8 @@ describe("L5 join (7.1, 5.3 guard 9)", () => {
     expect(rejected(g, { type: "join", playerId: pid(5) }, seat(5))).toStrictEqual({ code: "INVALID_ARGUMENT" });
   });
 
-  test("the engine does not moderate (that is #25): an empty name is stored, not CONTENT_REJECTED", () => {
-    expect(run(game(3), nth(5, "   "), seat(5)).ok).toBe(true);
+  test("guard 8 (#25): a blank name is CONTENT_REJECTED EMPTY, not stored; the full matrix is in moderation-wiring.test.ts", () => {
+    expect(rejected(game(3), nth(5, "   "), seat(5))).toStrictEqual({ code: "CONTENT_REJECTED", detail: "EMPTY" });
   });
 });
 

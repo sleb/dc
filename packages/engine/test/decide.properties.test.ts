@@ -126,7 +126,7 @@ describe("X1 decide is total", () => {
 
   // The expected code per junk entry is written out from the guard ladder (5.3) and 7.1, not read off the handlers. Acceptances are not assumed away:
   // the host's updateSettings with an empty patch is legal in LOBBY, WRITING and PLAYING, and a seated player may leave in LOBBY.
-  const LOBBY_REAL = new Set(["createGame", "updateSettings", "join", "leave", "removePlayer", "startGame", "saveDraft", "finishWriting", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame", "markReminded"]); // independent of REGISTRY on purpose
+  const LOBBY_REAL = new Set(["createGame", "updateSettings", "join", "leave", "removePlayer", "startGame", "saveDraft", "finishWriting", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame", "markReminded", "removeCard"]); // independent of REGISTRY on purpose
   /** The round commands, from the guard ladder (5.3) and 7.1: 2 actor, 3 stale, 4 phase, 5 pause, 6 role, 9 preconditions 7 expectedVersion required as an integer (the junk bases carry none, so they stop here once past 6). */
   const expectedRound = (g: Game, actor: Actor, c: Command): Rejection | "accepted" => {
     const user = actor.kind === "user" ? actor.uid : null;
@@ -189,6 +189,7 @@ describe("X1 decide is total", () => {
       if (g.phase !== "PLAYING" || g.round === null) return { code: "WRONG_PHASE" };
       return g.paused ? { code: "PAUSED" } : { code: "INVALID_ARGUMENT" };
     }
+    if (c.type === "removeCard") return !isHost ? { code: "NOT_AUTHORIZED" } : midGame ? { code: "NOT_FOUND" } : { code: "WRONG_PHASE" }; // cid(9999) and "nope" are in no junk game's history or round
     // removePlayer: the target pid(9) is not seated in these games
     return !isHost ? { code: "NOT_AUTHORIZED" } : midGame ? { code: "NOT_FOUND" } : { code: "WRONG_PHASE" };
   };
@@ -305,7 +306,7 @@ describe("G1 generator sanity", () => {
   test("meta: every registered command in the real registry has an enumerator or an explicit exemption; createGame is the one exemption", () => {
     expect(missingEnumerators(REGISTRY, enumerators, exemptions)).toEqual([]);
     expect(Object.keys(exemptions)).toEqual(["createGame"]);
-    expect(Object.keys(enumerators).sort()).toEqual(["closeSubmissions", "confirmSubmission", "endGame", "finishWriting", "join", "leave", "markReminded", "passJudging", "pickWinner", "removePlayer", "saveDraft", "startGame", "updateSettings"]);
+    expect(Object.keys(enumerators).sort()).toEqual(["closeSubmissions", "confirmSubmission", "endGame", "finishWriting", "join", "leave", "markReminded", "passJudging", "pickWinner", "removeCard", "removePlayer", "saveDraft", "startGame", "updateSettings"]);
   });
 
   test("meta: a registered lobby command with neither an enumerator nor an exemption fails the check (test the test)", () => {

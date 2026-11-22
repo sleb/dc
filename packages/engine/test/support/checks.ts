@@ -1,5 +1,6 @@
 import { assertDeepEqual } from "./assert";
 import { meetsMinimums, totals } from "../../src/rules/playability";
+import { modelShown } from "./removal";
 import type { Accepted, Actor, Draft, DomainEvent, Game, GameDrafts, Player, Rejection, Result } from "../../src/types";
 
 /** One `decide` call and what came out of it, as seen by the global checkers. */
@@ -332,6 +333,8 @@ export const checkPlayable: Checker = ({ result }) => {
 };
 
 const EVICTIONS = new Set(["leave", "removePlayer"]);
+/** Commands that may lower a score pile: an eviction returns it to the green deck, `removeCard` deletes a card from it. */
+const PILE_MOVERS = new Set(["leave", "removePlayer", "removeCard"]);
 
 /** E14: at most one `WinnerPicked` per command and never the judge; `history` grows by exactly that count with contiguous round numbers; score piles sum to `history.length` (exact until evictions, #23). */
 export const checkScoring: Checker = ({ before, cmd, result }) => {
@@ -355,7 +358,7 @@ export const checkScoring: Checker = ({ before, cmd, result }) => {
   const pile = (g: Game): number => g.players.reduce((n, p) => n + p.scorePile.length, 0);
   // A leaver's pile goes back to the green deck (E17, U2), so points can only be fewer than rounds, and they change only by a pick or an eviction.
   if (pile(after) > after.history.length) throw new Error(`score piles hold ${pile(after)} cards, history has ${after.history.length} rounds`);
-  if (before !== null && !EVICTIONS.has(cmdType(cmd)) && pile(after) - pile(before) !== grew) throw new Error(`score piles moved by ${pile(after) - pile(before)} in a ${cmdType(cmd)} that resolved ${grew} rounds`);
+  if (before !== null && !PILE_MOVERS.has(cmdType(cmd)) && pile(after) - pile(before) !== grew) throw new Error(`score piles moved by ${pile(after) - pile(before)} in a ${cmdType(cmd)} that resolved ${grew} rounds`);
   // Only the winner of a pick gains a point, and so never the judge of that round (E12).
   for (const p of after.players) {
     const was = before?.players.find((b) => b.id === p.id)?.scorePile.length ?? 0;
@@ -441,6 +444,41 @@ export const checkLateJoin: Checker = ({ before, cmd, result }) => {
   }
 };
 
+/**
+ * E5 and E17 for `removeCard` (8.6), written from the LLD: the card was shown to the table (independent model), exactly that registry entry is gone and nothing else, one `CardRemoved{cardId, kind}` leads the events,
+ * the zone union loses that one id, a removed current green is replaced by the old top of `greenDeck` with `changedAtVersion = version + 1`, a removed revealed submission leaves `submissions` and `revealOrder`
+ * (and bumps `changedAtVersion`, unless the round was voided), and past LOBBY the minimums still hold at the seated count.
+ */
+export const checkRemoveCard: Checker = ({ before, cmd, result }) => {
+  const v = accepted(result);
+  if (v === null || before === null || cmdType(cmd) !== "removeCard") return;
+  const id = (cmd as { cardId?: unknown }).cardId;
+  if (typeof id !== "string") throw new Error("an accepted removeCard has no string cardId");
+  if (!modelShown(before, id)) throw new Error(`removeCard accepted for ${id}, which was not shown to the table`);
+  const after = v.state;
+  const gone = Object.keys(before.cards).filter((k) => !Object.hasOwn(after.cards, k));
+  if (gone.length !== 1 || gone[0] !== id) throw new Error(`removeCard ${id} removed ${JSON.stringify(gone)} from the registry`);
+  if (Object.keys(after.cards).length !== Object.keys(before.cards).length - 1) throw new Error("removeCard added registry entries");
+  const first = v.events[0];
+  if (first?.t !== "CardRemoved" || first.cardId !== id || first.kind !== before.cards[id]?.kind || v.events.filter((e) => e.t === "CardRemoved").length !== 1) throw new Error("removeCard must lead with exactly one CardRemoved{cardId, kind}");
+  const was = zoneIds(before);
+  const now = zoneIds(after);
+  if (sortedKey(now) !== sortedKey(was.filter((z) => z !== id))) throw new Error("removeCard moved a card other than the one it removed");
+  const round = before.round;
+  if (round !== null && round.greenCardId === id) {
+    const top = before.pools.greenDeck[0];
+    if (after.round?.greenCardId !== top || !same(after.pools.greenDeck, before.pools.greenDeck.slice(1)) || after.round?.changedAtVersion !== before.version + 1) throw new Error("a removed current green was not replaced from the top of greenDeck with a bumped changedAtVersion");
+  }
+  if (round?.phase === "JUDGING" && round.submissions.some((s) => s.cardId === id) && after.round?.number === round.number && after.round.phase === "JUDGING") {
+    if (after.round.submissions.some((s) => s.cardId === id) || after.round.revealOrder?.includes(id) === true) throw new Error("a removed submission is still in the round");
+    if (after.round.changedAtVersion !== before.version + 1) throw new Error("removing a revealed submission must bump changedAtVersion");
+  }
+  if (before.phase !== "LOBBY" && after.target !== null) {
+    const n = after.players.filter((p) => SEATED.has(p.status)).length;
+    if (!meetsMinimums(totals(after), n, after.target)) throw new Error("removeCard left the registry below the minimums");
+  }
+};
+
 const DAY_MS = 86_400_000;
 const EPISODE_EVENTS = new Set(["WritingStarted", "RoundOpened", "SubmissionsClosed", "JudgeChanged", "RoundVoided"]);
 
@@ -496,7 +534,7 @@ export const checkWaiting: Checker = ({ before, cmd, result }) => {
 /** Append-only: later steps push the E5 to E18 checkers here. */
 export const checkers: Checker[] = [
   checkSerializable, checkVersion, checkUnchangedWhenNotAggregate, checkConservation, checkHands, checkAggregateChanged, checkNoAuthorship,
-  checkOwnerHidden, checkRevealOrder, checkJudges, checkRoundMoves, checkTopUp, checkPlayable, checkScoring, checkFinished, checkEviction, checkLateJoin, checkWaiting,
+  checkOwnerHidden, checkRevealOrder, checkJudges, checkRoundMoves, checkTopUp, checkPlayable, checkScoring, checkFinished, checkEviction, checkLateJoin, checkWaiting, checkRemoveCard,
 ];
 
 /** Run every checker on a step; a failure names the step index and seed so the run can be replayed. */

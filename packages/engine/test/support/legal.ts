@@ -3,6 +3,7 @@ import type { Command } from "@dc/contracts";
 import type { Registry } from "../../src/registry";
 import type { Actor, Game, GameDrafts } from "../../src/types";
 import { GAME_ID, HOST_UID, cid, pid, seatUidOf } from "./factories";
+import { modelBlock, modelShown } from "./removal";
 
 export interface LegalEntry { actor: Actor; cmd: Command }
 export type Enumerator = (game: Game, drafts: GameDrafts) => LegalEntry[];
@@ -100,6 +101,8 @@ export const enumerators: Record<string, Enumerator> = {
     if (g.phase !== "PLAYING" || g.paused || r === null || r.phase !== "JUDGING" || judge === undefined) return [];
     return (r.revealOrder ?? []).map((id) => ({ actor: { kind: "user", uid: judge.uid } as Actor, cmd: { type: "pickWinner", submissionId: id, expectedVersion: r.changedAtVersion } as Command }));
   },
+  // removeCard (8.6): the host, in LOBBY, WRITING or PLAYING, may remove any card shown to the table unless the minimums or an empty green deck block it. Written from 8.6 in support/removal.ts, not from the handler.
+  removeCard: (g) => (!inPlay(g) ? [] : Object.keys(g.cards).filter((id) => modelShown(g, id) && modelBlock(g, id) === null).map((id) => ({ actor: { kind: "user", uid: g.hostId } as Actor, cmd: { type: "removeCard", cardId: id } as Command }))),
   // markReminded (7.4): the system actor, against the state's own episode and generation, in WRITING and PLAYING while an episode runs. Whether it advances depends on the clock (`now >= reminderDueAt`); a call that is not due is a lawful no-op.
   markReminded: (g) => (g.phase !== "WRITING" && g.phase !== "PLAYING") || g.episode === null ? [] : [{ actor: { kind: "system" }, cmd: { type: "markReminded", episode: g.episode, episodeGen: g.episodeGen } as Command }],
 };

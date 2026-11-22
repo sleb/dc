@@ -211,7 +211,9 @@ export function membershipDriver(seed: string, players: number, table: Readonly<
     if (rng.int(300) === 0) return any(of("endGame"));
     if (rng.int(rate) === 0) {
       const ops = [...of("join"), ...of("leave"), ...of("removePlayer")];
-      if (ops.length > 0) return any(ops);
+      // #25: the host also removes a card now and then (one pick from the removeCard entries, so a long list does not drown the membership ops).
+      const picks = [any(ops), any(of("removeCard"))].filter((e): e is LegalEntry => e !== undefined);
+      if (picks.length > 0) return picks[rng.int(picks.length)];
     }
     return base(state, drafts, i);
   };
