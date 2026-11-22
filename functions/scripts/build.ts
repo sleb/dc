@@ -12,6 +12,8 @@ export type BuildOptions = {
   check?: boolean;
 };
 
+// Exact semver: no ranges, ^ or ~, dist-tags or aliases. Prerelease and build suffixes are allowed.
+const EXACT_VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
 const exists = (path: string) => stat(path).then(() => true, () => false);
 const isEnvFile = (name: string) => /^\.env(\..+)?$/.test(name);
 
@@ -24,7 +26,7 @@ export async function build(root: string, opts: BuildOptions = {}): Promise<void
   const dependencies: Record<string, string> = {};
   for (const name of RUNTIME_DEPS) {
     const v = declared[name];
-    if (!v || !/^\d+\.\d+\.\d+$/.test(v)) throw new Error(`${name} must be an exact version, got ${v}`);
+    if (!v || !EXACT_VERSION.test(v)) throw new Error(`${name} must be an exact version (x.y.z, optionally -prerelease or +build; no ranges, tags or aliases), got ${v}`);
     dependencies[name] = v;
   }
   if (Object.keys(declared).some((n) => !(RUNTIME_DEPS as readonly string[]).includes(n)))

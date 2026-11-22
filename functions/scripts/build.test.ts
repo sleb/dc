@@ -29,6 +29,15 @@ describe("dist/package.json (B1, B2, B4)", () => {
     await expect(run(root)).rejects.toThrow("firebase-admin must be an exact version");
   });
 
+  test("B2 accepts semver prerelease and build suffixes, rejects ranges and aliases, and says what is accepted", async () => {
+    const ok = await makeRoot({}, { dependencies: { "firebase-admin": "1.2.3-beta.1", "firebase-functions": "4.5.6+build.7" } });
+    await run(ok);
+    for (const bad of ["^1.2.3", "~1.2.3", "1.2", "npm:other@1.2.3", "latest", "1.2.3 - 2.0.0"]) {
+      const root = await makeRoot({}, { dependencies: { "firebase-admin": bad, "firebase-functions": "4.5.6" } });
+      await expect(run(root)).rejects.toThrow(/exact version \(x\.y\.z, optionally -prerelease or \+build[;)]/);
+    }
+  });
+
   test("B2 an extra runtime dependency throws", async () => {
     const root = await makeRoot({}, { dependencies: { ...GOOD_PKG.dependencies, zod: "3.0.0" } });
     await expect(run(root)).rejects.toThrow("not in RUNTIME_DEPS");

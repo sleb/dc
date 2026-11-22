@@ -8,7 +8,7 @@ test("F1 firebase.json functions block points at dist and builds before deploy",
       source: "functions/dist",
       codebase: "default",
       runtime: "nodejs22",
-      ignore: ["node_modules", "*.log", ".install-ok"],
+      ignore: ["node_modules", "*.log", ".install-ok", ".env.local", ".env.*.local"],
       predeploy: ["bun run build:functions"],
     },
   ]);

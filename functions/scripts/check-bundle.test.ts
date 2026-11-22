@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { checkBundle } from "./check-bundle";
-import { makeRoot } from "./fixtures";
+import { chmod, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { makeRoot, tmp } from "./fixtures";
 
 /** A root whose dist holds the given bundle, with the given exports.json names. */
 async function withBundle(bundle: string, names: string[] = []): Promise<string> {
@@ -62,5 +64,37 @@ describe("check-bundle", () => {
 
   test("C4 an empty bundle matches an empty exports.json", async () => {
     expect(await checkBundle(await withBundle("module.exports = {};\n", []))).toEqual([]);
+  });
+
+  test("C2 also scans dynamic import() and __require() targets", async () => {
+    const dyn = await checkBundle(await withBundle(`${GOOD}async function f() { return import("left-pad"); }\n`, ["ping"]));
+    expect(dyn.join("\n")).toContain("left-pad");
+    const req = await checkBundle(await withBundle(`${GOOD}try { __require("other-lib"); } catch {}\n`, ["ping"]));
+    expect(req.join("\n")).toContain("other-lib");
+    const okDyn = 'async function f() { return import("firebase-admin/app"); }\nexports.ping = f;\n';
+    expect(await checkBundle(await withBundle(okDyn, ["ping"]))).toEqual([]);
+  });
+
+  test("C3 the load check gets a minimal environment", async () => {
+    process.env["DC_LEAK_PROBE"] = "1";
+    try {
+      const bundle = 'if (process.env.DC_LEAK_PROBE) throw new Error("env-leaked");\nexports.ping = 1;\n';
+      expect(await checkBundle(await withBundle(bundle, ["ping"]))).toEqual([]);
+    } finally {
+      delete process.env["DC_LEAK_PROBE"];
+    }
+  });
+
+  test("C3 a missing node binary is a problem, not a crash", async () => {
+    const problems = await checkBundle(await withBundle(GOOD, ["ping"]), { node: "/nonexistent/node-binary" });
+    expect(problems.join("\n")).toMatch(/could not run node/);
+  });
+
+  test("C3 requires Node major 22", async () => {
+    const dir = await tmp("fakenode");
+    await writeFile(join(dir, "node"), `#!/bin/sh\necho '{"node":"20.1.0","exports":["ping"]}'\n`);
+    await chmod(join(dir, "node"), 0o755);
+    const problems = await checkBundle(await withBundle(GOOD, ["ping"]), { node: join(dir, "node") });
+    expect(problems.join("\n")).toMatch(/Node 22.*20\.1\.0/);
   });
 });

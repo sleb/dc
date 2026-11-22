@@ -12,7 +12,7 @@ Produces `functions/dist`, which is what `firebase.json` deploys (`source: funct
 
 - Needs `npm` and network on the first build (and whenever `dist/node_modules`, `dist/package-lock.json` or `.install-ok` is missing or the dependency versions changed). Otherwise it does not install, and a second build changes nothing.
 - A failed `npm install` leaves no `.install-ok`, so the next build reinstalls.
-- `.env*` files are copied as they are, including a gitignored `.env.local`; keep secrets out of them (secrets live in Secret Manager). Only non-secret params are committed.
+- `.env*` files are copied as they are, including a gitignored `.env.local`; `firebase.json` ignores `.env.local` and `.env.*.local` at upload. Keep secrets out of them (secrets live in Secret Manager). Only non-secret params are committed.
 - Runtime versions come from `functions/package.json`; any new runtime dependency must be added to `RUNTIME_DEPS` in `scripts/build.ts` first, or the build refuses.
 
 ## check-bundle
@@ -21,7 +21,7 @@ Produces `functions/dist`, which is what `firebase.json` deploys (`source: funct
 bun scripts/check-bundle.ts
 ```
 
-Fails unless `dist/index.cjs` has no `bun:`, `Bun.` or `@dc/`, every `require` target is a Node builtin or a `dist` dependency, and the bundle loads under Node and exports exactly the names in `exports.json` (in both directions). Add a function's name to `exports.json` in the same change that exports it. It runs `node` from `PATH`; to prove the bundle needs no Bun, run it with Bun removed from `PATH` (CI does, #16).
+Fails unless `dist/index.cjs` has no `bun:`, `Bun.` or `@dc/`, every `require`, `__require` and dynamic `import` target is a Node builtin or a `dist` dependency, and the bundle loads under Node and exports exactly the names in `exports.json` (in both directions). Add a function's name to `exports.json` in the same change that exports it. It runs `node` (must be major 22) from `PATH` with a minimal environment; to prove the bundle needs no Bun, run it with Bun removed from `PATH` (CI does, #16).
 
 ## Tests
 

@@ -167,11 +167,11 @@ The Firebase CLI uploads the `source` directory and runs `npm install` in Cloud 
 
 `functions/scripts/build.ts` exports `build(root, { env?, check? })` (`root` is the functions directory; `env` is the environment of the `npm install` child, which tests use to put a fake `npm` first on `PATH`; `check` defaults to true). A thin `import.meta.main` wrapper calls it for the real `functions` directory, prints `build: ok` and exits 1 with the message on failure. In order:
 
-1. Read `package.json`. Each of `RUNTIME_DEPS` (`firebase-admin`, `firebase-functions`) must be an exact `x.y.z` version, and no other runtime dependency may exist; otherwise throw.
+1. Read `package.json`. Each of `RUNTIME_DEPS` (`firebase-admin`, `firebase-functions`) must be an exact version: `x.y.z`, optionally with a `-prerelease` or `+build` suffix; no ranges, `^`, `~`, dist-tags or aliases (the error message says so), and no other runtime dependency may exist; otherwise throw.
 2. Remove `dist/index.cjs`, so a failed build never leaves a stale bundle, then `Bun.build` `src/index.ts` as `cjs` for `target: "node"`, unminified, with no sourcemap, and `RUNTIME_DEPS` and `RUNTIME_DEPS/*` external. Workspace packages (`@dc/contracts`, `@dc/engine`) and `zod` are bundled.
 3. Write `dist/package.json` (`name`, `private`, `main: "index.cjs"`, `engines.node: "22"`, the pinned `dependencies`) only when its content changed.
 4. Install stamp. `.install-ok` holds the sha256 of `dist/package.json`. `npm install --omit=dev --no-audit --no-fund` runs in `dist` unless the stamp matches and both `dist/node_modules` and `dist/package-lock.json` exist. The stamp is removed before installing and written only after success, so a failed install is retried on the next build (the failure throws `npm install failed with exit code N`). It creates `package-lock.json` (used by Cloud Build's `npm ci`) and `node_modules` (needed locally for the CLI's function discovery and the Functions emulator).
-5. Mirror `functions/.env*` (names matching `^\.env(\..+)?$`, so `.env.local` is included) into `dist` byte for byte: copies in `dist` without a source are removed, changed or missing ones are copied, identical ones are left alone, so a second build touches nothing. The CLI reads `.env`, `.env.<projectId>` and `.env.local` from the functions source directory, which is `dist`.
+5. Mirror `functions/.env*` (names matching `^\.env(\..+)?$`, so `.env.local` is included) into `dist` byte for byte: copies in `dist` without a source are removed, changed or missing ones are copied, identical ones are left alone, so a second build touches nothing. The CLI reads `.env`, `.env.<projectId>` and `.env.local` from the functions source directory, which is `dist`. The mirrored `.env.local` and `.env.*.local` are never uploaded: `firebase.json` lists them in `ignore` (issue #11; #17 confirms the CLI's behaviour on the first deploy).
 6. Run `checkBundle(root)` and throw if it reports anything.
 
 `build.ts` and `check-bundle.ts` run under Bun; the output they produce runs only under Node. They use `Bun.*` legitimately because the script is not shipped (P7 scopes the ban accordingly).
@@ -179,8 +179,8 @@ The Firebase CLI uploads the `source` directory and runs `npm install` in Cloud 
 `functions/scripts/check-bundle.ts` exports `checkBundle(root)`, which returns one message per problem (an empty list means good); the CLI wrapper prints them and exits 1, and `build` throws on a non-empty list. The bundle is bad unless all of these hold:
 
 1. `dist/index.cjs` contains no `bun:` string, no `Bun.` global use, and no `@dc/` specifier.
-2. Every `require("...")` target is a Node builtin (`node:` prefix) or starts with a name in `dist/package.json` `dependencies`.
-3. The bundle loads under plain Node (a `node -e` child doing `require('./dist/index.cjs')` with `GCLOUD_PROJECT=demo-deepcuts`; a load failure reports the first lines of Node's stderr) and exports every name in a checked-in `functions/exports.json` (the callables and triggers LLDs 3 to 6 declare: the LLD 5 callables plus `beforeEmailSent` when implemented, LLD 4's `identityOutbox`, LLD 3's deletion runner trigger `deletionRunner`, LLD 6's `notifyOutbox`, `reminderSweep` and `housekeeping`). A function added in code but missing from the list, or the reverse, fails (the `__esModule` marker is not a function). `exports.json` is `[]` until #12 adds `ping` and `diag`. That the callable `REGISTRY` of `defineCallable` equals the callable subset of the list (LLD 5 API1) is a separate check owned by #12.
+2. Every `require("...")`, `__require("...")` and dynamic `import("...")` target is a Node builtin (`node:` prefix) or starts with a name in `dist/package.json` `dependencies`.
+3. The bundle loads under plain Node (a `node -e` child doing `require('./dist/index.cjs')` with `GCLOUD_PROJECT=demo-deepcuts`; the child gets only `PATH`, `HOME` and `GCLOUD_PROJECT`; a load failure reports the first lines of Node's stderr; a missing `node`, or a Node that is not major 22, is reported as a problem) and exports every name in a checked-in `functions/exports.json` (the callables and triggers LLDs 3 to 6 declare: the LLD 5 callables plus `beforeEmailSent` when implemented, LLD 4's `identityOutbox`, LLD 3's deletion runner trigger `deletionRunner`, LLD 6's `notifyOutbox`, `reminderSweep` and `housekeeping`). A function added in code but missing from the list, or the reverse, fails (the `__esModule` marker is not a function). `exports.json` is `[]` until #12 adds `ping` and `diag`. That the callable `REGISTRY` of `defineCallable` equals the callable subset of the list (LLD 5 API1) is a separate check owned by #12.
 
 - P6. `bun run build:functions` produces `functions/dist` deterministically from `bun.lock` plus sources, and `check-bundle` passes. `dist/package.json` lists exactly the exact-pinned `RUNTIME_DEPS` and nothing else. A build after a failed `npm install` reinstalls (the `.install-ok` stamp is written only on success), and `dist/.env*` equals the set of `functions/.env*` files byte for byte.
 - P7. The bundle loads and registers its functions under Node 22 with no Bun present on `PATH` (the CI integration job removes Bun from `PATH` after building).
@@ -194,7 +194,7 @@ The Firebase CLI uploads the `source` directory and runs `npm install` in Cloud 
     "source": "functions/dist",
     "codebase": "default",
     "runtime": "nodejs22",
-    "ignore": ["node_modules", "*.log", ".install-ok"],
+    "ignore": ["node_modules", "*.log", ".install-ok", ".env.local", ".env.*.local"],
     "predeploy": ["bun run build:functions"]
   }],
   "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
