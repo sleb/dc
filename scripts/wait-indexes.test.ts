@@ -116,6 +116,32 @@ test("V4 a composite index in a failed state fails at once, naming it", async ()
   expect(d.sleeps).toEqual([]);
 });
 
+test("V4 STATE_UNSPECIFIED is retried (a just-created policy reports it) and the timeout ends the wait", async () => {
+  const gcloud: Gcloud = async (args) =>
+    args.includes("composite") ? { code: 0, stdout: "[]", stderr: "" } : { code: 0, stdout: JSON.stringify(ttls("STATE_UNSPECIFIED")), stderr: "" };
+  const d = deps(gcloud);
+  const out = await waitForIndexes({ project: PROJECT, timeoutMin: 1, deps: d.deps });
+  expect(out.ok).toBe(false);
+  expect(out.ok ? "" : out.reason).toContain("STATE_UNSPECIFIED");
+  expect(out.ok ? "" : out.reason).toContain("after 1 min");
+  expect(d.sleeps.length).toBeGreaterThan(0);
+
+  const compositeUnspecified: Gcloud = async (args) =>
+    args.includes("composite") ? { code: 0, stdout: JSON.stringify(composite("STATE_UNSPECIFIED")), stderr: "" } : { code: 0, stdout: JSON.stringify(ttls()), stderr: "" };
+  const out2 = await waitForIndexes({ project: PROJECT, timeoutMin: 1, deps: deps(compositeUnspecified).deps });
+  expect(out2.ok).toBe(false);
+  expect(out2.ok ? "" : out2.reason).toContain("after 1 min");
+});
+
+test("V4 a TTL field config with no state at all is a failure, not a wait", async () => {
+  const gcloud: Gcloud = async (args) =>
+    args.includes("composite") ? { code: 0, stdout: "[]", stderr: "" } : { code: 0, stdout: JSON.stringify(ttls("")), stderr: "" };
+  const d = deps(gcloud);
+  const out = await waitForIndexes({ project: PROJECT, timeoutMin: 30, deps: d.deps });
+  expect(out.ok).toBe(false);
+  expect(d.sleeps).toEqual([]);
+});
+
 test("V4 a TTL field config that is not ACTIVE and will not change fails at once, naming the group", async () => {
   const gcloud: Gcloud = async (args) =>
     args.includes("composite") ? { code: 0, stdout: "[]", stderr: "" } : { code: 0, stdout: JSON.stringify(ttls((g) => (g === "deletions" ? "NEEDS_REPAIR" : "ACTIVE"))), stderr: "" };

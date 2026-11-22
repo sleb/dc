@@ -69,7 +69,12 @@ function parseList(stdout: string, what: string): unknown[] | string {
 const objectOf = (v: unknown): Record<string, unknown> => (typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {});
 const stringOf = (v: unknown): string => (typeof v === "string" ? v : "");
 
-/** READY/ACTIVE pass; CREATING is worth waiting for; anything else (NEED_REPAIR, an unknown or empty state) never fixes itself. */
+/**
+ * READY/ACTIVE pass. `CREATING` and `STATE_UNSPECIFIED` are retried: a field config or index the deploy has just
+ * created can report either before it settles, and the `--timeout-min` bound (not the state) ends that wait. Anything
+ * else, including an empty state, is a failure that never fixes itself: `NEED_REPAIR` needs a person, and an absent
+ * config means nothing was declared.
+ */
 function classify(state: string, ready: string): "ok" | "retry" | "fail" {
   if (state === ready) return "ok";
   if (state === "CREATING" || state === "STATE_UNSPECIFIED") return "retry";
