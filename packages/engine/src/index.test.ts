@@ -9,9 +9,9 @@ describe("V9 public entry point", () => {
     expect(names).toEqual(["EngineInvariantError", "REMINDER_INTERVAL_MS", "actorRole", "activePlayers", "decide", "makeRng", "seated", "seatUid"].sort());
   });
 
-  test("decide is the public pipeline over the (still empty) registry: any command is INVALID_ARGUMENT", async () => {
+  test("decide is the public pipeline over the (still empty) registry: an unregistered command is INVALID_ARGUMENT", async () => {
     const { decide } = await import("./index");
-    const r = decide(null, { type: "createGame" } as never, { now: 0, rng: (await import("./rng")).makeRng("s"), mintId: () => "c_0000000000", actor: { kind: "system" }, drafts: {} });
+    const r = decide(null, { type: "__nope__" } as never, { now: 0, rng: (await import("./rng")).makeRng("s"), mintId: () => "c_0000000000", actor: { kind: "system" }, drafts: {} });
     expect(r).toStrictEqual({ ok: false, error: { code: "INVALID_ARGUMENT" } });
   });
 

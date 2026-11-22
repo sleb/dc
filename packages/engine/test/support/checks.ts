@@ -48,8 +48,14 @@ export const checkVersion: Checker = ({ before, result }) => {
   if (result.value.state.version !== want) throw new Error(`version is ${result.value.state.version}, expected ${want} (before ${was}, aggregateChanged ${result.value.aggregateChanged})`);
 };
 
+/** E3 corollary: a command reported as not changing the aggregate leaves the state deep-equal to the input (a saveDraft-style handler must not mutate state). */
+export const checkUnchangedWhenNotAggregate: Checker = ({ before, result }) => {
+  if (!result.ok || result.value.aggregateChanged || before === null) return;
+  expect(result.value.state).toEqual(before);
+};
+
 /** Append-only: later steps push the E5 to E18 checkers here. */
-export const checkers: Checker[] = [checkSerializable, checkVersion];
+export const checkers: Checker[] = [checkSerializable, checkVersion, checkUnchangedWhenNotAggregate];
 
 /** Run every checker on a step; a failure names the step index and seed so the run can be replayed. */
 export function checkAll(step: Step, list: readonly Checker[] = checkers): void {

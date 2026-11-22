@@ -58,6 +58,29 @@ describe("X1 decide is total", () => {
     }));
   });
 
+  test("every registry key equals its spec.type, and only createGame may be a creating spec (real and fixture registries)", () => {
+    for (const reg of [REGISTRY, fixtureRegistry]) {
+      for (const [k, s] of Object.entries(reg)) {
+        expect(s.type).toBe(k);
+        if (s.creates === true) expect(k).toBe("createGame");
+      }
+    }
+  });
+
+  // TODO(#20, #21, #22): the real REGISTRY is empty in 1.2, so the test above and the one below are vacuous over it. Each of those
+  // steps must re-point the junk test at the real rows (realDecide with per-guard codes); until then only the fixture run proves the ladder.
+  test("the junkCommands list over the fixture registry: each registered type gets its guard code, the rest guard 0", () => {
+    const g = buildGame({ n: 4, phase: "PLAYING", ready: [], handSize: 2, judge: 1, submitted: [false, false, true, false], paused: false });
+    for (const { actor, cmd } of junkCommands(g)) {
+      const r = fixtureDecide(deepFreeze(structuredClone(g)), cmd, ctxFor({ actor }));
+      const isHost = actor.kind === "user" && actor.uid === g.hostId;
+      if (cmd.type === "createGame") expect(r).toStrictEqual({ ok: false, error: { code: "WRONG_PHASE" } });
+      else if (cmd.type === "deleteGame" && isHost) expect(r.ok).toBe(true);
+      else if (cmd.type === "deleteGame") expect(r).toStrictEqual({ ok: false, error: { code: "NOT_AUTHORIZED" } });
+      else expect(r).toStrictEqual({ ok: false, error: { code: "INVALID_ARGUMENT" } });
+    }
+  });
+
   test("the junkCommands list is rejected and never throws, with the input state unchanged", () => {
     const g = buildGame({ n: 4, phase: "PLAYING", ready: [], handSize: 2, judge: 1, submitted: [false, false, true, false], paused: false });
     const before = structuredClone(g);

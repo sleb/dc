@@ -1,5 +1,5 @@
 import type { Command } from "@dc/contracts";
-import { reject } from "./errors";
+import { EngineInvariantError, reject } from "./errors";
 import type { AnySpec, BaseCommand, CommandSpec, CreateSpec, Input, Registry } from "./registry";
 import { REGISTRY } from "./registry";
 import { actorRole } from "./roles";
@@ -50,7 +50,9 @@ function decideCreate(spec: CreateSpec<BaseCommand>, state: Game | null, cmd: Ba
   if (!spec.actor(i)) return fail(reject("NOT_AUTHORIZED"));
   const bad = spec.payload?.(i) ?? spec.moderation?.(i) ?? null;
   if (bad !== null) return fail(bad);
-  return finish(null, spec.handle(i), ctx);
+  const h = spec.handle(i);
+  if (!h.aggregateChanged) throw new EngineInvariantError(`${cmd.type}: a create handler must report aggregateChanged`);
+  return finish(null, h, ctx);
 }
 
 /**

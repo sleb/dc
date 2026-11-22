@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { CardIdSchema, CommandEnvelopeSchema, GameIdSchema, PlayerIdSchema, SERVER_ONLY_COMMANDS } from "@dc/contracts";
-import { checkAll, checkSerializable, checkers, findNonJson } from "./checks";
+import { checkAll, checkSerializable, checkUnchangedWhenNotAggregate, checkers, findNonJson } from "./checks";
 import type { Step } from "./checks";
 import { addCard, cid, counterMintId, ctxFor, deepFreeze, makeGame, makePlayer, pid, scriptedRng, GAME_ID } from "./factories";
 import { JUNK_TYPES, junkCommands, legalCommands, missingEnumerators } from "./legal";
 import { fixtureEnumerators, fixtureRegistry } from "./fixtures";
+import { makeDecide } from "../../src/decide";
 import { buildGame, zeroTime } from "./scenario";
 
 // The harness is test code and is specified here; it imports engine types, the factories and the fixture specs, so it needs the engine modules to load.
@@ -89,6 +90,25 @@ describe("harness: checkers", () => {
     expect(() => checkAll(okStep(makeGame({ version: 1 })))).not.toThrow();
     const bumped = okStep(makeGame({ version: 2 }));
     expect(() => checkAll(bumped)).toThrow("version");
+  });
+});
+
+describe("harness: checkUnchangedWhenNotAggregate", () => {
+  const stepFor = (reg: Parameters<typeof makeDecide>[0], cmd: object): Step => {
+    const before = makeGame();
+    const result = makeDecide(reg)(before, cmd as never, ctxFor());
+    return { index: 0, before, cmd, result };
+  };
+  test("passes the fixture draft command and deleteGame (aggregateChanged false, state untouched)", () => {
+    expect(() => checkUnchangedWhenNotAggregate(stepFor({ fxDraft: fixtureRegistry["fxDraft"] as never }, { type: "fxDraft" }))).not.toThrow();
+    expect(() => checkUnchangedWhenNotAggregate(stepFor({ deleteGame: fixtureRegistry["deleteGame"] as never }, { type: "deleteGame" }))).not.toThrow();
+  });
+  test("a bad fixture that mutates state but reports aggregateChanged false trips it (and checkVersion alone does not)", () => {
+    const bad = { type: "fxBadDraft", phases: ["LOBBY"], actor: () => true, handle: (i: { state: ReturnType<typeof makeGame> }) => ({ state: { ...i.state, paused: true }, events: [], draftChanges: [], roundRecords: [], redactEnvelope: false, aggregateChanged: false }) };
+    const step = stepFor({ fxBadDraft: bad as never }, { type: "fxBadDraft" });
+    expect(() => checkAll(step, [checkers[1] as never])).not.toThrow();
+    expect(() => checkUnchangedWhenNotAggregate(step)).toThrow();
+    expect(checkers).toContain(checkUnchangedWhenNotAggregate);
   });
 });
 

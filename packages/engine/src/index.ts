@@ -5,4 +5,4 @@ export { makeRng } from "./rng";
 export { actorRole, seatUid } from "./roles";
 export { REMINDER_INTERVAL_MS } from "./rules/waiting";
 export * from "./selectors";
-export type { Accepted, Actor, Card, CardKind, Ctx, Draft, DomainEvent, Game, GameDrafts, Player, Rejection, Result, Rng, Roles, Round, RoundRecord, RoundSummary, Settings, Vote } from "./types";
+export type { Accepted, Actor, Card, CardKind, Ctx, DraftChange, Draft, DomainEvent, Game, GameDrafts, Phase, Player, PlayerStatus, Pools, Rejection, Result, Rng, Roles, Round, RoundPhase, RoundRecord, RoundSummary, Settings, Submission, Vote } from "./types";

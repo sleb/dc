@@ -4,7 +4,7 @@ import { EngineInvariantError } from "../src/errors";
 import { makeRng, rngFromRaw } from "../src/rng";
 import { assertProperty } from "./support/fc";
 
-// Independent inline reference: xmur3 (string hash) seeding sfc32, raw 32-bit output. Seeds are stored in EventDocs, so the
+// Inline reference, a verbatim copy of the implementation, so a regression pin and not an independent check: xmur3 (string hash) seeding sfc32, raw 32-bit output. Seeds are stored in EventDocs, so the
 // sequence a seed produces is replay-critical (LLD 1 section 5.2) and must never drift.
 function refRaw(seed: string): () => number {
   let h = 1779033703 ^ seed.length;
@@ -42,14 +42,14 @@ const scripted = (values: number[]): (() => number) => {
 };
 
 describe("V4 makeRng: golden vectors", () => {
-  test("raw output matches the independent reference and pinned literals", () => {
+  test("raw output matches the regression-pin reference and literals", () => {
     expect(raws("", 5)).toEqual([4129203857, 244752431, 2410192736, 339021908, 435026413]);
     expect(raws("a", 5)).toEqual([3974458160, 1032036395, 3088932659, 2554899302, 3720462638]);
     expect(raws("deep-cuts", 5)).toEqual([2833851347, 469853009, 2617341925, 674093374, 942874308]);
     expect(raws("0123456789abcdef0123456789abcdef", 5)).toEqual([1726989556, 3676547690, 1494904939, 1772066883, 2587939950]);
   });
 
-  test("property: any seed matches the reference stream", () => {
+  test("property: any seed matches the in-test copy of the implementation (regression pin)", () => {
     assertProperty(fc.property(fc.string({ maxLength: 40 }), (seed) => {
       const ref = refRaw(seed);
       expect(raws(seed, 8)).toEqual(Array.from({ length: 8 }, () => ref()));

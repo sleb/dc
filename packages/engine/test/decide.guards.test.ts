@@ -206,3 +206,12 @@ describe("decide: result shape and the settle/version step", () => {
     expect(decide(g, deepFreeze(cmd({ type: "fxShuffle" })), deepFreeze(ctxFor())).ok).toBe(true);
   });
 });
+
+describe("decideCreate invariant", () => {
+  test("a create handler that reports aggregateChanged false is an engine bug and throws EngineInvariantError", () => {
+    const bad = { ...fixtureRegistry["createGame"], handle: (i: never) => ({ ...(fixtureRegistry["createGame"] as { handle: (i: never) => object }).handle(i), aggregateChanged: false }) };
+    const d = makeDecide({ createGame: bad as never });
+    const c = { type: "createGame", gameId: GAME_ID, hostId: HOST_UID };
+    expect(() => d(null, cmd(c), ctxFor())).toThrow(EngineInvariantError);
+  });
+});
