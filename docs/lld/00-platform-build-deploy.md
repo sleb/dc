@@ -129,13 +129,14 @@ Root `package.json` (the scripts marked "this step" exist now; the rest arrive w
   "workspaces": ["apps/*", "packages/*", "functions"],
   "scripts": {
     "lint": "eslint . --max-warnings 0",                                   // this step
-    "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json",  // this step
-    "test:lint": "bun test lint-test",                                    // this step; #13 folds it into `test`
-    "test": "bun test packages functions/src",
-    "test:web": "bun test --preload apps/web/test/setup.ts apps/web/src",
+    "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json && tsc --noEmit -p rules-test/tsconfig.json",  // this step; #13 adds rules-test
+    "test:lint": "bun test lint-test",                                    // this step; `test` also runs it (about 6 s); kept for running it alone
+    "test": "bun test packages functions/src functions/scripts lint-test",   // #13
+    "test:web": "bun test --preload ./apps/web/test/setup.ts apps/web/src",   // #13 (Bun needs the leading ./)
     "test:rules": "firebase emulators:exec --only firestore --project demo-deepcuts 'bun test rules-test'",
     "test:integration": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bun test functions/test-integration --timeout 30000'",
-    "test:e2e": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bunx playwright test'",
+    "test:e2e": "echo 'test:e2e: NO SUITE. ...'",   // #13 placeholder: exits 0 and says no suite ran; #14 onward replaces it with the line below
+    // "test:e2e": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bunx playwright test'",
     "build:functions": "bun run --cwd functions build",             // issue #11
     "build:web": "bun run --cwd apps/web build",
     "dev": "firebase emulators:start --project demo-deepcuts"
@@ -143,7 +144,7 @@ Root `package.json` (the scripts marked "this step" exist now; the rest arrive w
 }
 ```
 
-Dev dependencies are the latest stable at the time each step adds them, exact-pinned in `package.json` and `bun.lock` (`bunfig.toml` sets `exact = true`); this document carries no version numbers. This step adds `eslint`, `typescript-eslint`, `typescript`, `@types/bun` and `@types/node` (the Node 22 line, matching the functions runtime). Later steps add `firebase-tools`, `@firebase/rules-unit-testing`, `@playwright/test`, `happy-dom`, `@testing-library/*` and `@axe-core/playwright`. `typescript` stays on the newest release that typescript-eslint supports: TypeScript 7 is the native compiler and has no JavaScript API for typescript-eslint, so the repo stays on the latest 6.x until typescript-eslint supports 7. The web workspace's own devDependencies (`wouter`, `@tailwindcss/vite`, `vite-plugin-pwa` with its `workbox-*`) are declared in `apps/web/package.json` per LLD 7. Test isolation: `happy-dom`'s global registration (the `--preload`) must not leak into engine and functions tests, so `test` excludes `apps/web/src` and `test:web` runs web tests in a separate Bun process (LLD 7 conflict 10).
+Dev dependencies are the latest stable at the time each step adds them, exact-pinned in `package.json` and `bun.lock` (`bunfig.toml` sets `exact = true`); this document carries no version numbers. This step adds `eslint`, `typescript-eslint`, `typescript`, `@types/bun` and `@types/node` (the Node 22 line, matching the functions runtime). Later steps add `firebase-tools`, `@firebase/rules-unit-testing`, `@playwright/test`, `happy-dom`, `@testing-library/*` and `@axe-core/playwright`. `typescript` stays on the newest release that typescript-eslint supports: TypeScript 7 is the native compiler and has no JavaScript API for typescript-eslint, so the repo stays on the latest 6.x until typescript-eslint supports 7. The web workspace's own devDependencies (`wouter`, `@tailwindcss/vite`, `vite-plugin-pwa` with its `workbox-*`) are declared in `apps/web/package.json` per LLD 7. Test isolation: `happy-dom`'s global registration (the `--preload`) must not leak into engine and functions tests, so `test` excludes `apps/web/src` and `test:web` runs web tests in a separate Bun process (LLD 7 conflict 10); a guard test in `packages/engine/test` fails if DOM globals ever reach the root `test` process. `test:web` preloads `@happy-dom/global-registrator` (the package that provides global registration; `happy-dom` itself comes with it). The `fast-check` devDependency of the engine is added to the P5 allowlist (`lint-test/engine-deps.ts`); `FC_SEED` and `FC_NUM_RUNS` are read by `packages/engine/test/support/fc.ts` (P11).
 
 Each workspace `package.json` uses `"name": "@dc/<dir>"`, internal deps as `"workspace:*"`, and (for `engine` and `contracts`) `"exports": { ".": "./src/index.ts" }`. Packages are consumed as TypeScript source and are never built on their own; Vite and the functions bundler compile them in place.
 
@@ -329,13 +330,14 @@ export default [
 
 | Level | Command | Runs where | Gate |
 |---|---|---|---|
-| Engine unit and property (fast-check; E1 to E18, V2 to V5) | `bun test packages` | Bun | every PR |
-| Functions unit | `bun test functions/src` | Bun | every PR |
-| Functions build scripts (`build`, `check-bundle`; fixtures and a fake `npm`) | `bun test functions/scripts` | Bun | every PR (wired into CI by #13 and #16) |
+| Engine unit and property (fast-check; E1 to E18, V2 to V5) | `bun test packages` (in `bun run test`) | Bun | every PR |
+| Functions unit | `bun test functions/src` (in `bun run test`) | Bun | every PR |
+| Functions build scripts (`build`, `check-bundle`; fixtures and a fake `npm`) | `bun test functions/scripts` (in `bun run test`) | Bun | every PR |
+| Lint and compiler policy | `bun test lint-test` (in `bun run test`; `test:lint` alone) | Bun | every PR |
 | Web unit (happy-dom, Testing Library) | `bun run test:web` | Bun, separate process so `happy-dom` globals never reach engine or functions tests | every PR |
-| Rules | `bun run test:rules` | Firestore emulator | every PR |
-| Function integration | `bun run test:integration` | Auth + Firestore + Functions emulators, **Node bundle** (Auth and Functions only until #13 adds Firestore, which needs Java) | every PR |
-| End to end (Playwright, chromium) | `bun run test:e2e` | Same emulators, `vite preview` built with `--mode emulator` (`apps/web/.env.emulator`) | every PR |
+| Rules | `bun run test:rules` | Firestore emulator (needs Java; developed on a newer JDK, CI pins 21 in #16). Until #32 the one suite passes inline deny-all rules; `firestore.rules` and the P10 checks are #32 | every PR |
+| Function integration | `bun run test:integration` | Auth + Firestore + Functions emulators, **Node bundle** (Firestore added in #13; needs Java; one Admin SDK write and read, real collections from #32) | every PR |
+| End to end (Playwright, chromium) | `bun run test:e2e` (a placeholder that exits 0 and prints "NO SUITE" until #14 onward) | Same emulators, `vite preview` built with `--mode emulator` (`apps/web/.env.emulator`) | every PR |
 | Post-deploy smoke | `bun scripts/smoke.ts` | Real staging or prod | after each deploy |
 
 - P9. Integration and e2e suites run against `functions/dist/index.cjs` through the Functions emulator, never against `functions/src` imported under Bun. `test:integration` rebuilds the bundle first, and the CI job runs it under Node with Bun absent from `PATH` for the emulator process (the test runner itself is Bun). This is the control for the "Bun-built functions deployed to Node" risk in tech-stack section 10.
@@ -583,7 +585,7 @@ Goal: prove the riskiest seam (Bun monorepo, bundle, Node runtime, IAM custom to
 **B. Local proof (no cloud)**
 8. Scaffold the workspace per section 3 with a minimal `functions/src/index.ts` exporting `ping` and `diag` through `defineCallable`; `ping` returns `{ ok: true, node: process.version }`; `diag` calls `getAuth().createCustomToken("seat:probe:probe")` and returns the token (staging-only, deleted in step 17).
 9. `bun install`, `bun run lint`, `bun run typecheck`, `bun run build:functions` (it prints `build: ok` when `check-bundle` passes; run it twice, the second must not install). Confirm `functions/dist` contains `index.cjs`, `package.json`, `package-lock.json`, `node_modules/firebase-admin`, `.install-ok` and a copy of `.env.deepcuts-staging`.
-10. `bun run test:integration` with a one-test suite calling `ping` through the emulator and asserting `node` starts with `v22` (landed in #12 with `diag`; it runs the Auth and Functions emulators only, #13 adds Firestore). This proves the Node bundle loads under the emulator. Also run `bun run test:web` and `bun scripts/check-web-size.ts` once the web scaffold exists.
+10. `bun run test:integration` with a one-test suite calling `ping` through the emulator and asserting `node` starts with `v22` (landed in #12 with `diag`; #13 added Firestore, so it runs the Auth, Firestore and Functions emulators). This proves the Node bundle loads under the emulator. Also run `bun run test:web` and `bun scripts/check-web-size.ts` once the web scaffold exists.
 
 **C. Deploy**
 11. `firebase login:ci` is not used; authenticate locally with `gcloud auth application-default login` as a project owner for this first run.

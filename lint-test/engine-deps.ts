@@ -1,5 +1,5 @@
 // P5: the engine's package.json may depend only on @dc/contracts and an allowlist of pure libraries.
-export const ENGINE_DEP_ALLOWLIST = ["@dc/contracts", "zod"] as const;
+export const ENGINE_DEP_ALLOWLIST = ["@dc/contracts", "zod", "fast-check"] as const;
 const FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"] as const;
 
 type Pkg = Partial<Record<(typeof FIELDS)[number], Record<string, string>>>;
