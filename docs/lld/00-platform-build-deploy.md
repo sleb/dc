@@ -97,13 +97,13 @@ dc/
     .env.staging  .env.production  .env.emulator   # public config, committed; Vite's .env.<mode> names, read for --mode <mode>
     package.json  tsconfig.json  tsconfig.test.json  vite.config.ts  src/
   functions/                   # @dc/functions
-    package.json  tsconfig.json  tsconfig.test.json
+    package.json  tsconfig.json  tsconfig.test.json   # tsconfig.test.json also covers scripts/
     src/index.ts               # exports every deployed function
     src/api/callable.ts        # defineCallable (alias callable): the only module allowed to import onCall (P12)
     src/store/  src/notify/    # lint-isolated trees (ST2, T3; section 5)
     src/log.ts                 # typed logger (section 9)
     exports.json               # every deployed function name (check-bundle)
-    scripts/build.ts  scripts/check-bundle.ts
+    scripts/build.ts  scripts/check-bundle.ts  # exported functions plus a thin `import.meta.main` CLI; tests in scripts/*.test.ts (fixtures, a fake `npm` on PATH)
     test-integration/          # emulator suites, bun:test, run against dist (P9)
     .env.deepcuts-staging  .env.deepcuts-prod   # non-secret function params, committed; copied into dist by build.ts
     dist/                      # generated, gitignored: index.cjs, package.json, package-lock.json, node_modules, .env.* copies
@@ -119,7 +119,7 @@ dc/
 
 Dependency direction, enforced by lint (P5): `contracts` imports no workspace package; `engine` imports only `contracts`; `functions` imports `engine` and `contracts`; `web` imports only `contracts` (the client holds no authority, HLD C1, so it never imports the engine; anything it needs to display comes in the `GameView`).
 
-Root `package.json` (the scripts marked "this step" exist now; the rest arrive with the step that owns them: `test*` and the `build:*` scripts with #13, #11 and #14, `dev` with #15):
+Root `package.json` (the scripts marked "this step" exist now; the rest arrive with the step that owns them: the `test*` scripts with #13, `build:web` with #14, `dev` with #15):
 
 ```jsonc
 {
@@ -136,7 +136,7 @@ Root `package.json` (the scripts marked "this step" exist now; the rest arrive w
     "test:rules": "firebase emulators:exec --only firestore --project demo-deepcuts 'bun test rules-test'",
     "test:integration": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bun test functions/test-integration --timeout 30000'",
     "test:e2e": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bunx playwright test'",
-    "build:functions": "bun run --cwd functions build",
+    "build:functions": "bun run --cwd functions build",             // issue #11
     "build:web": "bun run --cwd apps/web build",
     "dev": "firebase emulators:start --project demo-deepcuts"
   }
@@ -159,88 +159,34 @@ Each workspace `package.json` uses `"name": "@dc/<dir>"`, internal deps as `"wor
 }
 ```
 
-`build` arrives with #11 (this step has only `typecheck`). `firebase-functions` stays on the latest stable until decision issue #7 says otherwise. `engine` and `contracts` are devDependencies on purpose: they are bundled, not installed in the cloud. `zod` is a dependency of `contracts` and is bundled too.
+`build` arrived with #11. `firebase-functions` stays on the latest stable until decision issue #7 says otherwise. `engine` and `contracts` are devDependencies on purpose: they are bundled, not installed in the cloud. `zod` is a dependency of `contracts` and is bundled too.
 
 ## 4. Functions bundling
 
 The Firebase CLI uploads the `source` directory and runs `npm install` in Cloud Build. It cannot resolve `workspace:*` and ignores `bun.lock` (tech-stack section 8), so `source` is `functions/dist`, a self-contained package.
 
-`functions/scripts/build.ts`:
+`functions/scripts/build.ts` exports `build(root, { env?, check? })` (`root` is the functions directory; `env` is the environment of the `npm install` child, which tests use to put a fake `npm` first on `PATH`; `check` defaults to true). A thin `import.meta.main` wrapper calls it for the real `functions` directory, prints `build: ok` and exits 1 with the message on failure. In order:
 
-```ts
-import { mkdir, rm, writeFile, readFile, readdir, copyFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+1. Read `package.json`. Each of `RUNTIME_DEPS` (`firebase-admin`, `firebase-functions`) must be an exact version: `x.y.z`, optionally with a `-prerelease` or `+build` suffix; no ranges, `^`, `~`, dist-tags or aliases (the error message says so), and no other runtime dependency may exist; otherwise throw.
+2. Remove `dist/index.cjs`, so a failed build never leaves a stale bundle, then `Bun.build` `src/index.ts` as `cjs` for `target: "node"`, unminified, with no sourcemap, and `RUNTIME_DEPS` and `RUNTIME_DEPS/*` external. Workspace packages (`@dc/contracts`, `@dc/engine`) and `zod` are bundled.
+3. Write `dist/package.json` (`name`, `private`, `main: "index.cjs"`, `engines.node: "22"`, the pinned `dependencies`) only when its content changed.
+4. Install stamp. `.install-ok` holds the sha256 of `dist/package.json`. `npm install --omit=dev --no-audit --no-fund` runs in `dist` unless the stamp matches and both `dist/node_modules` and `dist/package-lock.json` exist. The stamp is removed before installing and written only after success, so a failed install is retried on the next build (the failure throws `npm install failed with exit code N`). It creates `package-lock.json` (used by Cloud Build's `npm ci`) and `node_modules` (needed locally for the CLI's function discovery and the Functions emulator).
+5. Mirror `functions/.env*` (names matching `^\.env(\..+)?$`, so `.env.local` is included) into `dist` byte for byte: copies in `dist` without a source are removed, changed or missing ones are copied, identical ones are left alone, so a second build touches nothing. The CLI reads `.env`, `.env.<projectId>` and `.env.local` from the functions source directory, which is `dist`. The mirrored `.env.local` and `.env.*.local` are never uploaded: `firebase.json` lists them in `ignore` (issue #11; #17 confirms the CLI's behaviour on the first deploy).
+6. Run `checkBundle(root)` and throw if it reports anything.
 
-const RUNTIME_DEPS = ["firebase-admin", "firebase-functions"] as const;
-const pkg = JSON.parse(await readFile("package.json", "utf8"));
+`build.ts` and `check-bundle.ts` run under Bun; the output they produce runs only under Node. They use `Bun.*` legitimately because the script is not shipped (P7 scopes the ban accordingly).
 
-const dependencies: Record<string, string> = {};
-for (const name of RUNTIME_DEPS) {
-  const v = pkg.dependencies?.[name];
-  if (!v || !/^\d+\.\d+\.\d+$/.test(v)) throw new Error(`${name} must be an exact version, got ${v}`);
-  dependencies[name] = v;
-}
-if (Object.keys(pkg.dependencies).some((n) => !(RUNTIME_DEPS as readonly string[]).includes(n)))
-  throw new Error("functions/package.json has a runtime dependency that is not in RUNTIME_DEPS");
-
-await rm("dist/index.cjs", { force: true });
-await mkdir("dist", { recursive: true });
-
-const result = await Bun.build({
-  entrypoints: ["src/index.ts"],
-  outdir: "dist",
-  naming: "index.cjs",
-  target: "node",
-  format: "cjs",
-  minify: false,                       // readable stack traces in Error Reporting
-  sourcemap: "none",
-  external: [...RUNTIME_DEPS, ...RUNTIME_DEPS.map((d) => `${d}/*`)],
-});
-if (!result.success) { console.error(result.logs.join("\n")); process.exit(1); }
-
-const dist = { name: "deepcuts-functions", private: true, main: "index.cjs", engines: { node: "22" }, dependencies };
-const next = JSON.stringify(dist, null, 2) + "\n";
-const prev = await readFile("dist/package.json", "utf8").catch(() => "");
-if (prev !== next) await writeFile("dist/package.json", next);
-
-// The install is skipped only when a previous install of exactly this package.json succeeded.
-// The stamp is removed before installing and written only after success, so a failed or
-// interrupted install (or a deleted node_modules / package-lock.json) is retried on the next build.
-const STAMP = "dist/.install-ok";
-const want = createHash("sha256").update(next).digest("hex");
-const stamp = await readFile(STAMP, "utf8").catch(() => "");
-const present = (await readdir("dist")).filter((f) => f === "node_modules" || f === "package-lock.json").length === 2;
-if (stamp !== want || !present) {
-  await rm(STAMP, { force: true });
-  // Creates package-lock.json (used by Cloud Build's npm ci) and node_modules (needed locally for
-  // the CLI's function discovery and the Functions emulator).
-  const p = Bun.spawnSync(["npm", "install", "--omit=dev", "--no-audit", "--no-fund"], { cwd: "dist", stdio: ["inherit", "inherit", "inherit"] });
-  if (p.exitCode !== 0) process.exit(p.exitCode ?? 1);
-  await writeFile(STAMP, want);
-}
-
-// Function params: the CLI reads .env, .env.<projectId> and .env.local from the functions *source*
-// directory, which is dist. Mirror functions/.env* into dist exactly (stale copies removed first).
-const isEnv = (f: string) => /^\.env(\..+)?$/.test(f);
-for (const f of (await readdir("dist")).filter(isEnv)) await rm(`dist/${f}`);
-for (const f of (await readdir(".")).filter(isEnv)) await copyFile(f, `dist/${f}`);
-
-await import("./check-bundle.ts");
-```
-
-`build.ts` runs under Bun; the output it produces runs only under Node. It uses `Bun.*` legitimately because the script is not shipped (P7 scopes the ban accordingly).
-
-`functions/scripts/check-bundle.ts` fails the build unless all of these hold:
+`functions/scripts/check-bundle.ts` exports `checkBundle(root)`, which returns one message per problem (an empty list means good); the CLI wrapper prints them and exits 1, and `build` throws on a non-empty list. The bundle is bad unless all of these hold:
 
 1. `dist/index.cjs` contains no `bun:` string, no `Bun.` global use, and no `@dc/` specifier.
-2. Every `require("...")` target is a Node builtin (`node:` prefix) or starts with a name in `dist/package.json` `dependencies`.
-3. The bundle loads under plain Node (`node -e "require('./dist/index.cjs')"` with `GCLOUD_PROJECT=demo-deepcuts`) and exports every name in a checked-in `functions/exports.json` (the callables and triggers LLDs 3 to 6 declare: the LLD 5 callables plus `beforeEmailSent` when implemented, LLD 4's `identityOutbox`, LLD 3's deletion runner trigger `deletionRunner`, LLD 6's `notifyOutbox`, `reminderSweep` and `housekeeping`). A function added in code but missing from the list, or the reverse, fails. The callable `REGISTRY` of `defineCallable` must equal the callable subset of the list (LLD 5 API1).
+2. Every `require("...")`, `__require("...")` and dynamic `import("...")` target is a Node builtin (`node:` prefix) or starts with a name in `dist/package.json` `dependencies`.
+3. The bundle loads under plain Node (a `node -e` child doing `require('./dist/index.cjs')` with `GCLOUD_PROJECT=demo-deepcuts`; the child gets only `PATH`, `HOME` and `GCLOUD_PROJECT`; a load failure reports the first lines of Node's stderr; a missing `node`, or a Node that is not major 22, is reported as a problem) and exports every name in a checked-in `functions/exports.json` (the callables and triggers LLDs 3 to 6 declare: the LLD 5 callables plus `beforeEmailSent` when implemented, LLD 4's `identityOutbox`, LLD 3's deletion runner trigger `deletionRunner`, LLD 6's `notifyOutbox`, `reminderSweep` and `housekeeping`). A function added in code but missing from the list, or the reverse, fails (the `__esModule` marker is not a function). `exports.json` is `[]` until #12 adds `ping` and `diag`. That the callable `REGISTRY` of `defineCallable` equals the callable subset of the list (LLD 5 API1) is a separate check owned by #12.
 
 - P6. `bun run build:functions` produces `functions/dist` deterministically from `bun.lock` plus sources, and `check-bundle` passes. `dist/package.json` lists exactly the exact-pinned `RUNTIME_DEPS` and nothing else. A build after a failed `npm install` reinstalls (the `.install-ok` stamp is written only on success), and `dist/.env*` equals the set of `functions/.env*` files byte for byte.
 - P7. The bundle loads and registers its functions under Node 22 with no Bun present on `PATH` (the CI integration job removes Bun from `PATH` after building).
 - Pinning: direct deps are exact; transitive deps are fixed by the committed-per-build `dist/package-lock.json`. The lockfile is generated, not committed; two builds a day apart can differ in transitive versions. Decision: accept this for v1 and upgrade to committing `functions/package-lock.json` copied into `dist` if it ever bites (see Open questions).
 
-`firebase.json`:
+`firebase.json` (only the `functions` block exists so far, from issue #11; the Firestore, Hosting and emulator blocks arrive with #12 to #14; `bun test functions/scripts` asserts the functions block):
 
 ```json
 {
@@ -248,7 +194,7 @@ await import("./check-bundle.ts");
     "source": "functions/dist",
     "codebase": "default",
     "runtime": "nodejs22",
-    "ignore": ["node_modules", "*.log", ".install-ok"],
+    "ignore": ["node_modules", "*.log", ".install-ok", ".env.local", ".env.*.local"],
     "predeploy": ["bun run build:functions"]
   }],
   "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
@@ -385,6 +331,7 @@ export default [
 |---|---|---|---|
 | Engine unit and property (fast-check; E1 to E18, V2 to V5) | `bun test packages` | Bun | every PR |
 | Functions unit | `bun test functions/src` | Bun | every PR |
+| Functions build scripts (`build`, `check-bundle`; fixtures and a fake `npm`) | `bun test functions/scripts` | Bun | every PR (wired into CI by #13 and #16) |
 | Web unit (happy-dom, Testing Library) | `bun run test:web` | Bun, separate process so `happy-dom` globals never reach engine or functions tests | every PR |
 | Rules | `bun run test:rules` | Firestore emulator | every PR |
 | Function integration | `bun run test:integration` | Auth + Firestore + Functions emulators, **Node bundle** | every PR |
@@ -635,7 +582,7 @@ Goal: prove the riskiest seam (Bun monorepo, bundle, Node runtime, IAM custom to
 
 **B. Local proof (no cloud)**
 8. Scaffold the workspace per section 3 with a minimal `functions/src/index.ts` exporting `ping` and `diag` through `defineCallable`; `ping` returns `{ ok: true, node: process.version }`; `diag` calls `getAuth().createCustomToken("seat:probe:probe")` and returns the token (staging-only, deleted in step 17).
-9. `bun install`, `bun run lint`, `bun run typecheck`, `bun run build:functions`. Confirm `functions/dist` contains `index.cjs`, `package.json`, `package-lock.json`, `node_modules/firebase-admin`, `.install-ok` and a copy of `.env.deepcuts-staging`.
+9. `bun install`, `bun run lint`, `bun run typecheck`, `bun run build:functions` (it prints `build: ok` when `check-bundle` passes; run it twice, the second must not install). Confirm `functions/dist` contains `index.cjs`, `package.json`, `package-lock.json`, `node_modules/firebase-admin`, `.install-ok` and a copy of `.env.deepcuts-staging`.
 10. `bun run test:integration` with a one-test suite calling `ping` through the emulator and asserting `node` starts with `v22`. This proves the Node bundle loads under the emulator. Also run `bun run test:web` and `bun scripts/check-web-size.ts` once the web scaffold exists.
 
 **C. Deploy**
