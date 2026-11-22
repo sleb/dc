@@ -39,9 +39,9 @@ const JOIN = { type: "join", playerId: pid(5), name: "Newcomer" };
 const patch = (p: unknown) => ({ type: "updateSettings", patch: p });
 const VARIANTS = { pitch: true, writeIn: true, redraw: false, peoplesChoice: true };
 
-describe("the real registry holds the lobby and writing commands", () => {
-  test("keys are the five lobby types and the three writing types (#21); #22 adds the rest", () => {
-    expect(Object.keys(REGISTRY).sort()).toEqual([...LOBBY_TYPES, "finishWriting", "saveDraft", "startGame"].sort());
+describe("the real registry holds the lobby, writing and round commands", () => {
+  test("keys are the five lobby types, the three writing types (#21) and the three round types (#22); the rest are #23 and later", () => {
+    expect(Object.keys(REGISTRY).sort()).toEqual([...LOBBY_TYPES, "finishWriting", "saveDraft", "startGame", "confirmSubmission", "closeSubmissions", "pickWinner"].sort());
   });
 });
 

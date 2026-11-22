@@ -31,7 +31,8 @@ export function roundGame(o: RoundGameOptions = {}): Game {
   for (let i = 0; i < n; i++) for (let k = 0; k < 7; k++) g = addCard(g, cid(100 * i + k), "red", { hand: pid(i) });
   for (const c of ids(5000, o.redDeck ?? 20)) g = addCard(g, c, "red", "redDeck");
   for (const c of ids(6000, o.redDiscard ?? 0)) g = addCard(g, c, "red", "redDiscard");
-  for (const c of ids(7000, o.greenDeck ?? 20)) g = addCard(g, c, "green", "greenDeck");
+  const scored = (o.scores ?? []).reduce((a, b) => a + b, 0);
+  for (const c of ids(7000, o.greenDeck ?? Math.max(1, n * (o.target ?? 8) - 1 - scored))) g = addCard(g, c, "green", "greenDeck");
   (o.scores ?? []).forEach((s, i) => { for (let k = 0; k < s; k++) g = addCard(g, cid(8000 + 10 * i + k), "green", { scorePile: pid(i) }); });
   g = { ...g, cards: { ...g.cards, [cid(900)]: { kind: "green", text: "the green card" } } };
   const subs = submitted.map((i) => ({ playerId: pid(i), cardId: cid(100 * i + 6) }));

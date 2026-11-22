@@ -101,12 +101,12 @@ export const checkConservation: Checker = ({ before, cmd, result, drafts }) => {
   if (type === "finishWriting" && before !== null) {
     const who = finisher(before, after);
     if (who === undefined) throw new Error("finishWriting accepted but nobody finished");
-    const draft: Draft | undefined = drafts?.[who.id];
-    if (draft !== undefined) {
-      const dRed = countKind(after, "red") - countKind(before, "red");
-      const dGreen = countKind(after, "green") - countKind(before, "green");
-      if (dRed !== draft.red.length || dGreen !== draft.green.length) throw new Error(`finishWriting added ${dRed} red and ${dGreen} green for a draft of ${draft.red.length} and ${draft.green.length}`);
-    }
+    // The step must carry the drafts the command ran with: without them the delta check would pass vacuously. A finisher with no stored draft finished an empty one.
+    if (drafts === undefined) throw new Error("checkConservation needs the step's drafts for a finishWriting");
+    const draft: Draft = drafts[who.id] ?? { red: [], green: [] };
+    const dRed = countKind(after, "red") - countKind(before, "red");
+    const dGreen = countKind(after, "green") - countKind(before, "green");
+    if (dRed !== draft.red.length || dGreen !== draft.green.length) throw new Error(`finishWriting added ${dRed} red and ${dGreen} green for a draft of ${draft.red.length} and ${draft.green.length}`);
   }
 };
 
@@ -133,15 +133,24 @@ export const checkAggregateChanged: Checker = ({ before, cmd, result, actor }) =
     if (!result.value.aggregateChanged && !NO_OP_OK.has(cmdType(cmd))) throw new Error(`${cmdType(cmd)} was accepted without changing the aggregate`);
     return;
   }
+  // Without the actor the check cannot tell which writeProgress the counts are compared to, and would pass vacuously.
+  if (actor === undefined) throw new Error("checkAggregateChanged needs the step's actor for a saveDraft");
   const me = actorPlayer(before, actor);
   const c = cmd as { red?: unknown[]; green?: unknown[] };
-  if (me === undefined || !Array.isArray(c.red) || !Array.isArray(c.green)) return;
+  if (me === undefined || !Array.isArray(c.red) || !Array.isArray(c.green)) throw new Error("an accepted saveDraft has no seated actor or no draft arrays");
   const changed = c.red.length !== me.writeProgress.red || c.green.length !== me.writeProgress.green;
   if (result.value.aggregateChanged !== changed) throw new Error(`saveDraft aggregateChanged is ${result.value.aggregateChanged} but the counts ${changed ? "changed" : "did not change"}`);
   // The command itself emits nothing; settle may flip `paused` (a fixture can store a stale flag), which is the only event allowed.
   if (result.value.events.some((e) => e.t !== "PausedChanged")) throw new Error("saveDraft emitted events");
   if (result.value.draftChanges.length !== 1) throw new Error("saveDraft must return exactly one draft change");
 };
+
+/** Every string value (not key) anywhere in a JSON-like value. */
+function stringLeaves(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (typeof value !== "object" || value === null) return [];
+  return Object.values(value).flatMap(stringLeaves);
+}
 
 /** E8: nothing stored ties a writer to a card. After a finishWriting: the envelope is redacted, `cards` keys are sorted, no event holds a new id or text, and (when play did not begin in the same command) no player holds a new id. `Game` never has `drafts`. */
 export const checkNoAuthorship: Checker = ({ before, cmd, result, drafts }) => {
@@ -155,11 +164,14 @@ export const checkNoAuthorship: Checker = ({ before, cmd, result, drafts }) => {
   const was = new Set(Object.keys(before.cards));
   const added = keys.filter((k) => !was.has(k));
   // `RoundOpened.greenCardId` is the top of the freshly shuffled green deck, public by design and not tied to a writer (the envelope omits the actor), so it may be a just-pooled id.
-  const events = JSON.stringify(v.events.filter((e) => e.t !== "RoundOpened"));
+  if (drafts === undefined) throw new Error("checkNoAuthorship needs the step's drafts for a finishWriting");
+  const events = v.events.filter((e) => e.t !== "RoundOpened");
   const who = finisher(before, v.state);
-  const draft = who === undefined ? undefined : drafts?.[who.id];
-  for (const id of added) if (events.includes(id)) throw new Error(`an event holds the new card id ${id}`);
-  for (const text of [...(draft?.red ?? []), ...(draft?.green ?? [])]) if (events.includes(JSON.stringify(text).slice(1, -1))) throw new Error("an event holds draft text");
+  const draft = who === undefined ? undefined : drafts[who.id];
+  // Whole values: a one-letter draft text is a substring of every event name, so only a string that is exactly a draft text (or an id) counts as a leak.
+  const leaves = new Set(stringLeaves(events));
+  for (const id of added) if (leaves.has(id)) throw new Error(`an event holds the new card id ${id}`);
+  for (const text of [...(draft?.red ?? []), ...(draft?.green ?? [])]) if (leaves.has(text) || leaves.has(text.trim())) throw new Error("an event holds draft text");
   if (JSON.stringify(v.draftChanges).match(/c_[a-z0-9]{10}/) !== null) throw new Error("draftChanges holds a card id");
   if (!v.events.some((e) => e.t === "PlayStarted")) {
     const held = JSON.stringify(v.state.players);

@@ -80,7 +80,7 @@ describe("X1 decide is total", () => {
         const frozen = state === null ? null : deepFreeze(structuredClone(state));
         const r = realDecide(frozen, asCommand(c), ctxFor({ actor, rng: makeRng(`${seed}`) }));
         if (!r.ok) expect((ERROR_CODES as readonly string[]).includes(r.error.code)).toBe(true);
-        else checkAll({ index: 0, seed, before: state, cmd: c, result: r });
+        else checkAll({ index: 0, seed, before: state, cmd: c, result: r, actor, drafts: {} });
       }
     }));
   });
@@ -249,7 +249,7 @@ describe("G1 generator sanity", () => {
       legalCommands(g, {}, table).forEach(({ actor, cmd }, i) => {
         const r = decideFn(g, cmd, ctxFor({ actor, rng: makeRng(`${seed}:${i}`) }));
         if (!r.ok) throw new Error(`legal command rejected: ${JSON.stringify(cmd)} as ${JSON.stringify(actor)} -> ${JSON.stringify(r.error)}`);
-        checkAll({ index: i, seed, before: g, cmd, result: r });
+        checkAll({ index: i, seed, before: g, cmd, result: r, actor, drafts: {} });
       });
     }));
   });

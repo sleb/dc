@@ -27,7 +27,13 @@ const rejected = (g: Game | null, c: object, ctx: Ctx = ctxFor()): Rejection => 
   if (r.ok) throw new Error(`expected a rejection of ${JSON.stringify(c)}`);
   return r.error;
 };
+/** `g` without player `i`'s seat: the player leaves the table and their hand goes back to the red deck, so every card stays in exactly one zone. */
+const unseat = (g: Game, i: number): Game => {
+  const gone = g.players[i];
+  return { ...g, players: g.players.filter((_, k) => k !== i), pools: { ...g.pools, redDeck: [...g.pools.redDeck, ...(gone?.hand ?? [])] } };
+};
 const types = (events: readonly DomainEvent[]): string[] => events.map((e) => e.t);
+const PRIOR = [{ round: 1, judgeId: pid(0), greenCardId: cid(1), plays: [], winnerCardId: cid(2), winnerId: pid(2) }]; // one resolved round behind a score of 1
 const V = 5; // roundGame's changedAtVersion
 const confirm = (cardId: string, extra: object = {}) => ({ type: "confirmSubmission", cardId, expectedVersion: V, ...extra });
 const close = { type: "closeSubmissions", expectedVersion: V };
@@ -93,8 +99,8 @@ describe("R2 the last expected submitter closes the round in the same command (8
 
   test("an expected player who has left no longer holds the round open", () => {
     const g = submitting({ submitted: [0, 2] });
-    const left = { ...g, players: g.players.map((p, i) => (i === 3 ? { ...p, status: "left" as const, hand: [] } : p)) };
-    // p0 and p2 have played and p3 is gone; any aggregate change settles into the close, here p2 ... is already in, so the next accepted command closes it
+    // p0 and p2 have played and p3 is gone (status left, hand back in the deck); the next aggregate change settles into the close
+    const left = { ...unseat(g, 3), players: [...g.players.slice(0, 3), { ...(g.players[3] as Game["players"][number]), status: "left" as const, hand: [] }], pools: { ...g.pools, redDeck: [...g.pools.redDeck, ...(g.players[3]?.hand ?? [])] } };
     const v = accepted(left, { type: "updateSettings", patch: { profanity: "off" } }, as(0));
     expect(types(v.events)).toEqual(["SettingsUpdated", "SubmissionsClosed"]);
   });
@@ -206,7 +212,7 @@ describe("P1 the pitch (7.1, an interim until #25 wires Moderation)", () => {
     g = accepted(g, confirm(cid(300)), as(3)).state;
     g = accepted(g, confirm(cid(6)), as(0)).state; // last expected: closes
     const winning = g.round?.revealOrder?.[0] ?? "";
-    const v = accepted(g, pick(winning), as(1));
+    const v = accepted(g, { ...pick(winning), expectedVersion: g.round?.changedAtVersion }, as(1));
     const detail = v.roundRecords[0]?.playsDetail.find((p) => p.cardId === cid(200));
     expect(detail).toMatchObject({ playerId: pid(2), pitch: "smooth" });
     expect(JSON.stringify(v.events)).not.toContain("smooth");
@@ -224,8 +230,7 @@ describe("R3 closeSubmissions (7.1, 8.3)", () => {
       expect(v.state.players[3]?.hand).toHaveLength(7);
       expect(v.state.players[0]?.hand).toHaveLength(7);
     }
-    const unseated = { ...g, players: g.players.filter((p) => p.id !== pid(0)) };
-    expect(accepted(unseated, close, as(0)).state.round?.phase).toBe("JUDGING");
+    expect(accepted(unseat(g, 0), close, as(0)).state.round?.phase).toBe("JUDGING");
   });
 
   test("a shuffle of the played cards, once", () => {
@@ -255,10 +260,12 @@ describe("R3 closeSubmissions (7.1, 8.3)", () => {
     expect(rejected({ ...g, paused: true }, close, as(1))).toStrictEqual({ code: "PAUSED" });
   });
 
-  test("closing twice: the second is WRONG_PHASE", () => {
+  test("closing twice: the second is WRONG_PHASE, or STALE when it still carries the old expectedVersion (the close changed the round, guard 3 first)", () => {
     const g = submitting({ submitted: [2] });
     const closed = accepted(g, close, as(1)).state;
-    expect(rejected(closed, close, as(1))).toStrictEqual({ code: "WRONG_PHASE" });
+    expect(rejected(closed, { type: "closeSubmissions" }, as(1))).toStrictEqual({ code: "WRONG_PHASE" });
+    expect(rejected(closed, { type: "closeSubmissions", expectedVersion: closed.round?.changedAtVersion }, as(1))).toStrictEqual({ code: "WRONG_PHASE" });
+    expect(rejected(closed, close, as(1))).toStrictEqual({ code: "STALE" });
   });
 });
 
@@ -275,11 +282,15 @@ describe("R4 pickWinner (7.1, 8.3)", () => {
     expect(v.roundRecords).toHaveLength(1);
   });
 
-  test("E14: a second pickWinner of the resolved round is WRONG_PHASE (the next round is SUBMITTING)", () => {
+  test("E14: a second pickWinner of the resolved round is WRONG_PHASE (the next round is SUBMITTING); with the old expectedVersion it is STALE, guard 3 first", () => {
     const g = judging();
     const next = accepted(g, pick(cid(206)), as(1)).state;
-    expect(rejected(next, pick(cid(206)), as(2))).toStrictEqual({ code: "WRONG_PHASE" }); // as a non-judge of round 2 too: phase is guard 4 after guard 2 only
-    expect(rejected(next, pick(cid(206)), as(next.players.findIndex((p) => p.id === next.round?.judgeId)))).toStrictEqual({ code: "WRONG_PHASE" });
+    const again = (who: number, expectedVersion?: number) => rejected(next, { type: "pickWinner", submissionId: cid(206), ...(expectedVersion === undefined ? {} : { expectedVersion }) }, as(who));
+    const judgeNow = next.players.findIndex((p) => p.id === next.round?.judgeId);
+    expect(again(2)).toStrictEqual({ code: "WRONG_PHASE" }); // a non-judge of round 2 too: the phase (guard 4) comes before the role (guard 6)
+    expect(again(judgeNow)).toStrictEqual({ code: "WRONG_PHASE" });
+    expect(again(judgeNow, next.round?.changedAtVersion)).toStrictEqual({ code: "WRONG_PHASE" });
+    expect(again(judgeNow, V)).toStrictEqual({ code: "STALE" });
   });
 
   test("E11: SUBMITTING is WRONG_PHASE; a non-judge seat is NOT_AUTHORIZED; a stranger and the host without a seat are NOT_AUTHORIZED; an unseated or non-judge host is NOT_AUTHORIZED", () => {
@@ -325,17 +336,17 @@ describe("R4 pickWinner (7.1, 8.3)", () => {
   });
 
   test("the rng order of one pickWinner: top-up reshuffle (if dry), activation draws; nothing for the next judge", () => {
-    const g = judging({ redDeck: 1, redDiscard: 4 });
+    const g = judging({ redDeck: 1, redDiscard: 8 }); // two draws needed: one from the deck, then one reshuffle of the discard and the two played cards
     const rng = recordingRng("order");
     accepted(g, pick(cid(206)), as(1, { rng }));
-    expect(rng.log).toEqual([["shuffle", 6]]);
+    expect(rng.log).toEqual([["shuffle", 10]]);
     const wet = recordingRng("order");
     accepted(judging(), pick(cid(206)), as(1, { rng: wet }));
     expect(wet.log).toEqual([]);
   });
 
   test("reaching the target: GameFinished, FINISHED, no round; a pitch-less record", () => {
-    const g = judging({ target: 2, scores: [0, 0, 1, 0] });
+    const g = judging({ target: 2, scores: [0, 0, 1, 0], history: PRIOR });
     const v = accepted(g, pick(cid(206)), as(1));
     expect(types(v.events)).toEqual(["WinnerPicked", "GameFinished"]);
     expect(v.state).toMatchObject({ phase: "FINISHED", winnerId: pid(2), round: null, paused: false });
@@ -344,14 +355,15 @@ describe("R4 pickWinner (7.1, 8.3)", () => {
 
 describe("E15 FINISHED is terminal (8.8)", () => {
   test("every registered command is WRONG_PHASE in FINISHED for the host (who holds a seat), and the finished game stays as it was", () => {
-    const g = roundGame({ target: 2, scores: [0, 0, 1, 0], judge: 1, submitted: [2, 3], phase: "JUDGING" });
+    const g = roundGame({ target: 2, scores: [0, 0, 1, 0], history: PRIOR, judge: 1, submitted: [2, 3], phase: "JUDGING" });
     const finished = accepted(g, pick(cid(206)), as(1)).state;
     expect(finished.phase).toBe("FINISHED");
     const seen = new Set<string>();
     for (const { actor, cmd: c } of junkCommands(finished)) {
-      if (actor.kind !== "user" || actor.uid !== HOST_UID || !Object.hasOwn(REGISTRY, c.type)) continue;
+      if (actor.kind !== "user" || actor.uid !== HOST_UID || !Object.hasOwn(REGISTRY, c.type)) continue; // the host's entries: the host holds p0's seat
       seen.add(c.type);
-      const r = decide(deepFreeze(structuredClone(finished)), c, ctxFor({ actor }));
+      const who = c.type === "join" ? userActor(seatUidOf(GAME_ID, pid(9))) : actor; // join is for the seat uid of its playerId
+      const r = decide(deepFreeze(structuredClone(finished)), c, ctxFor({ actor: who }));
       expect(r).toStrictEqual({ ok: false, error: { code: "WRONG_PHASE" } });
     }
     expect([...seen].sort()).toEqual(Object.keys(REGISTRY).sort());

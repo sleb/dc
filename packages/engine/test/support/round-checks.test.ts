@@ -114,8 +114,7 @@ describe("the new round checkers each fail on a broken result", () => {
   test("E7 checkPlayable: PLAYING below the minimums or with an empty green deck fails", () => {
     const p = picked();
     expect(() => checkPlayable(withValue(p, { state: { ...p.value.state, pools: { ...p.value.state.pools, greenDeck: [] } } }))).toThrow(/empty green deck/);
-    const [firstRed] = Object.keys(p.value.state.cards);
-    const cards = Object.fromEntries(Object.entries(p.value.state.cards).filter(([k]) => k !== firstRed));
+    const cards = Object.fromEntries(Object.entries(p.value.state.cards).filter(([, c]) => c.kind !== "red"));
     expect(() => checkPlayable(withValue(p, { state: { ...p.value.state, cards } }))).toThrow(/minimums/);
   });
 
