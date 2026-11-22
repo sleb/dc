@@ -198,7 +198,7 @@ describe("B1 beginPlay and settle slot 1 (8.2 step 1, 8.7)", () => {
     expect(out.events.map((e) => e.t)).toEqual(["PlayStarted", "PlayerActivated", "PlayerActivated", "PlayerActivated", "RoundOpened"]);
   });
 
-  test("slots 3, 3a and 4 stay no-ops (the round commands are #22's); slot 1 is real", () => {
+  test("slots 3 and 3a stay no-ops (#23); slot 4 has nothing to do while players are out; slot 1 is real", () => {
     expect(SETTLE_SLOTS.map((s) => s.id)).toEqual(["1", "2", "3", "3a", "4", "5"]);
     const g = rounds.beginPlay(readyGame(3), makeRng("x"), 1).state;
     for (const id of ["3", "3a", "4"] as const) {

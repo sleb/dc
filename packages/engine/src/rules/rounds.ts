@@ -1,6 +1,7 @@
 import { EngineInvariantError } from "../errors";
 import { activePlayers } from "../selectors";
-import type { DomainEvent, Game, Player, PlayerId, Rng, Round } from "../types";
+import type { CardId, DomainEvent, Game, Player, PlayerId, Rng, Round, RoundRecord, RoundSummary } from "../types";
+import { topUp } from "./cards";
 import { MIN_PLAYERS } from "./playability";
 import { activateReady } from "./membership";
 
@@ -65,4 +66,96 @@ export function beginPlay(game: Game, rng: Rng, now: number): { state: Game; eve
   if (round === null || round.judgeId === null) throw new EngineInvariantError("beginPlay: no round was opened");
   const playerIds = opened.events.flatMap((e) => (e.t === "PlayerActivated" ? [e.playerId] : []));
   return { state: opened.state, events: [{ t: "PlayStarted", playerIds, firstJudgeId: round.judgeId }, ...opened.events] };
+}
+
+const openRoundOf = (game: Game, what: string): Round => {
+  if (game.round === null) throw new EngineInvariantError(`${what}: no round is open`);
+  return game.round;
+};
+
+/**
+ * Close submissions (8.3, E10): `revealOrder` is one `rng.shuffle` of the submitted card ids, the round becomes JUDGING and `changedAtVersion = version + 1`.
+ * Event `SubmissionsClosed{round, judgeId, reason}`. Players who had not submitted keep their hand. Preconditions (SUBMITTING, at least one submission,
+ * a judge) are the callers' guards, so a violation is an EngineInvariantError.
+ */
+export function closeRound(game: Game, rng: Rng, reason: "allIn" | "closed"): { state: Game; events: DomainEvent[] } {
+  const round = openRoundOf(game, "closeRound");
+  if (round.phase !== "SUBMITTING" || round.submissions.length === 0 || round.judgeId === null) {
+    throw new EngineInvariantError(`closeRound: round ${round.number} is ${round.phase} with ${round.submissions.length} submissions and judge ${String(round.judgeId)}`);
+  }
+  const revealOrder = rng.shuffle(round.submissions.map((s) => s.cardId));
+  return {
+    state: { ...game, round: { ...round, phase: "JUDGING", revealOrder, changedAtVersion: game.version + 1 } },
+    events: [{ t: "SubmissionsClosed", round: round.number, judgeId: round.judgeId, reason }],
+  };
+}
+
+/**
+ * Resolve a JUDGING round for the submission `winnerCardId` (8.3 steps 1 to 5, E5, E6, E14). In order:
+ * 1 the card's owner takes the round's green card into their score pile; 2 a summary joins `history` and a `RoundRecord` is returned
+ * (plays in `revealOrder` order, pitches only in the record); 3 the submitted cards go to `redDiscard`; 4 every active player is topped up to 7 in `joinOrder`
+ * (the red reshuffle happens here, if the deck runs dry); 5 at the target the game is FINISHED, otherwise the next round opens (`openRound`).
+ * rng order: top-up reshuffle, then any activation deal at the boundary; the next judge is `nextJudge` by the cursor and draws nothing.
+ * The caller's guards make `winnerCardId` a revealed card; anything else is an EngineInvariantError.
+ */
+export function resolveRound(game: Game, winnerCardId: CardId, rng: Rng, now: number): { state: Game; events: DomainEvent[]; roundRecords: RoundRecord[] } {
+  const round = openRoundOf(game, "resolveRound");
+  const winning = round.submissions.find((s) => s.cardId === winnerCardId);
+  if (round.phase !== "JUDGING" || round.revealOrder === null || round.judgeId === null || winning === undefined || game.target === null) {
+    throw new EngineInvariantError(`resolveRound: round ${round.number} cannot resolve (${round.phase}, card ${winnerCardId}, target ${String(game.target)})`);
+  }
+  const judgeId = round.judgeId;
+  const winnerId = winning.playerId;
+  const ordered = round.revealOrder.flatMap((id) => round.submissions.filter((s) => s.cardId === id));
+  const greenText = game.cards[round.greenCardId]?.text ?? "";
+  const summary: RoundSummary = {
+    round: round.number,
+    judgeId,
+    greenCardId: round.greenCardId,
+    plays: ordered.map((s) => ({ playerId: s.playerId, cardId: s.cardId })),
+    winnerCardId,
+    winnerId,
+  };
+  const submitters = new Set(round.submissions.map((s) => s.playerId));
+  const record: RoundRecord = {
+    ...summary,
+    green: { id: round.greenCardId, text: greenText },
+    playsDetail: ordered.map((s) => ({ playerId: s.playerId, cardId: s.cardId, text: game.cards[s.cardId]?.text ?? "", ...(s.pitch === undefined ? {} : { pitch: s.pitch }) })),
+    absent: round.roster.filter((id) => id !== judgeId && !submitters.has(id)),
+    resolvedAt: now,
+  };
+  // 1 and 3: the point, and the played cards to the discard.
+  let pools = { ...game.pools, redDiscard: [...game.pools.redDiscard, ...ordered.map((s) => s.cardId)] };
+  let players = game.players.map((p) => (p.id === winnerId ? { ...p, scorePile: [...p.scorePile, round.greenCardId] } : p));
+  // 4: top up every active player, in joinOrder.
+  const hands = new Map<PlayerId, CardId[]>();
+  for (const p of [...players].filter((q) => q.status === "active").sort((a, b) => a.joinOrder - b.joinOrder)) {
+    const out = topUp(pools, p.hand, rng);
+    pools = out.pools;
+    hands.set(p.id, out.hand);
+  }
+  players = players.map((p) => ({ ...p, hand: hands.get(p.id) ?? p.hand }));
+  const picked: DomainEvent = { t: "WinnerPicked", round: round.number, judgeId, winnerId, winnerCardId };
+  const resolved: Game = { ...game, pools, players, round: null, history: [...game.history, summary] };
+  // 5: the target, else the next round.
+  const winner = players.find((p) => p.id === winnerId);
+  if ((winner?.scorePile.length ?? 0) >= game.target) {
+    return { state: { ...resolved, phase: "FINISHED", winnerId, paused: false }, events: [picked, { t: "GameFinished", winnerId }], roundRecords: [record] };
+  }
+  const next = openRound(resolved, rng, now);
+  return { state: next.state, events: [picked, ...next.events], roundRecords: [record] };
+}
+
+/**
+ * Void a round with nothing to judge (8.3): the green card goes to the bottom of `greenDeck`, `RoundVoided`, then `openRound` for the replacement.
+ * The number stays `history.length + 1`. A judge who came from a pass or a leave (`judgeReassigned`) and is still active judges the replacement too;
+ * otherwise the judge rotates from the cursor. A round that still holds submissions is an EngineInvariantError.
+ */
+export function voidRound(game: Game, rng: Rng, now: number, reason: "no_submissions"): { state: Game; events: DomainEvent[] } {
+  const round = openRoundOf(game, "voidRound");
+  if (round.submissions.length > 0) throw new EngineInvariantError(`voidRound: round ${round.number} still holds ${round.submissions.length} submissions`);
+  const keep = round.judgeReassigned && round.judgeId !== null && activePlayers(game).some((p) => p.id === round.judgeId) ? round.judgeId : undefined;
+  const voided: Game = { ...game, round: null, pools: { ...game.pools, greenDeck: [...game.pools.greenDeck, round.greenCardId] } };
+  const next = openRound(voided, rng, now, keep);
+  return { state: next.state, events: [{ t: "RoundVoided", round: round.number, reason }, ...next.events] };
 }

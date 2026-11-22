@@ -66,7 +66,7 @@ describe("C1 closeRound (8.3, E10)", () => {
     const out = rounds.closeRound(g, rng, "closed");
     expect(rng.log).toEqual([["shuffle", 3]]);
     const ref = makeRng("close").shuffle([cid(106), cid(206), cid(306)]);
-    expect(out.state.round).toEqual({ ...g.round, phase: "JUDGING", revealOrder: ref, changedAtVersion: 10 });
+    expect(out.state.round).toEqual({ ...(g.round as NonNullable<Game["round"]>), phase: "JUDGING", revealOrder: ref, changedAtVersion: 10 });
     expect(out.events).toEqual([{ t: "SubmissionsClosed", round: 1, judgeId: pid(0), reason: "closed" }]);
   });
 

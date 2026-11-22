@@ -1,5 +1,5 @@
 import { meetsMinimums, MIN_PLAYERS, totals } from "./rules/playability";
-import { beginPlay } from "./rules/rounds";
+import { beginPlay, closeRound, voidRound } from "./rules/rounds";
 import { waitingFields } from "./rules/waiting";
 import { activePlayers, seated } from "./selectors";
 import type { DomainEvent, Game, Rng } from "./types";
@@ -52,6 +52,37 @@ export function computePaused(g: Game): boolean {
   return false;
 }
 
+/**
+ * Slot 4 (8.2): auto-advance, only in PLAYING and not paused, repeated until stable. A SUBMITTING round in which no expected player (roster, not the judge, still active)
+ * lacks a submission closes `allIn` when it has a submission and is voided when it has none; a JUDGING round with an empty `revealOrder` is voided.
+ * Each close or void starts a new episode. A round with no judge is left to slot 3a (#23). The void branches are unreachable by commands until eviction (#23).
+ */
+const autoAdvance: SettleSlot = {
+  id: "4",
+  run: (start, env) => {
+    let state = start;
+    const events: DomainEvent[] = [];
+    let started = false;
+    for (;;) {
+      const round = state.round;
+      if (state.phase !== "PLAYING" || state.paused || round === null || round.judgeId === null) break;
+      const active = new Set(activePlayers(state).map((p) => p.id));
+      const submitted = new Set(round.submissions.map((s) => s.playerId));
+      const waiting = round.roster.some((id) => id !== round.judgeId && active.has(id) && !submitted.has(id));
+      let step: { state: Game; events: DomainEvent[] };
+      if (round.phase === "SUBMITTING" && !waiting) {
+        step = round.submissions.length >= 1 ? closeRound(state, env.rng, "allIn") : voidRound(state, env.rng, env.now, "no_submissions");
+      } else if (round.phase === "JUDGING" && (round.revealOrder?.length ?? 0) === 0) {
+        step = voidRound(state, env.rng, env.now, "no_submissions");
+      } else break;
+      state = step.state;
+      events.push(...step.events);
+      started = true;
+    }
+    return started ? { state, events, episodeStarted: true } : { state, events: [] };
+  },
+};
+
 const pauseFlag: SettleSlot = {
   id: "2",
   run: (state) => {
@@ -66,7 +97,7 @@ const waitingSlot: SettleSlot = {
   run: (state, env) => ({ state: { ...state, ...waitingFields(state, env.now, env.episodeStarted) }, events: [] }),
 };
 
-export const SETTLE_SLOTS: readonly SettleSlot[] = [beginPlaySlot, pauseFlag, noop("3"), noop("3a"), noop("4"), waitingSlot];
+export const SETTLE_SLOTS: readonly SettleSlot[] = [beginPlaySlot, pauseFlag, noop("3"), noop("3a"), autoAdvance, waitingSlot];
 
 export function runSlots(slots: readonly SettleSlot[], state: Game, rng: Rng, now: number, episodeStarted: boolean): { state: Game; events: DomainEvent[] } {
   let current = state;
