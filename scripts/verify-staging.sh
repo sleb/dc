@@ -239,6 +239,11 @@ v8() {
         | grep -qx "serviceAccount:$CI_SA" || bad "ci-deployer lacks roles/iam.serviceAccountUser on fn-runtime"
     fi
   fi
+  # The functions deploy attaches the App Engine default service account to the Cloud Functions it touches, so the
+  # deployer needs ActAs on that one account (found in #16's first CI deploy). Service-account level, not project-wide.
+  gcloud iam service-accounts get-iam-policy "$PROJECT@appspot.gserviceaccount.com" --format=json 2>/dev/null \
+    | jqr '.bindings[]? | select(.role == "roles/iam.serviceAccountUser") | .members[]' \
+    | grep -qx "serviceAccount:$CI_SA" || bad "ci-deployer lacks roles/iam.serviceAccountUser on $PROJECT@appspot.gserviceaccount.com"
   [ -z "$ci" ] || same_set "ci-deployer project roles" "$(roles_of "serviceAccount:$CI_SA")" $CI_ROLES
   local compute
   compute="serviceAccount:$(project_number)-compute@developer.gserviceaccount.com"
