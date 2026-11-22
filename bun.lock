@@ -49,6 +49,9 @@
     },
     "packages/contracts": {
       "name": "@dc/contracts",
+      "dependencies": {
+        "zod": "4.6.7",
+      },
     },
     "packages/engine": {
       "name": "@dc/engine",
