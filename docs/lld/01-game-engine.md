@@ -20,16 +20,18 @@ packages/engine/
   src/
     index.ts                # the only public entry (section 2.1)
     types.ts                # Game, Player, Card, Round, Settings, ... (section 3)
-    errors.ts               # Rejection, reject() helper, ErrorCode re-export from @dc/contracts
-    rng.ts                  # Rng interface, makeRng(seed)
-    decide.ts               # decide(): dispatch, guards, settle pipeline
+    errors.ts               # EngineInvariantError, reject() helper typed by DETAIL_BY_CODE
+    rng.ts                  # makeRng(seed), rngFromRaw (the sampling rules over a raw uint32 source)
+    registry.ts             # CommandSpec, CreateSpec, Registry, REGISTRY: one row per command (section 5.5)
+    decide.ts               # makeDecide(registry), decide = makeDecide(REGISTRY): dispatch and guards 0 to 9
+    settle.ts               # settle: the named, ordered slots of section 8.2
     roles.ts                # actorRole, seatUid
-    commands/               # one module per command (lifecycle.ts, writing.ts, round.ts, membership.ts, variants.ts, host.ts)
+    commands/               # command modules; lobby.ts (1.3: createGame, updateSettings, join, leave, removePlayer) holds the lobby rows, writing.ts (1.4: startGame, saveDraft, finishWriting) the writing rows, and rounds.ts (1.5, #22: confirmSubmission, closeSubmissions, pickWinner) the round rows
     rules/
-      playability.ts        # rMin, gMin, write counts, lateJoinerRequirement (section 9)
-      rounds.ts             # openRound, closeRound, resolveRound, voidRound, nextJudge
-      cards.ts              # draw, topUp, reshuffle, zone helpers
-      membership.ts         # evictPlayer, activateReady
+      playability.ts        # rMin, gMin, defaultTarget, totals, meetsMinimums, writeCounts (1.3); lateJoinerRequirement arrives with #23 (section 9)
+      rounds.ts             # nextJudge, openRound, beginPlay (1.4, #21); closeRound, resolveRound, voidRound (1.5, #22); reassignJudge arrives with #23
+      cards.ts              # mintCardId (1.2), draw, topUp with the red reshuffle (1.4); other zone helpers arrive with the steps that need them
+      membership.ts         # activateReady (1.4); evictPlayer arrives with #23
       waiting.ts            # waitingOn, episode, reminder fields
       awards.ts             # peoplesChoice, podium
     moderation/
@@ -48,32 +50,36 @@ packages/engine/
 ### 2.1 Public exports
 
 ```ts
-export { decide } from "./decide";
+export { decide } from "./decide";                 // = makeDecide(REGISTRY); makeDecide itself is internal, for tests
+export { EngineInvariantError } from "./errors";   // the one thing decide may throw; the app maps it to an internal error
 export { actorRole, seatUid } from "./roles";
 export { makeRng } from "./rng";
 export { check as checkText } from "./moderation";
 export * from "./selectors";          // section 14
 export * as playability from "./rules/playability";
 export type { Game, GameDrafts, Draft, Player, Card, Round, RoundSummary, RoundRecord, Settings, Vote,
-              DomainEvent, Accepted, Rejection, Ctx, Rng, Actor, Roles } from "./types";
+              DomainEvent, Accepted, DraftChange, Phase, PlayerStatus, RoundPhase, Pools, Submission, Rejection, Ctx, Rng, Actor, Roles, CardKind, Result } from "./types";   // Settings and the id types are re-exported from @dc/contracts; Rejection is the Engine's own (section 5.3)
 export { project, makeProjector, viewerFor, viewersOf, fanOut, toRoundDoc, projectFeed, PROJECTOR_REV } from "./project";   // LLD 2
 export { REMINDER_INTERVAL_MS } from "./rules/waiting";
 // MAX_TOTAL_JOINS and MAX_VOTES come from @dc/contracts (section 9.1)
 ```
+
+As of 1.3 (#20) `index.ts` exports `decide`, `EngineInvariantError`, `makeRng`, `actorRole`, `seatUid`, `REMINDER_INTERVAL_MS`, `playability` (`MIN_PLAYERS`, `HAND`, `NEW_DECK_RED`, `rMin`, `gMin`, `defaultTarget`, `totals`, `meetsMinimums`, `writeCounts`), the `seated` and `activePlayers` selectors and the types above that exist; the rest arrive with the steps that implement them, and `src/index.test.ts` pins the list. 1.4 (#21) adds no public export: `startGame`, `saveDraft` and `finishWriting` are registry rows reached through `decide`, and `draw`, `topUp`, `activateReady`, `nextJudge`, `openRound` and `beginPlay` are internal helpers (`rules/`), imported by `settle.ts` and by the commands. 1.5 (#22) adds none either: `confirmSubmission`, `closeSubmissions` and `pickWinner` are registry rows, and `closeRound`, `resolveRound` and `voidRound` are internal helpers of `rules/rounds.ts`.
 
 ## 3. Domain model
 
 ### 3.1 Identifiers and cards
 
 ```ts
+// GameId, PlayerId, CardId, SubmissionId, Uid and Settings come from @dc/contracts (the Engine re-exports them from types.ts).
 type GameId = string; type PlayerId = string; type CardId = string; type Uid = string;
 type SubmissionId = CardId;   // see below
 type CardKind = "red" | "green";
 interface Card { kind: CardKind; text: string }
 ```
 
-- **PlayerId**: `p_` plus 8 base-32 chars, generated by the application layer for `join` (the seat uid and token need it before the command runs; section 6). The host's own PlayerId is supplied in `createGame`.
-- **CardId**: `c_` plus 10 base-32 chars from `ctx.mintId()`, a port backed by a CSPRNG (section 5.2); the Engine re-calls it on a collision with `cards`. Ids are never derived from the replayable `rng` seed. Not sequential, on purpose: sequential ids assigned at `finishWriting` would group a player's cards and leak authorship (E8). Pool order is also reshuffled on every `finishWriting`.
+- **PlayerId**: `p_` plus 8 base-36 chars (`[a-z0-9]{8}`, as in `@dc/contracts`), generated by the application layer for `join` (the seat uid and token need it before the command runs; section 6). The host's own PlayerId is supplied in `createGame`.
+- **CardId**: `c_` plus 10 base-36 chars (`[a-z0-9]{10}`, as in `@dc/contracts`) from `ctx.mintId()`, a port backed by a CSPRNG (section 5.2); the Engine re-calls it on a collision with `cards`, up to 16 attempts, then throws `EngineInvariantError` (`mintCardId(ctx, cards)` in `rules/cards.ts`; an id that is not `c_` plus 10 of `[a-z0-9]` is a broken port and throws at once; the caller registers each id before minting the next). Ids are never derived from the replayable `rng` seed. Not sequential, on purpose: sequential ids assigned at `finishWriting` would group a player's cards and leak authorship (E8). Pool order is also reshuffled on every `finishWriting`, and `finishWriting` rebuilds `Game.cards` in sorted-key order (a plain code-point sort of the ids), so the registry's insertion order cannot group one author's batch either (E8; a test pins it).
 - **SubmissionId = CardId of the played card.** One less mapping; ids are opaque and uncorrelated with owners. Votes and `pickWinner` carry `(round, cardId)` where round is implicit for the current round.
 - Card text lives once, in `Game.cards`. Every zone holds ids. This makes E5 a set check and keeps text out of events by construction.
 
@@ -98,6 +104,7 @@ interface Player {
   powerUsage: { writeIn: boolean; redraw: boolean };  // server-only; enforces once-per-game (E16). Projected only to its owner (section 14, K-A)
 }
 
+// Settings is the type from @dc/contracts (SettingsSchema); shown here for reference.
 interface Settings {
   targetOverride: number | null;          // 2..10; null = defaultTarget(N at start)
   profanity: "on" | "off";                // host's filter, applies to names, cards, pitches (M2)
@@ -196,7 +203,7 @@ The Engine maintains four top-level fields in `settle` (section 8.2) after every
 | `waitingSince` | `ctx.now` when the episode last started (in `WRITING`: when writing started or play un-paused); `null` when `episode` is `null`. A late joiner with status `writing` joins `waitingOn` in any phase (`WRITING` or `PLAYING`) without changing the episode, `episodeGen` or `waitingSince` of anyone else, so they are included in the next reminder but get no push (they are already in the app). |
 | `reminderDueAt` | `waitingSince + REMINDER_INTERVAL_MS` (24 h) when an episode starts; `markReminded` then advances it to `ctx.now + REMINDER_INTERVAL_MS` (7.4); `null` when `episode` is `null`. |
 
-A new episode starts on: writing start, round open, close (to `JUDGING`), judge change, void, and un-pause. A player submitting or finishing writing, or a late joiner joining or finishing, changes `waitingOn` but not the episode, so the reminder clock is not reset. The scheduler query is `reminderDueAt <= now` on a single-field index with no `paused` or `phase` filter; since `reminderDueAt` is non-null only while the game is waiting on someone (aggregate `phase` `WRITING` or `PLAYING`, not paused), it is already exact (LLD 3 section 7).
+A new episode starts on: writing start, round open, close (to `JUDGING`), judge change, void, and un-pause. `rules/waiting.ts` `waitingFields(game, now, episodeStarted)` implements the table: an episode starts when the caller says so (`episodeStarted`: a void or reopen can repeat the key) or when the computed key differs from the stored `episode` (which covers writing start, un-pause, open, close and judge change by themselves); `episodeGen` rises by one exactly then. A player submitting or finishing writing, or a late joiner joining or finishing, changes `waitingOn` but not the episode, so the reminder clock is not reset. The scheduler query is `reminderDueAt <= now` on a single-field index with no `paused` or `phase` filter; since `reminderDueAt` is non-null only while the game is waiting on someone (aggregate `phase` `WRITING` or `PLAYING`, not paused), it is already exact (LLD 3 section 7).
 
 The Scheduler never writes these fields itself (HLD T1). Advancing `reminderDueAt` after a reminder is the Engine's system command `markReminded` (7.4), run through the ordinary command transaction; it emits no domain event, and when it changes the aggregate the Store writes one `Reminder` outbox row in the same transaction (LLD 3 section 7), which LLD 6 delivers.
 
@@ -246,6 +253,8 @@ interface Rng {
 declare function makeRng(seed: string): Rng;  // xmur3(seed) -> sfc32; pure, no globals
 ```
 
+`int(1)` is 0 and consumes no draw; an invalid maximum (not an integer in 1 to 2^32) throws `EngineInvariantError`. `rngFromRaw(seed, nextU32)` is the same sampling over any raw uint32 source, so tests pin rejection sampling and the draw order with a scripted source; golden vectors in `test/rng.test.ts` pin the `makeRng` stream as a regression pin (the in-test reference is a copy of the implementation, not an independent check; the literals were generated by the same algorithm).
+
 - The application layer draws a fresh 128-bit seed per request from a CSPRNG (outside the Engine), calls `makeRng(seed)`, and stores `seed` in the EventDoc for commands that mint no card ids. Replaying `decide(stateBefore, cmd, {now, rng: makeRng(seed), ...})` reproduces the shuffle order and the first judge exactly (debugging). Card ids are not reproducible: they come from `ctx.mintId()`, a separate CSPRNG port the application supplies, whose output is never stored with a seed. For `finishWriting`, `importDeck` and `writeIn` (the commands that mint ids), the EventDoc omits `seed` and `actorPlayerId` entirely, because a replayable shuffle of a pool with a known appended batch would reveal which cards that actor wrote (E8). The command payload (which can hold card text) is deliberately not logged either, so reproducing needs the payload from the client or the idempotency ledger.
 - Consumption order is part of the contract (tests pin it): within a command, draws happen in the order the algorithms in section 8 list them. A command that does not shuffle or mint ids never touches `rng`.
 - Uses: deck shuffles (`beginPlay`, `finishWriting`, red reshuffle, returned hands and score piles), first judge (`rng.int(active.length)` over actives sorted by `joinOrder`), `revealOrder` at close. Nothing else is random.
@@ -255,9 +264,10 @@ declare function makeRng(seed: string): Rng;  // xmur3(seed) -> sfc32; pure, no 
 
 Every command runs these checks in this order; the first failure is the rejection.
 
-1. **Existence and terminal state.** `state === null` (non-create) is `NOT_FOUND`. `ENDED` rejects everything except `deleteGame` with `WRONG_PHASE`.
+0. **Known command.** A `cmd` that is not an object, or whose `type` is not a registered command (an own key of the registry), is `INVALID_ARGUMENT`, before anything else, so a junk command learns nothing about the state (not even `NOT_FOUND`).
+1. **Existence and terminal state.** `state === null` (non-create) is `NOT_FOUND`. `ENDED` rejects everything except `deleteGame` with `WRONG_PHASE` (no detail). The command that creates the aggregate (`createGame`) takes a different path: a non-null state is `WRONG_PHASE` (no detail), then only steps 2, 7 and 8 apply.
 2. **Actor class.** Is the actor eligible for this command at all (host-only, seated-only, anyone)? Else `NOT_AUTHORIZED`. A non-member learns nothing else.
-3. **Staleness.** If `cmd.expectedVersion` is present, the command is a round command (`confirmSubmission`, `writeIn`, `closeSubmissions`, `pickWinner`, `passJudging`) and `state.round` exists and `expectedVersion < state.round.changedAtVersion`, return `STALE`. A bare "other players moved" version bump does not make a command stale; only a change to the round's judge, phase or voiding does (the HLD's example: the host passed judging).
+3. **Staleness.** If `cmd.expectedVersion` is present, the command is a round command (`confirmSubmission`, `writeIn`, `closeSubmissions`, `pickWinner`, `passJudging`) and `state.round` exists and `expectedVersion < state.round.changedAtVersion`, return `STALE`. A missing or non-integer `expectedVersion` (absent, NaN, a fraction, a string) is skipped at this guard (not stale); for the stale-checked commands, which the contracts envelope requires it for, guard 7 rejects it (payload, `INVALID_ARGUMENT`, in #22), so it cannot bypass `STALE`. A bare "other players moved" version bump does not make a command stale; only a change to the round's judge, phase or voiding does (the HLD's example: the host passed judging).
 4. **Phase** (`WRONG_PHASE`).
 5. **Pause** (`PAUSED`) for commands marked "needs play" in 7.1.
 6. **Fine role** (judge vs non-judge, roster membership): `NOT_AUTHORIZED`.
@@ -273,11 +283,16 @@ type ErrorCode = /* HLD 4.3 */ "NOT_AUTHORIZED" | "WRONG_PHASE" | "STALE" | "NOT
   /* PROPOSED additions, open question 1 */ | "NOT_PLAYABLE" | "INVALID_ARGUMENT" | "VARIANT_UNAVAILABLE";
 interface Rejection { code: ErrorCode; detail?: string }   // detail: a short fixed enum string, never hidden state
 ```
+This `Rejection` is the Engine's own and is not the wire `Rejection` of `@dc/contracts` (which adds `ok`, `version`, `sv` and `retryAfterMs`; LLD 5 maps one to the other). `ErrorCode` and the closed `detail` sets (`DETAIL_BY_CODE`) are the contracts'; `reject(code, detail?)` in `errors.ts` builds a rejection with the detail typed per code, so a detail that does not belong to its code fails `tsc`.
 `RATE_LIMITED` is never produced by the Engine.
 
 ### 5.4 Time (T3)
 
 `ctx.now` is read only to write: `createdAt`, `Round.openedAt`, `RoundRecord.resolvedAt`, `waitingSince`, `reminderDueAt`. `REMINDER_INTERVAL_MS = 86_400_000` is an Engine constant. No guard, transition or selection depends on `now` (X5: two runs with different `now` produce equal states after zeroing those five fields).
+
+### 5.5 Registry and `CommandSpec` (1.2)
+
+`decide = makeDecide(REGISTRY)`. `registry.ts` holds one row per command, added by the step that implements it; the registry holds the five lobby commands since 1.3 (#20) and `startGame`, `saveDraft` and `finishWriting` since 1.4 (#21), and `confirmSubmission`, `closeSubmissions` and `pickWinner` since 1.5 (#22); `writeIn`, `redraw` and `castVote` are M7 (steps 7.2 to 7.4), `importDeck` is M9 and `deleteGame` is M3 (#36, with the cascade); none is an M1 step, so they stay unregistered until then (guard 0, `INVALID_ARGUMENT`) and the E16, heavy-redraw X6, castVote-X9, importDeck and accept-half-of-E15 proofs move with them (see #54, deferred proofs), `passJudging` and `endGame` are #23 and later, and the pipeline's ladder is also proved with fixture specs through `makeDecide(fixtureRegistry)`. A row maps the guard ladder of 5.3 to members: `actor` (2), `stale` (3, the round commands), `phases` and `phase` (4), `needsPlay` (5), `role` (6), `payload` (7), `moderation` (8), `preconditions` (9), and `handle`. `handle` returns `{state, events, draftChanges, roundRecords, redactEnvelope, aggregateChanged}` (optionally `deleteGame` and `episodeStarted`); `decide` then runs `settle` with `ctx.now` and `ctx.rng` and bumps `version` once, so handlers set `round.changedAtVersion = state.version + 1` and never touch `version`. Guard 2 runs before the payload is validated, so it reads `cmd` fields only defensively. `createGame` is a `CreateSpec` (no state, guards 2, 7 and 8; the handler returns `version: 0` and `decide` sets 1). There is no catch-all `try/catch` in `decide`: only `EngineInvariantError` may escape, from a handler or a port.
 
 ## 6. Roles
 
@@ -293,6 +308,7 @@ declare function actorRole(game: Game, actor: Actor): Roles;
 declare function seatUid(gameId: GameId, playerId: PlayerId): Uid;   // `seat:${gameId}:${playerId}` (tech-stack section 4; LLD 4 ratifies)
 ```
 
+- The system actor (`markReminded`) has no seat and is not a host; it is not a `spectator` either (`spectator` means a user without a seat).
 - Resolution is by `uid` only, exactly as tech-stack section 4: the host's seat has `uid = hostId`, so one uid gives `host: true` and `playerId` set. Host powers never depend on having a seat (the host may `leave` as a player and still run the game).
 - A rejoin on a new device keeps the same uid (LLD 4), so no Engine concept of sessions exists.
 - `join` is the one command whose actor is not yet a member: the application mints `playerId` and the seat uid first, and the Engine requires `actor.uid === seatUid(game.id, payload.playerId)` (else `NOT_AUTHORIZED`). The Engine therefore stays free of id generation for players while still preventing a caller from joining under someone else's uid.
@@ -331,9 +347,9 @@ type Command =
 
 | Command | Actor | Phases | Extra preconditions and rejections |
 |---|---|---|---|
-| `createGame` | `uid === hostId` | (state null) | Host name passes Moderation (`CONTENT_REJECTED`); settings in range (`INVALID_ARGUMENT`) |
+| `createGame` | `uid === hostId` | (state null) | Host name passes Moderation (`CONTENT_REJECTED`; not wired until #25); settings in range, ids well-formed, and no `writeCountsOverride` (no deck exists yet) (`INVALID_ARGUMENT`). A non-null state: `WRONG_PHASE`, no detail (decided 1.2) |
 | `updateSettings` | host | LOBBY: any key. WRITING, PLAYING: `profanity` only | Other keys outside LOBBY: `WRONG_PHASE`. Ranges: `INVALID_ARGUMENT`. `writeCountsOverride` requires an imported deck: `INVALID_ARGUMENT`. A patch that names `variants` or `spectators` replaces that nested object wholesale (not merged key by key), so the patch must carry the whole object |
-| `join` | uid = seatUid | LOBBY, WRITING, PLAYING | `ROOM_FULL` if seated >= 10, or (detail `join_cap`) if `totalJoins >= MAX_TOTAL_JOINS` (50, from `@dc/contracts`); `NAME_TAKEN` (case-insensitive after normalization, among seated); `CONTENT_REJECTED`; FINISHED: `WRONG_PHASE` |
+| `join` | uid = seatUid | LOBBY, WRITING, PLAYING | Guard 9 order: `NAME_TAKEN` (case-insensitive after normalization, among seated), then `ROOM_FULL` if seated >= 10 (no detail), then `ROOM_FULL` detail `join_cap` if `totalJoins >= MAX_TOTAL_JOINS` (50, from `@dc/contracts`); `CONTENT_REJECTED` (guard 8, #25); FINISHED: `WRONG_PHASE`. A `playerId` already seated, a malformed id or a non-string name: `INVALID_ARGUMENT` |
 | `leave` | seated player | LOBBY, WRITING, PLAYING | Evicts the actor (8.5). FINISHED: `WRONG_PHASE` |
 | `removePlayer` | host | LOBBY, WRITING, PLAYING | Target must be seated (`NOT_FOUND`); evicts (8.5). Host may remove their own seat |
 | `removeCard` | host | LOBBY, WRITING, PLAYING | Unknown id, or a card that has not been shown to the table (8.6): `NOT_FOUND`, no detail (the two cases are indistinguishable, so hidden cards are not probeable). Would drop totals below `G_min`/`R_min` at current N, once the game is past LOBBY: `NOT_PLAYABLE` (detail `below_minimum`) |
@@ -341,7 +357,7 @@ type Command =
 | `startGame` | host | LOBBY | seated >= 3 and playability resolvable (`NOT_PLAYABLE`, detail `players` or `minimums`) |
 | `saveDraft` | seated, status `writing` | WRITING, PLAYING (late joiner) | Counts <= `writeTarget` (`INVALID_ARGUMENT`); every text passes Moderation as `card` (`CONTENT_REJECTED`). Status `ready`: `WRONG_PHASE` (detail `finished`) |
 | `finishWriting` | seated, status `writing` | WRITING, PLAYING (late joiner) | Draft counts equal `writeTarget` exactly (`NOT_PLAYABLE`, detail `incomplete`) |
-| `confirmSubmission` | seated, non-judge, in `round.roster` | PLAYING/SUBMITTING | Needs play. Not in roster: `NOT_AUTHORIZED` (detail `sitting_out`). Already submitted: `ALREADY_SUBMITTED`. Card not in own hand: `NOT_IN_HAND`. Pitch requires variant (`VARIANT_UNAVAILABLE`), <= 140 chars, Moderation `pitch` |
+| `confirmSubmission` | seated, non-judge, in `round.roster` | PLAYING/SUBMITTING | Needs play. Not in roster: `NOT_AUTHORIZED` (detail `sitting_out`). Already submitted: `ALREADY_SUBMITTED`. Card not in own hand: `NOT_IN_HAND`. Pitch requires variant (`VARIANT_UNAVAILABLE`), <= 140 code points, Moderation `pitch` |
 | `writeIn` | as `confirmSubmission` | PLAYING/SUBMITTING | Needs play. Variant on and unused (`VARIANT_UNAVAILABLE`); `ALREADY_SUBMITTED`; Moderation `card` |
 | `redraw` | seated active, no submission | PLAYING/SUBMITTING | Needs play. Variant on and unused (`VARIANT_UNAVAILABLE`); has submission: `ALREADY_SUBMITTED` |
 | `closeSubmissions` | judge or host | PLAYING/SUBMITTING | Needs play. Zero submissions: `NOT_PLAYABLE` (detail `no_submissions`) |
@@ -353,6 +369,9 @@ type Command =
 | `markReminded` | system | WRITING, PLAYING | `episode` must equal `state.episode`, `episodeGen` must equal `state.episodeGen`, and `now >= reminderDueAt`, else accepted as a no-op (`aggregateChanged: false`, nothing written) |
 
 Notes on the table:
+- **Interim, until #23 (1.3 as built):** `join`, `leave` and `removePlayer` are `phases: ["LOBBY"]` only; in WRITING and PLAYING they give `WRONG_PHASE` until #23 widens them and adds eviction and `lateJoinerRequirement`. In LOBBY the host may `leave` (the seat record is deleted; host powers rest on `hostId`) and may `removePlayer` their own seat. The name key behind `NAME_TAKEN` is a private lowercase, whitespace-stripped key that #25 replaces with the Moderation `normalize`; until #25 `createGame` and `join` have no guard 8 and store names trimmed. `updateSettings` enforces "`writeCountsOverride` requires an imported deck" as "the card registry is non-empty" (`importDeck` lands in M9); a patch with no keys is accepted as `SettingsUpdated{keys: []}`; unknown patch keys are ignored.
+- **Interim, until #25 and #23 (1.4 as built):** `saveDraft` has no guard 8: it stores `trim()`med text and the Engine enforces no `TEXT_LIMITS`, non-empty or profanity rule (the contracts' `Text` is `z.string().max(400)` with no minimum and no trim). Because `finishWriting` does not re-run Moderation (M2), whatever `saveDraft` stored goes straight into the pool; M1 and `CONTENT_REJECTED` for cards are #25's. Guard 2 for `saveDraft` and `finishWriting` is "seated" (any non-departed seat); a `ready` or `active` seat is `WRONG_PHASE` detail `finished` (guard 4, after the phase list), and the system actor, a spectator and a host without a seat are `NOT_AUTHORIZED`. A seat with no `writeTarget` may save nothing (`INVALID_ARGUMENT` on any non-empty draft) and can never finish (`NOT_PLAYABLE` `incomplete`). The PLAYING late-joiner paths of `saveDraft` and `finishWriting` are reachable only on fixture states until #23 widens `join`.
+- **Interim, until #25 and #23 (1.5 as built):** the three round commands are `phases: ["PLAYING"]`, `stale` and `needsPlay`. Guard 2: `confirmSubmission` and `pickWinner` need a seat (any non-departed one), `closeSubmissions` a seat or the host; a stranger, a spectator, the system actor and an unseated host are `NOT_AUTHORIZED` and learn nothing else, and a seated non-judge with a stale version gets `STALE`. Guard 4: a missing round or the wrong round phase is `WRONG_PHASE` (so a repeat `pickWinner` of a resolved round is `WRONG_PHASE`, or `STALE` when it still carries the old `expectedVersion`, because guard 3 runs first). Guard 6: the judge is `NOT_AUTHORIZED` (no detail) for `confirmSubmission`; a seat that is not on `round.roster` is `NOT_AUTHORIZED` `sitting_out`; `closeSubmissions` is the judge or the host; `pickWinner` the judge only (a host who is not the judge is `NOT_AUTHORIZED`). Guard 7: `expectedVersion` is required and must be an integer (all three, matching the contracts envelope; absent, NaN, Infinity and fractions are `INVALID_ARGUMENT`, only after guards 2 to 6), `cardId` and `submissionId` must be strings, `pitch` a string of at most 140 code points after trimming (`TEXT_LIMITS.pitch`, counted as `[...trimmed].length`, not UTF-16 units). Guard 9: `ALREADY_SUBMITTED`, then `NOT_IN_HAND` (one rejection for an unknown card, another player's card, a deck card, the round's green card or a malformed id), then `VARIANT_UNAVAILABLE` for a pitch when `variants.pitch` is off; `closeSubmissions` with no submission is `NOT_PLAYABLE` `no_submissions`; `pickWinner` with an id not in `revealOrder` is `NOT_FOUND` with no detail, identical for an unknown id and an id of another round. A **pitch** has no guard 8 until #25: it is stored trimmed on the `Submission`, an empty or all-blank pitch counts as no pitch (a ruling in #22), and it is copied into `RoundRecord.playsDetail` and into no event, no `history` entry and no state outside the open round. When #25 wires Moderation, an over-long pitch becomes `CONTENT_REJECTED` `TOO_LONG` at guard 8 and the guard 7 length check can go. `writeIn`, `redraw` and `castVote` are M7, `importDeck` is M9 and `deleteGame` is M3 (#54, deferred proofs): until they register they are `INVALID_ARGUMENT` at guard 0. The commands set `round.changedAtVersion = version + 1` only when the round's phase or judge changes (a close or a new round), never on a plain confirm.
 - Event docs and versions (decided, P-E2/P-E3): every accepted command with `aggregateChanged: true` writes one `events/{version}` doc, including `markReminded` and a count-only `saveDraft`, whose `events` is `[]`. Versions are therefore contiguous with the aggregate version and `events/` has no gaps. Commands with `aggregateChanged: false` write no event doc and take no version.
 - `saveDraft` row: any player with status `writing` may save, in `WRITING` or (a late joiner) in `PLAYING`; a player with status `ready` calling `saveDraft` gets `WRONG_PHASE` (detail `finished`) in either phase. Finished writing is final for v1. `saveDraft` does not need play, so it works while paused.
 - E15: in FINISHED only `castVote`, `endGame`, `deleteGame` are accepted. `castVote` in FINISHED deviates from E15's literal text so the final round can be voted on (open question 4).
@@ -365,13 +384,13 @@ Events are named in section 11. "Settle" is the post-step in 8.2, run after ever
 |---|---|---|
 | `createGame` | Game in LOBBY, `version = 1`, host seated as `joinOrder 0`, status `writing`, `writeTarget: null`; defaults for `settings` (profanity `on`, all variants off, spectators off) | `GameCreated` |
 | `updateSettings` | Shallow merge of the patch: top-level keys replace, so nested `variants` and `spectators` objects are replaced, not merged (a `null` target override clears it) | `SettingsUpdated{keys}` |
-| `join` | `totalJoins += 1`. Append player, `joinOrder = max+1`, status `writing`. In LOBBY `writeTarget: null`. In WRITING or PLAYING `writeTarget = lateJoinerRequirement` (9.4) | `PlayerJoined{playerId}` |
+| `join` | `totalJoins += 1`. Append player, `joinOrder = max(totalJoins, every joinOrder so far) + 1` (so an order is never reused after a LOBBY leaver's record is deleted), status `writing`. In LOBBY `writeTarget: null`. In WRITING or PLAYING `writeTarget = lateJoinerRequirement` (9.4) | `PlayerJoined{playerId}` |
 | `leave`, `removePlayer` | `evictPlayer` (8.5); in LOBBY the player record is deleted instead | `PlayerLeft{playerId}` or `PlayerRemoved{playerId}`, then the evict side-effect events |
 | `removeCard` | Only for a card shown to the table (8.6). Delete from registry and from whichever zone holds it; special cases in 8.6 | `CardRemoved{cardId, kind}` (+ `RoundVoided`/`JudgeChanged` side effects) |
 | `importDeck` | Mint ids, add to `redDeck`/`greenDeck`, shuffle | `DeckImported{red, green}` (counts) |
-| `startGame` | `phase = WRITING`; `target = targetOverride ?? defaultTarget(N)`; `writeCounts` per 9.3; every seated player gets `writeTarget = writeCounts`; players whose target is `{0,0}` become `ready` | `WritingStarted{target, writeCounts}` (episode `"writing"` starts in settle); if all ready, settle emits the play-start events |
-| `saveDraft` | Return `draftChanges` replacing the draft (trimmed, normalized texts); update `writeProgress`; `aggregateChanged` only if counts changed | none |
-| `finishWriting` | Mint ids for draft cards, register, append to decks, **reshuffle both decks** (`rng`), `status = ready`, `draftChanges: [{playerId, null}]` | `PlayerFinishedWriting{playerId}` |
+| `startGame` | `phase = WRITING`; `target = targetOverride ?? defaultTarget(N)`; `writeCounts` per 9.3; every seated player gets `writeTarget = writeCounts`; players whose target is `{0,0}` become `ready`. A `writeCounts` result of `"invalid"` is `INVALID_ARGUMENT` at guard 7, ahead of the player count (guard 9); `"unmet"` is `NOT_PLAYABLE` `minimums`, after `players` | `WritingStarted{target, writeCounts}` (episode `"writing"` starts in settle); if all ready, settle emits the play-start events |
+| `saveDraft` | Return `draftChanges` replacing the draft (texts trimmed; normalization joins them with Moderation in #25); update `writeProgress`; `aggregateChanged` only if the counts differ from `Player.writeProgress` (not from the stored draft document), in which case the version bumps and `events` is `[]` | none (settle may still emit `PausedChanged`) |
+| `finishWriting` | Mint ids for draft cards (red then green, in draft order, each registered before the next), register them in `cards` (rebuilt in sorted-key order, 3.1), append to decks, **reshuffle both decks** (`rng`, red then green, unconditionally), `status = ready`, `writeProgress = writeTarget`, `draftChanges: [{playerId, null}]`, `redactEnvelope: true`. The draft is read from `ctx.drafts[actor]`, never from `writeProgress`; a missing or malformed draft counts as empty | `PlayerFinishedWriting{playerId}`, then (when this was the last writer) the play-start events from settle |
 | `confirmSubmission` | Remove card from hand, append `Submission`; if `expected` all submitted, settle closes the round | `SubmissionConfirmed{round, playerId}` (+ `SubmissionsClosed` from settle) |
 | `writeIn` | Mint red card, register, append `Submission{..., writeIn: true}` directly (never enters a hand), `powerUsage.writeIn = true`; same follow-up as above | `SubmissionConfirmed{round, playerId}` (identical to a hand play; K-A) |
 | `redraw` | Hand to `redDiscard`; draw 7 (8.4); `powerUsage.redraw = true` | `HandRedrawn{playerId}` |
@@ -407,40 +426,40 @@ LOBBY | WRITING | PLAYING | FINISHED --endGame--> ENDED
 
 ### 8.2 `settle` (runs after every aggregate-changing command, before `version` is bumped)
 
-Applied in this order; each step may emit events; the whole is deterministic in `rng` consumption.
+Applied in this order; each step may emit events; the whole is deterministic in `rng` consumption. `settle.ts` names the slots `1`, `2`, `3`, `3a`, `4`, `5` in an ordered list (`SETTLE_SLOTS`, run by `runSlots`); each takes the state and `{rng, now, episodeStarted}` and returns `{state, events, episodeStarted?}`, and a slot that starts an episode raises `episodeStarted` for slot 5. Slots 2 and 5 are real since 1.2 and slot 1 since 1.4 (when every seated player is ready but the minimums fail at the frozen target, slot 1 does nothing and the game stays in WRITING; #23 owes the test for this, with the late-join requirement of 9.4) (#21: `beginPlay`, with `openRound`, `nextJudge`, `draw`, `topUp` and `activateReady`, all in `rules/`); slot 4 since 1.5 (#22: `closeRound`, `resolveRound`, `voidRound`). **Deviation (decided in #22, a change from the earlier wording that gave slots 3 and 3a and `reassignJudge` to #22):** slots 3 and 3a and `reassignJudge` pair with `passJudging` and eviction, so they are #23's; until then they stay no-ops in `SETTLE_SLOTS` with their ids and order unchanged, and nothing in #22 can leave a round without a judge. Slot 4's loop is capped (`MAX_ADVANCE_STEPS`, 16, overridable by `SettleEnv.maxAdvanceSteps`, which tests exercise by calling the slot directly; `settle` does not plumb it): a step beyond the cap throws `EngineInvariantError` instead of hanging.
 
-1. **Begin play.** If `phase == WRITING`, `seated.length >= 3`, every seated player is `ready`, and `meetsMinimums(totals, N, target)` (9.2): run `beginPlay` (8.7).
+1. **Begin play.** If `phase == WRITING`, `target` and `writeCounts` are set, `seated.length >= 3`, every seated player is `ready`, and `meetsMinimums(totals, N, target)` (9.2): run `beginPlay` (8.7) and raise `episodeStarted` (the first round is a new episode). A null `target` or `writeCounts` (a state that never went through `startGame`) skips the slot, so settle stays total.
 2. **Pause flag.** Recompute `paused` (8.1); emit `PausedChanged` on change.
 3. **Recovery activation.** If `PLAYING` and `paused` and `active + ready >= 3`: `activateReady` all ready players now (they are dealt 7, joined in 8.5), then recompute `paused`. They are **not** added to `round.roster`, so they sit out the in-flight round. (Resolves the otherwise-deadlocked case where nobody could reach the next boundary; open question 3.)
 3a. **Judge assignment.** If `PLAYING`, not paused, and `round.judgeId == null` (the judge was evicted while paused with no one to take over, 8.3): run `reassignJudge("resumed")` with no outgoing judge, which picks `nextJudge(active, judgeCursor)`.
-4. **Auto-advance** (only if `PLAYING` and not paused), repeated until stable:
+4. **Auto-advance** (as built in 1.5, #22; only if `PLAYING`, not paused and the round has a judge, repeated until stable; a close or a void raises `episodeStarted`). "Expected" is the roster minus the judge, restricted to players who are still active (a roster player who has left does not hold the round open, as in `waitingOn`). The void branches are unreachable from the commands until eviction exists (#23), so they are fixture-tested:
    - `SUBMITTING` and no `expected` player lacks a submission: if `submissions.length >= 1` then `closeRound("allIn")`, else `voidRound("no_submissions")`.
    - `JUDGING` and `revealOrder` is empty: `voidRound("no_submissions")`.
 5. **Waiting fields** (4.2): recompute `waitingOn`, `episode`, `waitingSince`, `reminderDueAt`.
 
 ### 8.3 Rounds
 
-`openRound(state, rng, now, judge?)` (precondition: `active >= 3`, `greenDeck` non-empty, else `EngineInvariantError`):
+`openRound(state, rng, now, judge?)` (as built in 1.4, #21, with `nextJudge` and `beginPlay`; `judge` is a `PlayerId`; it sets `round` and `judgeCursor` and leaves `phase` to the caller; precondition after step 1: `active >= 3`, `greenDeck` non-empty, else `EngineInvariantError`):
 1. Activate ready players at this boundary (8.5), dealing in `joinOrder` (E18).
 2. If `judge` is given (only by `voidRound`, below) use it; else `judge = nextJudge(active, judgeCursor)`. Either way `judgeCursor = judge.joinOrder`.
 3. `greenCardId = greenDeck.shift()`; `roster = active ids`; `number = history.length + 1`; `phase = SUBMITTING`; `judgeReassigned = false`; `changedAtVersion = state.version + 1`.
 4. Event `RoundOpened{round, judgeId, greenCardId, expected}` where `expected` = roster minus judge.
 
-`nextJudge(players, cursor)`: among active players sorted by `joinOrder`, the one with the smallest `joinOrder > cursor`, else the smallest overall (wrap). If `cursor == null`, `rng.int(active.length)` over the sorted list (first judge, random, E12). Using `joinOrder` rather than list index keeps rotation stable when the previous judge has left.
+`nextJudge(players, cursor, rng)` (returns the `Player`): among active players sorted by `joinOrder`, the one with the smallest `joinOrder > cursor`, else the smallest overall (wrap). If `cursor == null`, `rng.int(active.length)` over the sorted list (first judge, random, E12). Using `joinOrder` rather than list index keeps rotation stable when the previous judge has left.
 
-`closeRound(reason)`: `revealOrder = rng.shuffle(submissions.map(s => s.cardId))` (E10); `phase = JUDGING`; `changedAtVersion = state.version + 1`; event `SubmissionsClosed{round, judgeId, reason}` with `reason in {"allIn","closed"}`. Players in `expected` who had not submitted keep their hand and sit out.
+`closeRound(state, rng, reason)` (as built; precondition SUBMITTING, at least one submission and a judge, else `EngineInvariantError`): `revealOrder = rng.shuffle(submissions.map(s => s.cardId))` (E10), one shuffle; `phase = JUDGING`; `changedAtVersion = state.version + 1`; event `SubmissionsClosed{round, judgeId, reason}` with `reason in {"allIn","closed"}`. Players in `expected` who had not submitted keep their hand and sit out.
 
-`resolveRound(winnerCardId)` (E11, E14), steps in order:
+`resolveRound(state, winnerCardId, rng, now)` (E11, E14; returns `{state, events, roundRecords}`; the card must be a revealed submission of this JUDGING round and `target` must be set, else `EngineInvariantError`), steps in order:
 1. Winner = the submission owner; `scorePile.push(greenCardId)`. The judge cannot win (judge has no submission; E12).
-2. Build `RoundRecord`/`RoundSummary`; append summary to `history`; emit `roundRecords`.
+2. Build `RoundRecord`/`RoundSummary`; append summary to `history`; emit `roundRecords`. As built: `plays` and `playsDetail` are in `revealOrder` order (the owner is public from here on), `absent` is the roster minus the judge minus the submitters, `resolvedAt = now`, and a pitch is copied into `playsDetail` only.
 3. All submitted cards go to `redDiscard` (write-in cards too; they circulate afterwards like any card). The `RoundRecord`, `RoundSummary` and `history` carry no write-in marker (K-A): a resolved write-in play looks exactly like a hand play.
 4. `topUp`: every active player is drawn up to 7 in `joinOrder` (8.4). (Superset of "each player who played"; it also repairs hands lowered by `removeCard`, E6.)
 5. If `winner.scorePile.length >= target`: `phase = FINISHED`, `winnerId`, `round = null`, `paused = false`, events `WinnerPicked`, `GameFinished{winnerId}`; stop. Otherwise `round = null` and `openRound`. Events `WinnerPicked{round, judgeId, winnerId, winnerCardId}`, then `RoundOpened`.
-Ties cannot occur (one winner per round); gameplay.md's tie sentence is vacuous (open question 8).
+As built, the rng order of one `pickWinner` is: the top-up reshuffle (only if the red deck runs dry), then any activation deal at the boundary; the next judge is `nextJudge` from the cursor and draws nothing. Ties cannot occur (one winner per round); gameplay.md's tie sentence is vacuous (open question 8).
 
-`voidRound(reason)`: used only when a round has nothing to judge. The green card returns to the **bottom** of `greenDeck` (so E7's sufficiency is unaffected), submissions (none) are discarded, `round = null`, `RoundVoided{round, reason}`, then `openRound`. If the voided round's `judgeReassigned` is true (its judge came from `passJudging` or from a judge `leave`/`removePlayer`) and that judge is still active, `openRound` is called with `judge = round.judgeId` explicitly, so the passed-to player judges the replacement round (gameplay.md "Stalled judge"; the cursor already points at them, so `nextJudge` would skip them). Otherwise `openRound` rotates normally from `judgeCursor`. Round numbers stay contiguous because the number is `history.length + 1`.
+`voidRound(state, rng, now, reason)` (as built; a round that still holds submissions is an `EngineInvariantError`): used only when a round has nothing to judge. The green card returns to the **bottom** of `greenDeck` (so E7's sufficiency is unaffected), submissions (none) are discarded, `round = null`, `RoundVoided{round, reason}`, then `openRound`. If the voided round's `judgeReassigned` is true (its judge came from `passJudging` or from a judge `leave`/`removePlayer`) and that judge is still active, `openRound` is called with `judge = round.judgeId` explicitly, so the passed-to player judges the replacement round (gameplay.md "Stalled judge"; the cursor already points at them, so `nextJudge` would skip them). Otherwise `openRound` rotates normally from `judgeCursor`. Round numbers stay contiguous because the number is `history.length + 1`.
 
-`reassignJudge(reason)` (used by `passJudging`, judge `leave`, judge `removePlayer`, and settle step 3a): `newJudge = nextJudge(active excluding the outgoing judge when still active, outgoing.joinOrder)` (with no outgoing judge, step 3a: `nextJudge(active, judgeCursor)`). If no candidate exists (the evicted judge was the last active player; possible only while paused, since an unpaused game has at least two other actives), set `round.judgeId = null`, keep `judgeCursor`, bump `changedAtVersion`, emit no `JudgeChanged`, and stop: the round waits, paused, until settle step 3a assigns a judge when play can resume. Otherwise `judgeCursor = newJudge.joinOrder`. If `newJudge` has a submission in this round, remove it from `submissions` (and drop it from `revealOrder`, preserving the relative order of the rest; E10 holds because nothing is reshuffled): a hand-played card returns to that player's hand; a write-in card (`writeIn: true`) never left the hand, so it goes to `redDiscard` instead and the hand is unchanged (P-E6 holds; `powerUsage.writeIn` stays used). `round.judgeId = newJudge`, `round.judgeReassigned = true`, `changedAtVersion` bumped. The outgoing judge, if still active and the round is `SUBMITTING`, is now an ordinary expected player (they are in `roster`); in `JUDGING` they sit out. Event `JudgeChanged{round, from, to, reason}` with `reason in {"passed","left","removed","resumed"}` (`from: null` for `"resumed"`). If afterwards the round has no submissions, settle's step 4 voids it and the replacement round keeps `newJudge` as judge (`voidRound` above; open question 7).
+`reassignJudge(reason)` (**#23, not built in #22**; used by `passJudging`, judge `leave`, judge `removePlayer`, and settle step 3a): `newJudge = nextJudge(active excluding the outgoing judge when still active, outgoing.joinOrder)` (with no outgoing judge, step 3a: `nextJudge(active, judgeCursor)`). If no candidate exists (the evicted judge was the last active player; possible only while paused, since an unpaused game has at least two other actives), set `round.judgeId = null`, keep `judgeCursor`, bump `changedAtVersion`, emit no `JudgeChanged`, and stop: the round waits, paused, until settle step 3a assigns a judge when play can resume. Otherwise `judgeCursor = newJudge.joinOrder`. If `newJudge` has a submission in this round, remove it from `submissions` (and drop it from `revealOrder`, preserving the relative order of the rest; E10 holds because nothing is reshuffled): a hand-played card returns to that player's hand; a write-in card (`writeIn: true`) never left the hand, so it goes to `redDiscard` instead and the hand is unchanged (P-E6 holds; `powerUsage.writeIn` stays used). `round.judgeId = newJudge`, `round.judgeReassigned = true`, `changedAtVersion` bumped. The outgoing judge, if still active and the round is `SUBMITTING`, is now an ordinary expected player (they are in `roster`); in `JUDGING` they sit out. Event `JudgeChanged{round, from, to, reason}` with `reason in {"passed","left","removed","resumed"}` (`from: null` for `"resumed"`). If afterwards the round has no submissions, settle's step 4 voids it and the replacement round keeps `newJudge` as judge (`voidRound` above; open question 7).
 
 `abortRound` (only `endGame`): each hand-played submission card returns to its owner's hand; a write-in submission card goes to `redDiscard`; the green card returns to the green deck bottom; `round = null`.
 
@@ -456,7 +475,7 @@ draw(n, into):                           // red only
 topUp(p): draw(7 - hand.length, p.hand)  // order: players by joinOrder
 redraw(p): redDiscard.push(...p.hand); p.hand = []; draw(7, p.hand)
 ```
-Initial deal: shuffled red deck, 7 to each active player in `joinOrder`. The red deck is reshuffled only when it is empty and a draw needs a card (gameplay.md: "When the red deck runs out, its discard pile is reshuffled"); `redraw` discards first and then draws, so the 7 cards needed always exist (`R_min` floor of 7). Greens are drawn only by `openRound`; they leave the deck permanently into score piles, so the green deck cannot run out before a winner exists (E7; X6 checks it).
+As built (1.4), `draw(pools, n, rng)` and `topUp(pools, hand, rng)` in `rules/cards.ts` are pure: they take and return the pools (and the hand) and consume `rng` only for the reshuffle. Initial deal: shuffled red deck, 7 to each active player in `joinOrder`. The red deck is reshuffled only when it is empty and a draw needs a card (gameplay.md: "When the red deck runs out, its discard pile is reshuffled"); `redraw` discards first and then draws, so the 7 cards needed always exist (`R_min` floor of 7). Greens are drawn only by `openRound`; they leave the deck permanently into score piles, so the green deck cannot run out before a winner exists (E7; X6 checks it).
 
 ### 8.5 Membership
 
@@ -480,7 +499,7 @@ By zone: in a deck or discard, deleted. In a hand, deleted (hand shrinks, topped
 
 ### 8.7 `beginPlay`
 
-In order: shuffle `redDeck` and `greenDeck` with `rng`; deal 7 to every `ready` player by `joinOrder` and set them `active`; first judge via `nextJudge(active, null)` (consumes `rng.int`); `judgeCursor` set; round 1 opened as in 8.3. Events: `PlayStarted{playerIds, firstJudgeId}`, `PlayerActivated` per player, `RoundOpened`.
+In order: shuffle `redDeck` and `greenDeck` with `rng`; deal 7 to every `ready` player by `joinOrder` and set them `active`; first judge via `nextJudge(active, null)` (consumes `rng.int`); `judgeCursor` set; round 1 opened as in 8.3. Events: `PlayStarted{playerIds, firstJudgeId}`, `PlayerActivated` per player, `RoundOpened`. As built, `beginPlay(state, rng, now)` shuffles red then green, sets `phase = PLAYING` and `judgeCursor = null`, and calls `openRound`, which activates the ready players and draws the judge (`rng.int(active.length)` over the actives by `joinOrder`); `PlayStarted` is then prepended, because it needs `firstJudgeId`. The rng order, shuffle red, shuffle green, `int`, is pinned by a test. A `RoundOpened.greenCardId` can be a card pooled in the same command (the top of the shuffled green deck); it names no writer, because the EventDoc of a `finishWriting` omits the actor (E8).
 
 ### 8.8 Scoring, target, awards
 
@@ -499,7 +518,7 @@ In order: shuffle `redDeck` and `greenDeck` with `rng`; deal 7 to every `ready` 
 ### 9.1 Formulas (HLD section 3.4, Q9)
 
 ```ts
-const MAX_PLAYERS = 10, MIN_PLAYERS = 3, HAND = 7, NEW_DECK_RED = 10;
+const MIN_PLAYERS = 3, HAND = 7, NEW_DECK_RED = 10;   // the room size is MAX_SEATED (10) from @dc/contracts
 // From @dc/contracts (shared with LLD 5): MAX_TOTAL_JOINS = 50 (joins ever, seated or not), MAX_VOTES = 1500 (votes[] length)
 const gMin = (n: number, t: number) => n * t;
 const rMin = (n: number) => HAND * n + Math.max(2 * n, HAND);
@@ -520,11 +539,11 @@ meetsMinimums(totals, n, t): boolean   // totals.red >= rMin(n) && totals.green 
 ```ts
 interface Existing { red: number; green: number }       // cards from importDeck, i.e. pool sizes at startGame
 function writeCounts(n: number, t: number, existing: Existing, override: {red:number; green:number} | null)
-  : { red: number; green: number } | "unmet"
+  : { red: number; green: number } | "unmet" | "invalid"
 ```
-- No imported cards (`existing = {0,0}`): `override` must be null (`INVALID_ARGUMENT` otherwise); result `{red: 10, green: t}` (new deck).
+- No imported cards (`existing = {0,0}`): `override` must be null (`"invalid"`, which `startGame` maps to `INVALID_ARGUMENT`, otherwise); result `{red: 10, green: t}` (new deck).
 - Imported cards, no override: `{ red: ceil(max(0, rMin(n) - existing.red) / n), green: ceil(max(0, gMin(n,t) - existing.green) / n) }`. Both are at most the new-deck counts (HLD).
-- Imported cards with override: accepted if `0 <= red <= 10`, `0 <= green <= t` and `existing.red + n*red >= rMin(n)` and `existing.green + n*green >= gMin(n,t)`; else `NOT_PLAYABLE` (detail `minimums`). This is how "if the deck already meets both minimums the host may choose" is enforced, and it also covers partial reductions.
+- Imported cards with override: accepted if `0 <= red <= 10`, `0 <= green <= t` and `existing.red + n*red >= rMin(n)` and `existing.green + n*green >= gMin(n,t)`; else `"unmet"` (`NOT_PLAYABLE`, detail `minimums`; an override out of range is unmet too). This is how "if the deck already meets both minimums the host may choose" is enforced, and it also covers partial reductions.
 - The check runs at `startGame` (when `n` is known), not in `updateSettings`.
 
 **Worked examples**
@@ -557,7 +576,7 @@ Removals (E17): hands return to the red deck, so red totals are unchanged while 
 
 ### 9.5 Cards still to write
 
-`cardsStillToWrite(game, playerId) = writeTarget - writeProgress` (never negative). It is a selector; the Projector surfaces it (LLD 0 open question 5: the client does not recompute it).
+`cardsStillToWrite(game, playerId) = writeTarget - writeProgress` (never negative). It is a selector; the Projector surfaces it (LLD 0 open question 5: the client does not recompute it). `saveDraft` keeps `writeProgress` at the saved counts, and `finishWriting` sets it to `writeTarget`, so a finished writer owes nothing.
 
 ## 10. Idempotency and concurrency boundary
 
@@ -681,6 +700,7 @@ Test stack: `bun test` + fast-check (LLD 0 section 6). `FC_SEED` is read from th
 
 ### 15.1 Shared harness (`test/support/`)
 
+- Built in 1.2 (`test/support/`): `scriptedRng`, `counterMintId`, `makeGame`, `makePlayer`, `makeRound`, `addCard`, `deepFreeze`, `ctxFor`, `checkAll` over the append-only `checkers` array (`checkSerializable` and `checkVersion` so far), the per-command `enumerators` table and `exemptions` (a meta-test fails a registered command with neither), `junkCommands`, `runScenario`, and fixture command specs (`fixtures.ts`) with their own enumerators. 1.3 (#20) added the lobby enumerators and the `createGame` exemption, widened `pid` to 1024 ids (the 50-join loop needs more than 32; `pid(n)` for n < 32 is unchanged), and runs X2 to X5 and G1 over both the fixture and the real registry. A playing-phase builder against the real commands arrives with #22. 1.4 (#21) fixed `buildGame` so every state is coherent for the E5 and E6 checkers (the round's green card is no longer also in `greenDeck`, hand and submission ids no longer collide at six players, and WRITING states carry `target`, `writeCounts`, per-player `writeTarget` and the pooled cards of the ready players), added `recordingRng` and `gameWithDeck` to the factories, `drafts` and `actor` to `Step` (the oracle for E3, E5 and E8), and appended `checkConservation`, `checkHands`, `checkAggregateChanged` and `checkNoAuthorship` to `checkers`; the enumerators for `startGame`, `saveDraft` (full, half and text-only drafts) and `finishWriting` (a draft equal to the target, from the drafts map) are in `legal.ts`. 1.5 (#22) added the enumerators for `confirmSubmission` (with a pitch too when the variant is on), `closeSubmissions` and `pickWinner`; made `buildGame` coherent for PLAYING, a new JUDGING shape (`revealOrder` set, at least one submission) and FINISHED (all carry `target`, and PLAYING and JUDGING meet `meetsMinimums` so a resolve can top up and open a round); added `support/round-fixtures.ts` (`roundGame`), a `drive` option on `runScenario` with `progressDriver` (plays whole games through the legal commands), and the checkers `checkOwnerHidden` (E9), `checkRevealOrder` (E10), `checkJudges` (E12, against an independent rotation model), `checkRoundMoves` (E5 per zone, E13), `checkTopUp` (E6), `checkPlayable` (E7), `checkScoring` (E14) and `checkFinished` (E15); and hardened the old checkers: `checkConservation`, `checkNoAuthorship` and `checkAggregateChanged` now throw when a step lacks the `drafts` or `actor` they need, and `checkNoAuthorship` matches whole draft texts (a short draft text is no longer a substring false positive).
 - `deepFreeze` on every input to `decide`; assert no mutation (X4).
 - `legalCommands(game, drafts): Array<{actor, cmd}>` enumerates every command a given state accepts: for each seated player and the host, each applicable command with concrete payloads (hand cards, reveal ids, valid drafts built from a text arbitrary that passes Moderation). It is written independently of `decide` (from gameplay.md), so it cross-checks the Engine; a property asserts every enumerated command is accepted (G1).
 - `junkCommands(game)`: well-typed but illegal commands (wrong phase, wrong actor, bogus ids, oversized payloads), plus fully arbitrary JSON payloads for X1.
@@ -725,6 +745,12 @@ Test stack: `bun test` + fast-check (LLD 0 section 6). `FC_SEED` is read from th
 | **X9** caps | `join` with `totalJoins = 50` -> `ROOM_FULL`/`join_cap` even with few seated (LOBBY leavers count); `join`/`leave` x 50 in LOBBY ends refused; `castVote` at `votes.length = 1500` -> `VARIANT_UNAVAILABLE`/`vote_cap`, but replacing an existing vote still accepted | P-X9: `totalJoins` never decreases and equals accepted `join` count; `votes.length <= MAX_VOTES` after every command |
 | **X10** removeCard reach | Remove a green card of a resolved round, a played red card now in discard, a current-round green card: accepted; a deck card, an unplayed hand card, an unrevealed `SUBMITTING` card: `NOT_FOUND`, same as an unknown id; below-minimum removal -> `NOT_PLAYABLE`; `updateSettings{variants}` replaces the nested object | P-X10: `removeCard` accepted iff `shownToTable` and the guard passes; rejection for an unshown id is deep-equal to the rejection for a random unknown id |
 | **G1** generator sanity | Every `legalCommands` entry is accepted | P-G1: all commands emitted by `legalCommands` are accepted (guards the harness itself) |
+
+**Covered by 1.3 (#20), over the real `REGISTRY`** (`test/lobby.test.ts`, `test/playability.test.ts`, `test/decide.properties.test.ts`): E1 for `createGame`, `updateSettings`, `join`, `leave`, `removePlayer` (command x phase, command x role, guard order with combined failures, the junk list with per-guard expected codes, typed junk); E7, formula half only (`rules/playability.ts` pinned by the 9.3 examples and a property against an independent implementation; the `startGame` half is #21, the PLAYING half #22); X9, `join` half only (`join_cap`, 50 join and leave cycles, `totalJoins` monotonic and equal to accepted joins; the `castVote` half is its owner's); X1 to X5 and G1 re-run over the real rows with enumerators for `updateSettings`, `join`, `leave`, `removePlayer`, and `createGame` as an explicit exemption with its own property. Mid-game `join`, `leave`, `removePlayer` (E17, X7) are #23.
+
+**Covered by 1.4 (#21), over the real `REGISTRY`** (`test/writing.test.ts`, `test/rounds.test.ts`, `test/deal.test.ts`, the global checkers in `test/support/checks.ts`): E1 for `startGame`, `saveDraft`, `finishWriting` (command x phase x role table written from 7.1, guard order with combined failures, the junk list, typed junk); E3 (`saveDraft` `aggregateChanged` iff the counts changed, text-only edit leaves version and state alone, every other accepted command +1 through `checkVersion` and `checkAggregateChanged`); E5 (conservation checker after every command, cards created only by `finishWriting`, per-kind deltas equal to the finisher's draft; per-zone unit tests for `draw`, `topUp`, the deal and the reshuffle branch); E6, helper half (hands at most 7 always, a newly activated player holds exactly 7, `topUp` with an exhausted deck); E7, `startGame` half (accepted iff the formulas say so, against an independent in-test implementation, on fixture decks; the PLAYING half is #22); E8 (ids from `mintId`, sorted `cards` keys, no id or text in events, player records or draft changes, redacted envelope, spread of deck positions over seeds and finishing orders, no `Game.drafts`); settle slot 1 and the first judge (rng order pinned by a recording rng, event order, `nextJudge` rotation and wrap); X1 to X5 and G1 re-run with the three new enumerators; a scripted LOBBY, `startGame`, all finished, PLAYING run with round 1 open. Not covered here, by design: "after `pickWinner` every active hand is 7" (E6), the E7 PLAYING half and E12 rotation are #22 (done, see 1.5 below); moderation and `CONTENT_REJECTED` are #25; the PLAYING late-joiner paths are fixture-only until #23.
+
+**Covered by 1.5 (#22), over the real `REGISTRY`** (`test/round-rules.test.ts`, `test/round-commands.test.ts`, `test/game.test.ts`, `test/support/round-checks.test.ts`, the checkers in `test/support/checks.ts`): E1 for `confirmSubmission`, `closeSubmissions`, `pickWinner` (command x phase, command x role, guard order with combined failures, `needsPlay`, the junk list with per-guard codes, typed junk); E5 per zone (confirm, close, pick, void, the discard and the top-up) and the conservation checker over whole games; E6 post-resolve top-up with minimum-size decks that force the reshuffle; E7, PLAYING half (`meetsMinimums` and a non-empty green deck after every command, including a real new-deck N = 3 start with exactly G_min); E9 (event scan over these commands; #26 re-runs it over the full catalog and owns `revealList`); E10; E11 (with a property over random JUDGING games); E12, rotation half (wrap, joinOrder gap, late joiner, the judge never in `submissions`, their score unchanged in their round, first judge from a scripted int, rotation checked against an independent model); E13; E14; E15 as far as reachable; X6, redraw-free half (N = 3 and N = 10, new and minimum-size decks); X1 to X5 and G1 re-run with the three new enumerators; the scripted 3-player game from `createGame` to a win (event order, rng order, final scores) and seeded N = 3 to 10 games under `runScenario`. **Not covered here, by design:** E15's accept half (`castVote`, `endGame`, `deleteGame` in FINISHED) and E4 idempotency (LLD 3); pitch moderation (#25); `passJudging`, `reassignJudge`, slots 3 and 3a, eviction, pause and resume with a null judge, E12 stall cases, E17, E18, X7 (#23); `writeIn`, `redraw`, `castVote`, E16 and X6 with heavy redraw (M7), `importDeck` (M9) and `deleteGame` (M3); `revealList` and the final event catalog (#26, LLD 3); X8 episodes (#24); projection (M2). The void branches of slot 4 and `voidRound` are fixture-tested only, since nothing reaches them before eviction (#23).
 
 Additional scripted scenario tests (unit): full 3-player game to a win using `scriptedRng`; stalled judge in `SUBMITTING` and `JUDGING` including the void case (judge + one submitter whose card is the new judge's); redraw with an exhausted deck; paused recovery; People's Choice awards with ties; `passJudging` guarded by stale `expectedVersion`.
 
