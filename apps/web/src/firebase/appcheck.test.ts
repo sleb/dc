@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { FirebaseApp } from "firebase/app";
+import type { ReCaptchaEnterpriseProvider } from "firebase/app-check";
 import { initAppCheck, type AppCheckDeps } from "./appcheck";
 
 const APP = { name: "[DEFAULT]" } as FirebaseApp;
@@ -9,7 +10,7 @@ function fakes() {
   const calls: { siteKey: string; tokenAtInit: string | boolean | undefined; autoRefresh: boolean | undefined }[] = [];
   const deps: AppCheckDeps = {
     target,
-    makeProvider: (siteKey) => ({ siteKey }),
+    makeProvider: (siteKey) => ({ siteKey }) as unknown as ReCaptchaEnterpriseProvider,
     init: (_app, options) => {
       calls.push({ siteKey: (options.provider as unknown as { siteKey: string }).siteKey, tokenAtInit: target.FIREBASE_APPCHECK_DEBUG_TOKEN, autoRefresh: options.isTokenAutoRefreshEnabled });
       return {} as ReturnType<AppCheckDeps["init"]>;
