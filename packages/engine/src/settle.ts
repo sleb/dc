@@ -1,3 +1,4 @@
+import { EngineInvariantError } from "./errors";
 import { meetsMinimums, MIN_PLAYERS, totals } from "./rules/playability";
 import { beginPlay, closeRound, voidRound } from "./rules/rounds";
 import { waitingFields } from "./rules/waiting";
@@ -17,7 +18,12 @@ export interface SettleEnv {
   readonly now: number;
   /** True once the command or an earlier slot started a new waiting episode; slot 5 reads it. */
   readonly episodeStarted: boolean;
+  /** Slot 4's iteration cap; defaults to MAX_ADVANCE_STEPS. A test seam: real states settle in at most two steps. */
+  readonly maxAdvanceSteps?: number;
 }
+
+/** Slot 4 closes or voids at most a couple of times per command; past this it is not converging, which is a bug (EngineInvariantError), not a hang. */
+export const MAX_ADVANCE_STEPS = 16;
 
 export interface SettleStep {
   state: Game;
@@ -63,18 +69,23 @@ const autoAdvance: SettleSlot = {
     let state = start;
     const events: DomainEvent[] = [];
     let started = false;
-    for (;;) {
+    const cap = env.maxAdvanceSteps ?? MAX_ADVANCE_STEPS;
+    for (let steps = 0; ; steps++) {
       const round = state.round;
       if (state.phase !== "PLAYING" || state.paused || round === null || round.judgeId === null) break;
       const active = new Set(activePlayers(state).map((p) => p.id));
       const submitted = new Set(round.submissions.map((s) => s.playerId));
       const waiting = round.roster.some((id) => id !== round.judgeId && active.has(id) && !submitted.has(id));
+      const closing = round.phase === "SUBMITTING" && !waiting;
+      const voiding = round.phase === "JUDGING" && (round.revealOrder?.length ?? 0) === 0;
+      if (!closing && !voiding) break;
+      if (steps >= cap) throw new EngineInvariantError(`settle slot 4: still advancing after ${cap} steps`);
       let step: { state: Game; events: DomainEvent[] };
-      if (round.phase === "SUBMITTING" && !waiting) {
+      if (closing) {
         step = round.submissions.length >= 1 ? closeRound(state, env.rng, "allIn") : voidRound(state, env.rng, env.now, "no_submissions");
-      } else if (round.phase === "JUDGING" && (round.revealOrder?.length ?? 0) === 0) {
+      } else {
         step = voidRound(state, env.rng, env.now, "no_submissions");
-      } else break;
+      }
       state = step.state;
       events.push(...step.events);
       started = true;
