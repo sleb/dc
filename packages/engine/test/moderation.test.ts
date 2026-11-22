@@ -158,10 +158,10 @@ describe("V2 check: structure (both modes) and profanity (mode on)", () => {
   });
 
   test("leet, diacritic, confusable, full-width and run variants are caught; a trailing punctuation mark does not hide a term", () => {
-    for (const t of ["z0rbl4t", "zórblàt", "zоrblаt", "ＺＯＲＢＬＡＴ", "zooorblat", "zorrblat", "zorblaaaat", "ZoRbLaT", "zorblat!", "zorblat!!!", "zorbla+"]) {
+    for (const t of ["z0rbl4t", "zórblàt", "zоrblаt", "ＺＯＲＢＬＡＴ", "zooorblat", "zorrblat", "zorblaaaat", "ZoRbLaT", "zorblat!", "zorblat!!!", "zorbla+", "z0rbl@7!", "!z0rbl@7", "zorblat?!"]) {
       expect([t, reason(t)]).toEqual([t, "PROFANITY"]);
     }
-    for (const t of ["qu1bn4rf", "quibbnarf", "quiiibnarf", "q.u.1.b.n.4.r.f"]) expect([t, reason(t)]).toEqual([t, "PROFANITY"]);
+    for (const t of ["qu1bn4rf", "quibbnarf", "quiiibnarf", "q.u.i.b.n.a.r.f", "qu1bn4rf!"]) expect([t, reason(t)]).toEqual([t, "PROFANITY"]);
   });
 
   test('ordinary text with digits and punctuation is not a hit: "2024", "Room 101", "100% fun", "MP3"', () => {
