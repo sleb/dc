@@ -28,14 +28,16 @@ packages/contracts/
     version.ts         # CONTRACT_V, MIN_V, view SCHEMA constants
     ids.ts             # GameId, PlayerId, CardId, Uid, IdempotencyKey schemas and regexes
     limits.ts          # shared numeric caps (MAX_SEATED, MAX_TOTAL_JOINS, MAX_VOTES, text caps)
-    errors.ts          # ERROR_CODES, REJECTION_DETAILS, DETAIL_BY_CODE, RejectionSchema, GateReason
-    commands.ts        # payload schemas, CommandEnvelopeSchema, toEngineCommand, Command/ClientCommand types
-    view.ts            # GameView, ViewDoc, RoundDoc schema factory (strict and loose)
-    callables.ts       # request/response schemas for every callable, CALLABLES, RESERVED_CALLABLES
+    errors.ts          # ERROR_CODES, REJECTION_DETAILS, DETAIL_BY_CODE, RejectionSchema, GATE_REASONS
+    settings.ts        # Settings pieces shared by the command patch (2.4) and the view schemas (2.5): VariantsSchema, SpectatorsSchema, SettingsPatchSchema, Settings
+    commands.ts        # payload schemas, CommandEnvelopeSchema, toEngineCommand, SERVER_ONLY_COMMANDS, Command/ClientCommand/ServerOnlyCommand types
+    view.ts            # (not yet built, issue #27) GameView, ViewDoc, RoundDoc schema factory (strict and loose)
+    callables.ts       # (not yet built, M4) request/response schemas for every callable, CALLABLES, RESERVED_CALLABLES
   test/                # schema, compat and fixture tests (bun:test)
-  compat/              # frozen JSON-Schema snapshots per released CONTRACT_V (section 2.6)
+  compat/              # (not yet built, #38) frozen JSON-Schema snapshots per released CONTRACT_V (section 2.6)
 ```
 
+- Built so far (issue #18): `version`, `ids`, `limits`, `errors`, `settings`, `commands` and `index`. `view.ts`, `callables.ts` and `compat/` arrive with their own steps. Tests are in `test/`, included by `tsconfig.test.json`. The Playwright browser smoke and the Node 22 run are deferred to the first bundling step (#45); until then isolation is covered by a dependencies assertion and a source scan (no `node:*`, `bun*`, `firebase*`, `@dc/*` import; no `Date`, `crypto`, `fetch`). zod is pinned to 4.6.7.
 - Consumed as TypeScript source (LLD 0 section 3); never built separately. `functions` bundles it, Vite compiles it for `web`. Types come from `z.infer`; no hand-written duplicate of a wire type exists (tech-stack section 8).
 - Runtime dependency: **zod only**. No `firebase*`, `node:*`, `bun*`, no `@dc/*` import (LLD 0 P5 already lints this). No `Date`, `crypto`, `fetch`: uuid and hashing helpers live in `functions` and `web`. Runs unchanged in Node 22 and in browsers (tests run it in both `bun test` and a Playwright page-evaluate smoke).
 - zod is pinned to one exact version in `packages/contracts/package.json`; the APIs used (`object`, `strictObject`, `discriminatedUnion`, `infer`, `looseObject`) exist in zod 3.25 and 4. `bun.lock` carries it.
@@ -154,6 +156,8 @@ export function toEngineCommand(e: CommandEnvelope): ClientCommand {          //
 | `writeIn` | `{text, pitch?}` | **required** |
 | `closeSubmissions`, `passJudging` | `{}` | **required** |
 | `pickWinner` | `{submissionId}` | **required** |
+
+Built shape (issue #18): there are **strict command schemas only**. The "strict and loose" pair applies to the view schemas (2.5, issue #27); a command envelope has no loose variant (unknown envelope keys are stripped by `z.object`, as decided in section 1). The server-only commands are **plain TypeScript types** (`ServerOnlyCommand`), not schemas, so nothing can parse them off the wire; `SERVER_ONLY_COMMANDS` is the runtime name list and tests assert it is disjoint from the envelope types and that both together equal the LLD 1 section 7 name list. `ClientCommand` is derived from the envelope type (payload fields flattened, plus optional `expectedVersion`); `Command = ClientCommand | ServerOnlyCommand`. `SettingsPatchSchema` and its pieces live in `settings.ts` so the view schemas reuse them. Server-only shapes also carry `expectedVersion?`, as LLD 1 section 7 says every command does.
 
 The required five are exactly the commands LLD 1 5.3 step 3 can answer with `STALE`. `Command`, `ClientCommand`, `ErrorCode` and the server-only command shapes (`createGame`, `join`, `importDeck`, `deleteGame`, `markReminded`, written as in LLD 1 section 7) are exported here; the Engine imports them (LLD 1 section 2).
 
@@ -616,7 +620,7 @@ Extends LLD 0 section 9. The wrapper emits one line per call through the typed l
 
 | Test | Assertion |
 |---|---|
-| Command table | A fixture per client command parses with `CommandEnvelopeSchema`; `toEngineCommand` output deep-equals the Engine command of LLD 1 section 7; required-`expectedVersion` set equals `{confirmSubmission, writeIn, closeSubmissions, pickWinner, passJudging}` |
+| Command table (built, #18) | A fixture per client command parses with `CommandEnvelopeSchema`; `toEngineCommand` output deep-equals the Engine command of LLD 1 section 7; required-`expectedVersion` set equals `{confirmSubmission, writeIn, closeSubmissions, pickWinner, passJudging}` |
 | Engine round trip (in `engine/test`, since contracts cannot import the Engine) | For every `legalCommands` entry of random scenarios (LLD 1 15.1) that is a client command: wrap in an envelope, JSON round trip, parse, `toEngineCommand`, deep-equal the original (G1-style) |
 | Type equality | `ClientCommandType \| ServerOnly` equals `Command["type"]`; `ErrorCode`, `Phase`, `PlayerStatus`, `RoundPhase`, `YouTurn` equal the Engine's; `project` returns the contracts `GameView` (LLD 2 11.6) |
 | View schemas | Every golden snapshot of LLD 2 11.5 parses with the strict and the loose schema; the strict schema rejects an extra key, a missing key, `uid`, `scorePile`, and `JSON.parse(JSON.stringify(game))`; loose accepts extra keys and unknown strings in every enum position (a snapshot with `turn: "future_turn"` parses loose, fails strict) |
