@@ -119,6 +119,9 @@ step_iam() { # V8, V9
   log "ci-deployer may act as fn-runtime"
   gcloud iam service-accounts add-iam-policy-binding "$FN_SA" --member="serviceAccount:$CI_SA" \
     --role=roles/iam.serviceAccountUser --project "$PROJECT" >/dev/null
+  log "ci-deployer may act as the App Engine default service account (the functions deploy needs it; #16)"
+  gcloud iam service-accounts add-iam-policy-binding "$PROJECT@appspot.gserviceaccount.com" --member="serviceAccount:$CI_SA" \
+    --role=roles/iam.serviceAccountUser --project "$PROJECT" >/dev/null
   local number compute
   number="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
   compute="serviceAccount:${number}-compute@developer.gserviceaccount.com"
