@@ -29,7 +29,7 @@ test("T2 registry options: region, service account, App Check, command runtime s
     const o = REGISTRY.get(name)?.options;
     expect(o).toMatchObject({
       region: "us-central1",
-      serviceAccount: "fn-runtime",
+      serviceAccount: "fn-runtime@",
       enforceAppCheck: true,
       consumeAppCheckToken: false,
       cpu: 1,
@@ -46,7 +46,7 @@ test("T2 the built function's __endpoint carries the same options", async () => 
   for (const name of callables) {
     const ep = mod[name]?.__endpoint;
     expect(ep).toBeDefined();
-    expect(ep).toMatchObject({ region: ["us-central1"], serviceAccountEmail: "fn-runtime", availableMemoryMb: 256, cpu: 1, concurrency: 80 });
+    expect(ep).toMatchObject({ region: ["us-central1"], serviceAccountEmail: "fn-runtime@", availableMemoryMb: 256, cpu: 1, concurrency: 80 });
     expect((ep?.minInstances as { name?: string } | undefined)?.name).toBe("COMMAND_MIN_INSTANCES");
     expect(ep).toHaveProperty("callableTrigger");
   }
