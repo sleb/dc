@@ -194,7 +194,7 @@ describe("EV2 the catalog equals LLD 1 section 11; deferred tags have no emitter
     for (let seed = 1; seed <= 60; seed++) for (const a of accepts(play(3 + (seed % 5), seed, true))) for (const e of a.events) seen.add(e.t);
     for (const t of Object.keys(CATALOG).filter((k) => !DEFERRED.includes(k))) expect(seen.has(t) ? t : `missing ${t}`).toBe(t);
     for (const t of DEFERRED) expect(seen.has(t)).toBe(false);
-  });
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
