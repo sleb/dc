@@ -104,13 +104,13 @@ export interface RunOptions {
   freeze?: boolean;
   table: Readonly<Record<string, Enumerator>>;
 }
-export interface Trace { states: (Game | null)[]; results: Result<Accepted, Rejection>[] }
+export interface Trace { states: (Game | null)[]; results: Result<Accepted, Rejection>[]; /** The command behind each result, same index. */ commands: Command[] }
 
 /** Drive `decide` from `game0` with picks from legalCommands and junkCommands, running every global checker after every step. */
 export function runScenario(decide: Decide, game0: Game | null, picks: Picks, opts: RunOptions): Trace {
   let state = game0;
   let drafts: Record<string, Draft> = {};
-  const trace: Trace = { states: [state], results: [] };
+  const trace: Trace = { states: [state], results: [], commands: [] };
   for (const [i, p] of picks.entries()) {
     let entry: LegalEntry | undefined;
     if (opts.drive !== undefined) {
@@ -131,6 +131,7 @@ export function runScenario(decide: Decide, game0: Game | null, picks: Picks, op
     const step: Step = { index: i, seed: opts.seed, before: state, cmd: entry.cmd, result, actor: entry.actor, drafts };
     checkAll(step);
     trace.results.push(result);
+    trace.commands.push(entry.cmd);
     if (result.ok) {
       for (const c of result.value.draftChanges) {
         const { [c.playerId]: _gone, ...rest } = drafts;
@@ -182,5 +183,39 @@ export function progressDriver(seed: string, players: number, table: Readonly<Re
     const close = of("closeSubmissions");
     if (closeEarly && close.length > 0 && rng.int(5) === 0) return any(close);
     return any(of("confirmSubmission")) ?? any(close);
+  };
+}
+
+/**
+ * `progressDriver` with membership churn (#23): about one step in `rate` is a join, a leave or a removal (and about one in 300 an endGame); a late joiner writes and finishes;
+ * a paused table is recovered by joins. Randomness comes from `seed` and the step index, so a run replays.
+ */
+export function membershipDriver(seed: string, players: number, table: Readonly<Record<string, Enumerator>>, rate = 7): Driver {
+  const base = progressDriver(seed, players, table, true);
+  return (state, drafts, i) => {
+    if (state.phase !== "WRITING" && state.phase !== "PLAYING") return base(state, drafts, i);
+    const pool = legalCommands(state, drafts, table);
+    const of = (type: string): LegalEntry[] => pool.filter((e) => e.cmd.type === type);
+    const rng = makeRng(`${seed}:member:${i}`);
+    const any = (xs: LegalEntry[]): LegalEntry | undefined => xs[rng.int(Math.max(1, xs.length))];
+    if (state.phase === "PLAYING") {
+      const finish = of("finishWriting");
+      if (finish.length > 0) return any(finish);
+      const full = of("saveDraft").filter((e) => {
+        const c = e.cmd as { red: unknown[]; green: unknown[] };
+        const who = state.players.find((p) => e.actor.kind === "user" && p.uid === e.actor.uid);
+        return who?.writeTarget?.red === c.red.length && who.writeTarget.green === c.green.length && who.writeProgress.red !== c.red.length;
+      });
+      if (full.length > 0) return any(full);
+    }
+    if (state.paused && of("join").length > 0) return any(of("join"));
+    if (rng.int(300) === 0) return any(of("endGame"));
+    if (rng.int(rate) === 0) {
+      const ops = [...of("join"), ...of("leave"), ...of("removePlayer")];
+      // #25: the host also removes a card now and then (one pick from the removeCard entries, so a long list does not drown the membership ops).
+      const picks = [any(ops), any(of("removeCard"))].filter((e): e is LegalEntry => e !== undefined);
+      if (picks.length > 0) return picks[rng.int(picks.length)];
+    }
+    return base(state, drafts, i);
   };
 }

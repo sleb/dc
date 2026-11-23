@@ -1,5 +1,5 @@
-// Playability (LLD 1 section 9): pure functions over counts. `startGame` and settle slot 1 (#21), `removeCard` (#25) and the late-join
-// requirement (#23, section 9.4, not here) call them.
+// Playability (LLD 1 section 9): pure functions over counts. `startGame` and settle slot 1 (#21), `join` mid-game (#23, section 9.4)
+// and `removeCard` (#25) call them.
 import type { Game } from "../types";
 
 export const MIN_PLAYERS = 3;
@@ -44,4 +44,24 @@ export function writeCounts(n: number, t: number, existing: Counts, override: Co
   const inRange = override.red >= 0 && override.red <= NEW_DECK_RED && override.green >= 0 && override.green <= t;
   const meets = existing.red + n * override.red >= rMin(n) && existing.green + n * override.green >= gMin(n, t);
   return inRange && meets ? override : "unmet";
+}
+
+/**
+ * The write counts a late joiner owes (section 9.4): the larger of the counts configured at `startGame` and the deficit that would leave the registry short of the minimums
+ * for `nAfterJoin` seated players, once every other pending writer has finished (their `writeTarget`s are counted, so simultaneous joiners do not each cover the same deficit).
+ * Recorded in the joiner's `writeTarget` and never recomputed. A state that never went through `startGame` (no target or counts) reads as zero.
+ */
+export function lateJoinerRequirement(game: Game, nAfterJoin: number): Counts {
+  const now = totals(game);
+  let red = now.red;
+  let green = now.green;
+  for (const p of game.players) {
+    if (p.status === "writing" && p.writeTarget !== null) {
+      red += p.writeTarget.red;
+      green += p.writeTarget.green;
+    }
+  }
+  const cfg = game.writeCounts ?? { red: 0, green: 0 };
+  const target = game.target ?? 0;
+  return { red: Math.max(cfg.red, rMin(nAfterJoin) - red), green: Math.max(cfg.green, gMin(nAfterJoin, target) - green) };
 }

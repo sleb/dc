@@ -40,22 +40,24 @@ const patch = (p: unknown) => ({ type: "updateSettings", patch: p });
 const VARIANTS = { pitch: true, writeIn: true, redraw: false, peoplesChoice: true };
 
 describe("the real registry holds the lobby, writing and round commands", () => {
-  test("keys are the five lobby types, the three writing types (#21) and the three round types (#22); the rest are #23 and later", () => {
-    expect(Object.keys(REGISTRY).sort()).toEqual([...LOBBY_TYPES, "finishWriting", "saveDraft", "startGame", "confirmSubmission", "closeSubmissions", "pickWinner"].sort());
+  test("keys are the five lobby types, the three writing types (#21), the three round types (#22), passJudging and endGame (#23), markReminded (#24) and removeCard (#25)", () => {
+    expect(Object.keys(REGISTRY).sort()).toEqual([...LOBBY_TYPES, "finishWriting", "saveDraft", "startGame", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame", "markReminded", "removeCard"].sort());
   });
 });
 
 describe("L1 command x phase (5.3 guard 4, 7.1)", () => {
   const PHASES: Phase[] = ["LOBBY", "WRITING", "PLAYING", "FINISHED", "ENDED"];
-  const lobbyOnly: [string, object, Actor][] = [
+  // #23 widened these three from LOBBY-only to LOBBY, WRITING and PLAYING; FINISHED and ENDED stay WRONG_PHASE.
+  const membership: [string, object, Actor][] = [
     ["join", JOIN, seat(5)],
     ["leave", { type: "leave" }, seat(1)],
     ["removePlayer", { type: "removePlayer", playerId: pid(1) }, host],
   ];
-  for (const [type, c, actor] of lobbyOnly) {
+  for (const [type, c, actor] of membership) {
     for (const phase of PHASES) {
-      test(`${type} in ${phase}: ${phase === "LOBBY" ? "accepted" : "WRONG_PHASE"}`, () => {
-        if (phase === "LOBBY") expect(run(inPhase(phase), c, actor).ok).toBe(true);
+      const ok = phase === "LOBBY" || phase === "WRITING" || phase === "PLAYING";
+      test(`${type} in ${phase}: ${ok ? "accepted" : "WRONG_PHASE"}`, () => {
+        if (ok) expect(run(inPhase(phase), c, actor).ok).toBe(true);
         else expect(rejected(inPhase(phase), c, actor)).toStrictEqual({ code: "WRONG_PHASE" });
       });
     }
@@ -286,8 +288,8 @@ describe("L5 join (7.1, 5.3 guard 9)", () => {
     expect(rejected(g, { type: "join", playerId: pid(5) }, seat(5))).toStrictEqual({ code: "INVALID_ARGUMENT" });
   });
 
-  test("the engine does not moderate (that is #25): an empty name is stored, not CONTENT_REJECTED", () => {
-    expect(run(game(3), nth(5, "   "), seat(5)).ok).toBe(true);
+  test("guard 8 (#25): a blank name is CONTENT_REJECTED EMPTY, not stored; the full matrix is in moderation-wiring.test.ts", () => {
+    expect(rejected(game(3), nth(5, "   "), seat(5))).toStrictEqual({ code: "CONTENT_REJECTED", detail: "EMPTY" });
   });
 });
 

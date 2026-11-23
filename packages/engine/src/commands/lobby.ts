@@ -1,12 +1,16 @@
-// The lobby commands (LLD 1 sections 7.1, 7.2, 8.5): createGame, updateSettings, join, leave, removePlayer.
-// Moderation (guard 8) is not wired for createGame and join until #25, so names are stored trimmed and otherwise as given.
+// The lobby and membership commands (LLD 1 sections 7.1, 7.2, 8.5, 9.4): createGame, updateSettings, join, leave, removePlayer (join, leave and removePlayer also run mid-game since #23).
+// Guard 8 (#25): `createGame` and `join` moderate the name (the mode is the new game's, or the table's); the cleaned name is stored; NAME_TAKEN compares `nameKey`, the Moderation fold.
 import { MAX_SEATED, MAX_TOTAL_JOINS, PlayerIdSchema, RoomCodeSchema, GameIdSchema, SettingsPatchSchema } from "@dc/contracts";
 import type { Command, Settings } from "@dc/contracts";
 import { reject } from "../errors";
+import { nameKey } from "../moderation";
 import type { CommandSpec, CreateSpec } from "../registry";
+import { evictPlayer } from "../rules/membership";
+import { lateJoinerRequirement } from "../rules/playability";
 import { seatUid } from "../roles";
 import { seated } from "../selectors";
-import type { Game, Handled, Player, Rejection } from "../types";
+import type { Ctx, Game, Handled, Player, PlayerId, Rejection } from "../types";
+import { cleanedText, textRejection } from "./text";
 
 type Of<T extends Command["type"]> = Extract<Command, { type: T }>;
 
@@ -38,9 +42,6 @@ const hasCards = (g: Game): boolean => Object.keys(g.cards).length > 0;
 const isString = (v: unknown): v is string => typeof v === "string";
 const field = (cmd: object, key: string): unknown => (cmd as Record<string, unknown>)[key];
 
-/** Private name key until #25's `normalize` replaces it: case-insensitive and whitespace-insensitive. */
-const nameKey = (name: string): string => name.toLowerCase().replace(/\s+/gu, "");
-
 const invalid = (): Rejection => reject("INVALID_ARGUMENT");
 
 export const createGame: CreateSpec<Of<"createGame">> = {
@@ -55,12 +56,14 @@ export const createGame: CreateSpec<Of<"createGame">> = {
       && patch !== null && (patch.writeCountsOverride ?? null) === null; // no deck exists yet, so an override cannot apply
     return ok ? null : invalid();
   },
+  // Guard 8: the host's name, under the mode the new game will have (the patch's `profanity`, else the default `on`).
+  moderation: ({ cmd }) => textRejection(cmd.hostName, "name", ((cmd.settings === undefined ? {} : parsePatch(cmd.settings)) ?? {}).profanity ?? defaultSettings().profanity),
   handle: ({ cmd, ctx }) => {
     const patch = (cmd.settings === undefined ? {} : parsePatch(cmd.settings)) ?? {};
     const host: Player = {
       id: cmd.hostPlayerId,
       uid: cmd.hostId,
-      name: cmd.hostName.trim(),
+      name: cleanedText(cmd.hostName, "name"),
       joinOrder: 0,
       status: "writing",
       hand: [],
@@ -118,12 +121,13 @@ export const updateSettings: CommandSpec<Of<"updateSettings">> = {
 
 export const join: CommandSpec<Of<"join">> = {
   type: "join",
-  phases: ["LOBBY"], // #23 widens this to WRITING and PLAYING
+  phases: ["LOBBY", "WRITING", "PLAYING"],
   actor: (i) => i.actor.kind === "user" && isString(field(i.cmd, "playerId")) && i.actor.uid === seatUid(i.state.id, field(i.cmd, "playerId") as string),
   payload: ({ state, cmd }) => {
-    const ok = PlayerIdSchema.safeParse(field(cmd, "playerId")).success && isString(field(cmd, "name")) && !state.players.some((p) => p.id === cmd.playerId && seatedStatus(p));
+    const ok = PlayerIdSchema.safeParse(field(cmd, "playerId")).success && isString(field(cmd, "name")) && !state.players.some((p) => p.id === cmd.playerId); // any record, left and removed too: a departed id never comes back mid-game (LOBBY deletes records, so it is the same there)
     return ok ? null : invalid();
   },
+  moderation: ({ state, cmd }) => textRejection(cmd.name, "name", state.settings.profanity),
   preconditions: ({ state, cmd }) => {
     const key = nameKey(cmd.name);
     const here = seated(state);
@@ -138,12 +142,13 @@ export const join: CommandSpec<Of<"join">> = {
     const player: Player = {
       id: cmd.playerId,
       uid: seatUid(state.id, cmd.playerId),
-      name: cmd.name.trim(),
+      name: cleanedText(cmd.name, "name"),
       joinOrder,
       status: "writing",
       hand: [],
       scorePile: [],
-      writeTarget: null,
+      // LOBBY: nothing to write yet. WRITING and PLAYING: the late joiner's requirement (9.4), recorded once and never recomputed.
+      writeTarget: state.phase === "LOBBY" ? null : lateJoinerRequirement(state, seated(state).length + 1),
       writeProgress: { red: 0, green: 0 },
       powerUsage: { writeIn: false, redraw: false },
     };
@@ -153,25 +158,29 @@ export const join: CommandSpec<Of<"join">> = {
 
 const seatedStatus = (p: Player): boolean => p.status === "writing" || p.status === "ready" || p.status === "active";
 
+/**
+ * A seat leaves or is removed. In LOBBY the record is deleted (host powers rest on `hostId`); in WRITING and PLAYING `evictPlayer` runs (8.5) and
+ * the departure event comes first, then the eviction's side effects.
+ */
+function depart(state: Game, id: PlayerId, status: "left" | "removed", ctx: Ctx): Handled {
+  const event = status === "left" ? ({ t: "PlayerLeft", playerId: id } as const) : ({ t: "PlayerRemoved", playerId: id } as const);
+  if (state.phase === "LOBBY") return { ...effects(), state: { ...state, players: state.players.filter((p) => p.id !== id) }, events: [event] };
+  const out = evictPlayer(state, id, status, ctx.rng);
+  return { ...effects(), state: out.state, events: [event, ...out.events], draftChanges: out.draftChanges, ...(out.episodeStarted ? { episodeStarted: true } : {}) };
+}
+
 export const leave: CommandSpec<Of<"leave">> = {
   type: "leave",
-  phases: ["LOBBY"], // #23 widens this and adds eviction
+  phases: ["LOBBY", "WRITING", "PLAYING"],
   actor: (i) => i.roles.playerId !== null,
-  handle: ({ state, roles }) => {
-    const id = roles.playerId as string;
-    return { ...effects(), state: { ...state, players: state.players.filter((p) => p.id !== id) }, events: [{ t: "PlayerLeft", playerId: id }] };
-  },
+  handle: ({ state, roles, ctx }) => depart(state, roles.playerId as string, "left", ctx),
 };
 
 export const removePlayer: CommandSpec<Of<"removePlayer">> = {
   type: "removePlayer",
-  phases: ["LOBBY"], // #23 widens this and adds eviction
+  phases: ["LOBBY", "WRITING", "PLAYING"],
   actor: (i) => i.roles.host,
   payload: ({ cmd }) => (isString(field(cmd, "playerId")) ? null : invalid()),
   preconditions: ({ state, cmd }) => (state.players.some((p) => p.id === cmd.playerId && seatedStatus(p)) ? null : reject("NOT_FOUND")),
-  handle: ({ state, cmd }) => ({
-    ...effects(),
-    state: { ...state, players: state.players.filter((p) => p.id !== cmd.playerId) },
-    events: [{ t: "PlayerRemoved", playerId: cmd.playerId }],
-  }),
+  handle: ({ state, cmd, ctx }) => depart(state, cmd.playerId, "removed", ctx),
 };

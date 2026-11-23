@@ -1,7 +1,6 @@
 // The writing commands (LLD 1 sections 7.1, 7.2, 8.4, 8.7, 9.3): startGame, saveDraft, finishWriting.
-// Moderation (guard 8) is not wired until #25: `saveDraft` stores text trimmed and otherwise as given, and the Engine enforces no length,
-// non-empty or profanity rule here (the contracts' wire cap is the only limit). `finishWriting` does not re-run moderation (M2), so what `saveDraft`
-// stored goes straight into the pool.
+// Guard 8 (#25): `saveDraft` moderates every text on every call (so the stored draft is always clean) and stores the cleaned form; a blank text is CONTENT_REJECTED EMPTY.
+// `finishWriting` does not re-run moderation (M2), so what `saveDraft` stored goes straight into the pool.
 import type { Command } from "@dc/contracts";
 import { EngineInvariantError, reject } from "../errors";
 import type { CommandSpec, Input } from "../registry";
@@ -9,6 +8,7 @@ import { mintCardId } from "../rules/cards";
 import { defaultTarget, MIN_PLAYERS, totals, writeCounts } from "../rules/playability";
 import { seated } from "../selectors";
 import type { Card, CardId, Draft, DraftChange, Game, Handled, Player, Rejection } from "../types";
+import { cleanedText, textRejection } from "./text";
 
 type Of<T extends Command["type"]> = Extract<Command, { type: T }>;
 
@@ -63,9 +63,17 @@ export const saveDraft: CommandSpec<Of<"saveDraft">> = {
     const cap = seatOf(i).writeTarget ?? { red: 0, green: 0 };
     return red.length > cap.red || green.length > cap.green ? invalid() : null;
   },
+  // Guard 8: every text of the draft, red then green, in order; the first failure is the rejection.
+  moderation: (i) => {
+    for (const t of [...i.cmd.red, ...i.cmd.green]) {
+      const bad = textRejection(t, "card", i.state.settings.profanity);
+      if (bad !== null) return bad;
+    }
+    return null;
+  },
   handle: (i) => {
     const me = seatOf(i);
-    const draft: Draft = { red: i.cmd.red.map((t) => t.trim()), green: i.cmd.green.map((t) => t.trim()) };
+    const draft: Draft = { red: i.cmd.red.map((t) => cleanedText(t, "card")), green: i.cmd.green.map((t) => cleanedText(t, "card")) };
     const draftChanges: DraftChange[] = [{ playerId: me.id, draft }];
     // Counts, not text, are what the aggregate mirrors; compared to `writeProgress`, not to the stored draft document.
     if (draft.red.length === me.writeProgress.red && draft.green.length === me.writeProgress.green) {

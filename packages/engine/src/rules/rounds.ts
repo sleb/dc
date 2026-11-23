@@ -20,7 +20,7 @@ export function nextJudge(players: readonly Player[], cursor: number | null, rng
 
 /**
  * Open the next round (8.3). Preconditions after step 1: at least 3 active players and a non-empty green deck, else EngineInvariantError.
- * 1 activate ready players (dealing in `joinOrder`, E18); 2 the judge is `judge` when given (only `voidRound`, #22) else `nextJudge`, and the cursor follows;
+ * 1 activate ready players (dealing in `joinOrder`, E18); 2 the judge is `judge` when given (`voidRound` after a reassignment) else `nextJudge`, and the cursor follows;
  * 3 the top green card leaves the deck, the roster is the actives, `changedAtVersion = version + 1`; 4 `RoundOpened`.
  * Events: `PlayerActivated` per activated player, then `RoundOpened`. It sets `round` and `judgeCursor` only: `phase` is the caller's.
  */
@@ -158,4 +158,58 @@ export function voidRound(game: Game, rng: Rng, now: number, reason: "no_submiss
   const voided: Game = { ...game, round: null, pools: { ...game.pools, greenDeck: [...game.pools.greenDeck, round.greenCardId] } };
   const next = openRound(voided, rng, now, keep);
   return { state: next.state, events: [{ t: "RoundVoided", round: round.number, reason }, ...next.events] };
+}
+
+export type ReassignReason = "passed" | "left" | "removed" | "resumed";
+
+/**
+ * Hand the round to another judge (8.3): used by `passJudging`, the judge's `leave` and `removePlayer` (eviction has already set their status), and settle slot 3a.
+ * The new judge is `nextJudge` over the active players except the outgoing judge, from the outgoing judge's `joinOrder` (from `judgeCursor` when there is no outgoing judge, "resumed").
+ * With no candidate (the evicted judge was the last active player, so the game is paused) `judgeId` becomes null, the cursor stays, `changedAtVersion` bumps and nothing is emitted.
+ * Otherwise the new judge's own submission is taken back (a hand play returns to their hand, a write-in goes to `redDiscard`; `revealOrder` loses the entry and keeps the order of the rest, E10),
+ * they join `roster` if recovery activated them mid-round, `judgeReassigned` is set, the cursor follows and `JudgeChanged` is emitted. The old judge, still active in SUBMITTING, is an expected player (they are on
+ * the roster); in JUDGING they sit out. Draws nothing from `rng` unless the cursor is null. Pure.
+ */
+export function reassignJudge(game: Game, reason: ReassignReason, rng: Rng): { state: Game; events: DomainEvent[] } {
+  const round = openRoundOf(game, "reassignJudge");
+  const outgoing = round.judgeId === null ? undefined : game.players.find((p) => p.id === round.judgeId);
+  const candidates = game.players.filter((p) => p.status === "active" && p.id !== round.judgeId);
+  if (candidates.length === 0) return { state: { ...game, round: { ...round, judgeId: null, changedAtVersion: game.version + 1 } }, events: [] };
+  const next = nextJudge(candidates, outgoing?.joinOrder ?? game.judgeCursor, rng);
+  const theirs = round.submissions.find((s) => s.playerId === next.id);
+  let players = game.players;
+  let pools = game.pools;
+  if (theirs !== undefined) {
+    if (theirs.writeIn === true) pools = { ...pools, redDiscard: [...pools.redDiscard, theirs.cardId] };
+    else players = players.map((p) => (p.id === next.id ? { ...p, hand: [...p.hand, theirs.cardId] } : p));
+  }
+  const reassigned: Round = {
+    ...round,
+    judgeId: next.id,
+    judgeReassigned: true,
+    submissions: theirs === undefined ? round.submissions : round.submissions.filter((s) => s.playerId !== next.id),
+    revealOrder: theirs === undefined || round.revealOrder === null ? round.revealOrder : round.revealOrder.filter((c) => c !== theirs.cardId),
+    roster: round.roster.includes(next.id) ? round.roster : [...round.roster, next.id],
+    changedAtVersion: game.version + 1,
+  };
+  return {
+    state: { ...game, players, pools, round: reassigned, judgeCursor: next.joinOrder },
+    events: [{ t: "JudgeChanged", round: round.number, from: round.judgeId, to: next.id, reason }],
+  };
+}
+
+/**
+ * `endGame`'s abort (8.3): each hand-played submission returns to its owner's hand, a write-in submission goes to `redDiscard`, the green card goes to the bottom of `greenDeck`, `round = null`.
+ * No round, no change.
+ */
+export function abortRound(game: Game): Game {
+  const round = game.round;
+  if (round === null) return game;
+  let pools = { ...game.pools, greenDeck: [...game.pools.greenDeck, round.greenCardId] };
+  let players = game.players;
+  for (const s of round.submissions) {
+    if (s.writeIn === true) pools = { ...pools, redDiscard: [...pools.redDiscard, s.cardId] };
+    else players = players.map((p) => (p.id === s.playerId ? { ...p, hand: [...p.hand, s.cardId] } : p));
+  }
+  return { ...game, players, pools, round: null };
 }

@@ -1,12 +1,13 @@
 // The round commands (LLD 1 sections 7.1, 7.2, 8.2, 8.3): confirmSubmission, closeSubmissions, pickWinner.
-// Moderation (guard 8) is not wired until #25, so a pitch is stored trimmed and the Engine enforces only the 140-code-point limit and the variant switch.
-// `writeIn`, `redraw`, `castVote`, `importDeck` and `deleteGame` have no owner in M1 and stay unregistered (guard 0, INVALID_ARGUMENT); `passJudging` is #23.
+// Guard 8 (#25): the pitch is moderated as `pitch` (length by code points, structure, profanity) and stored cleaned; a blank pitch is no pitch and skips the check. Guard 7 keeps the shape only (a string).
+// `writeIn`, `redraw`, `castVote`, `importDeck` and `deleteGame` have no owner in M1 and stay unregistered (guard 0, INVALID_ARGUMENT); `passJudging` and `endGame` are in stalls.ts (#23).
 import type { Command } from "@dc/contracts";
-import { TEXT_LIMITS } from "@dc/contracts";
 import { reject } from "../errors";
 import type { CommandSpec, Input } from "../registry";
+import { check } from "../moderation";
 import { closeRound, resolveRound } from "../rules/rounds";
 import type { CardId, Game, Handled, Player, Rejection, Round, Submission } from "../types";
+import { cleanedText, textRejection } from "./text";
 
 type Of<T extends Command["type"]> = Extract<Command, { type: T }>;
 
@@ -27,16 +28,15 @@ const inRound = (phase: Round["phase"]) => (i: Input<Command>): Rejection | null
  * Guard 7, shared: these commands are stale-checked and the contracts envelope requires `expectedVersion` for them (a non-negative integer),
  * so it must be a finite integer here. Guard 3 skips anything else, so an absent, NaN or fractional value must not get past guard 7.
  */
-const versionOk = (cmd: object): boolean => Number.isInteger(field(cmd, "expectedVersion"));
+export const versionOk = (cmd: object): boolean => Number.isInteger(field(cmd, "expectedVersion"));
 
-/** The pitch after trimming: undefined for none (absent or blank), a string otherwise; null when it is not usable (not a string, over the limit). */
+/** The pitch as sent: undefined for none (absent, or blank once cleaned), a string otherwise; null when it is not a string (guard 7). A blank pitch is no pitch, whatever the mode. */
 function pitchOf(cmd: object): string | undefined | null {
   const raw = field(cmd, "pitch");
   if (raw === undefined) return undefined;
   if (typeof raw !== "string") return null;
-  const trimmed = raw.trim();
-  if ([...trimmed].length > TEXT_LIMITS.pitch) return null; // code points, as TEXT_LIMITS counts (LLD 11)
-  return trimmed === "" ? undefined : trimmed;
+  const r = check(raw, "pitch", "off");
+  return !r.ok && r.reason === "EMPTY" ? undefined : raw;
 }
 
 export const confirmSubmission: CommandSpec<Of<"confirmSubmission">> = {
@@ -52,6 +52,11 @@ export const confirmSubmission: CommandSpec<Of<"confirmSubmission">> = {
     return roundOf(i).roster.includes(i.roles.playerId as string) ? null : reject("NOT_AUTHORIZED", "sitting_out");
   },
   payload: (i) => (versionOk(i.cmd) && typeof field(i.cmd, "cardId") === "string" && pitchOf(i.cmd) !== null ? null : invalid()),
+  // Guard 8: the pitch, when there is one, under the mode now in force (a pitch is checked even with the variant off: guard 8 precedes guard 9's VARIANT_UNAVAILABLE).
+  moderation: (i) => {
+    const pitch = pitchOf(i.cmd);
+    return pitch === undefined || pitch === null ? null : textRejection(pitch, "pitch", i.state.settings.profanity);
+  },
   // Guard 9 in the order of 7.1: ALREADY_SUBMITTED, NOT_IN_HAND (one rejection whether or not the card exists elsewhere), VARIANT_UNAVAILABLE.
   preconditions: (i) => {
     const me = seatOf(i);
@@ -65,8 +70,9 @@ export const confirmSubmission: CommandSpec<Of<"confirmSubmission">> = {
     const me = seatOf(i);
     const round = roundOf(i);
     const cardId: CardId = i.cmd.cardId;
-    const pitch = pitchOf(i.cmd);
-    const submission: Submission = { playerId: me.id, cardId, ...(pitch === undefined || pitch === null ? {} : { pitch }) };
+    const raw = pitchOf(i.cmd);
+    const pitch = typeof raw === "string" ? cleanedText(raw, "pitch") : undefined;
+    const submission: Submission = { playerId: me.id, cardId, ...(pitch === undefined ? {} : { pitch }) };
     const players = i.state.players.map((p) => (p.id === me.id ? { ...p, hand: p.hand.filter((c) => c !== cardId) } : p));
     return { ...effects(), state: { ...i.state, players, round: { ...round, submissions: [...round.submissions, submission] } }, events: [{ t: "SubmissionConfirmed", round: round.number, playerId: me.id }] };
   },

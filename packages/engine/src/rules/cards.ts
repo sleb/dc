@@ -1,6 +1,6 @@
 import { CardIdSchema } from "@dc/contracts";
 import { EngineInvariantError } from "../errors";
-import type { Card, CardId, Ctx, Pools, Rng } from "../types";
+import type { Card, CardId, Ctx, Game, Pools, Rng } from "../types";
 import { HAND } from "./playability";
 
 export const MINT_ATTEMPTS = 16;
@@ -45,4 +45,31 @@ export function draw(pools: Pools, n: number, rng: Rng): { pools: Pools; cards: 
 export function topUp(pools: Pools, hand: readonly CardId[], rng: Rng): { pools: Pools; hand: CardId[] } {
   const out = draw(pools, Math.max(0, HAND - hand.length), rng);
   return { pools: out.pools, hand: [...hand, ...out.cards] };
+}
+
+/**
+ * Delete a card from the registry and from whichever zone holds it (LLD 1 section 8.6): a pool (deleted in place), a hand, a score pile, a revealed submission (also from `revealOrder`; the owner is not asked to replay)
+ * or the current round's green card (replaced by the top of `greenDeck`). A round zone that was touched gets `changedAtVersion = version + 1`. A card that is the current green with an empty `greenDeck` is an EngineInvariantError
+ * (the command's guard 9 refuses it first). A round left with no revealed submission is voided by settle slot 4, not here.
+ */
+export function removeCardFromGame(game: Game, id: CardId): Game {
+  const cards = Object.fromEntries(Object.entries(game.cards).filter(([k]) => k !== id));
+  const not = (c: CardId): boolean => c !== id;
+  const players = game.players.map((p) => ({ ...p, hand: p.hand.filter(not), scorePile: p.scorePile.filter(not) }));
+  let pools: Pools = {
+    redDeck: game.pools.redDeck.filter(not),
+    redDiscard: game.pools.redDiscard.filter(not),
+    greenDeck: game.pools.greenDeck.filter(not),
+    greenDiscard: game.pools.greenDiscard.filter(not),
+  };
+  let round = game.round;
+  if (round !== null && round.greenCardId === id) {
+    const next = pools.greenDeck[0];
+    if (next === undefined) throw new EngineInvariantError("removeCardFromGame: the current green card has no replacement");
+    pools = { ...pools, greenDeck: pools.greenDeck.slice(1) };
+    round = { ...round, greenCardId: next, changedAtVersion: game.version + 1 };
+  } else if (round !== null && round.submissions.some((s) => s.cardId === id)) {
+    round = { ...round, submissions: round.submissions.filter((s) => s.cardId !== id), revealOrder: round.revealOrder === null ? null : round.revealOrder.filter(not), changedAtVersion: game.version + 1 };
+  }
+  return { ...game, cards, players, pools, round };
 }

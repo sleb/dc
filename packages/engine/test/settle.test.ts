@@ -14,7 +14,8 @@ describe("V7 settle step 2: pause flag (LLD 1 section 8.1)", () => {
     const play = (statuses: Player["status"][]) => makeGame({ phase: "PLAYING", players: players(statuses), round: makeRound({ roster: statuses.map((_, i) => pid(i)) }) }); // everyone expected, so slot 4 (#22) has nothing to advance
     expect(paused(play(["active", "active"]))).toBe(true);
     expect(paused(play(["active", "active", "active"]))).toBe(false);
-    expect(paused(play(["active", "active", "ready", "writing"]))).toBe(true);
+    expect(paused(play(["active", "active", "writing", "writing"]))).toBe(true);
+    expect(paused(play(["active", "active", "ready", "writing"]))).toBe(false); // slot 3 (#23): two active and one ready recover play, so the flag is recomputed to false
     expect(paused(play(["active", "active", "active", "left", "removed"]))).toBe(false);
     expect(paused(play(["active", "active", "left"]))).toBe(true);
   });
@@ -60,7 +61,7 @@ describe("V8 slot order", () => {
     expect(SETTLE_SLOTS.map((s) => s.id)).toEqual(["1", "2", "3", "3a", "4", "5"]);
   });
 
-  test("slots 1, 3, 3a and 4 are no-ops on a PLAYING game that is waiting for submissions (slot 1 acts only in WRITING; slot 4 needs everyone in; 3 and 3a are #23)", () => {
+  test("slots 1, 3, 3a and 4 are no-ops on a PLAYING game that is waiting for submissions (slot 1 acts only in WRITING; slot 4 needs everyone in; 3 needs a paused game and 3a a null judge, #23)", () => {
     const g = makeGame({ phase: "PLAYING", players: players(["active", "active", "active"]), round: makeRound({ roster: [pid(0), pid(1), pid(2)] }) });
     for (const id of ["1", "3", "3a", "4"] as const) {
       const slot = SETTLE_SLOTS.find((s) => s.id === id);

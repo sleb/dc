@@ -191,7 +191,7 @@ describe("R1 confirmSubmission: guard ladder (5.3, 7.1)", () => {
   });
 });
 
-describe("P1 the pitch (7.1, an interim until #25 wires Moderation)", () => {
+describe("P1 the pitch (7.1, 5.4; guard 8 since #25, the full matrix is in moderation-wiring.test.ts)", () => {
   const withPitch = (on: boolean): Game => submitting({ extra: { settings: { ...makeGame().settings, variants: { pitch: on, writeIn: false, redraw: false, peoplesChoice: false } } } });
 
   test("variant off: a pitch is VARIANT_UNAVAILABLE; no pitch is fine", () => {
@@ -205,18 +205,18 @@ describe("P1 the pitch (7.1, an interim until #25 wires Moderation)", () => {
     expect(JSON.stringify(v.events)).not.toContain("smooth");
   });
 
-  test("the limit is 140 characters after trimming: 140 is accepted, 141 is INVALID_ARGUMENT, even with the variant off (guard 7 precedes guard 9)", () => {
+  test("the limit is 140 characters after trimming: 140 is accepted, 141 is CONTENT_REJECTED TOO_LONG (guard 8), even with the variant off (guard 8 precedes guard 9)", () => {
     expect(accepted(withPitch(true), confirm(cid(200), { pitch: `  ${"x".repeat(140)}  ` }), as(2)).state.round?.submissions[0]?.pitch).toHaveLength(140);
-    expect(rejected(withPitch(true), confirm(cid(200), { pitch: "x".repeat(141) }), as(2))).toStrictEqual({ code: "INVALID_ARGUMENT" });
-    expect(rejected(withPitch(false), confirm(cid(200), { pitch: "x".repeat(141) }), as(2))).toStrictEqual({ code: "INVALID_ARGUMENT" });
+    expect(rejected(withPitch(true), confirm(cid(200), { pitch: "x".repeat(141) }), as(2))).toStrictEqual({ code: "CONTENT_REJECTED", detail: "TOO_LONG" });
+    expect(rejected(withPitch(false), confirm(cid(200), { pitch: "x".repeat(141) }), as(2))).toStrictEqual({ code: "CONTENT_REJECTED", detail: "TOO_LONG" });
   });
 
-  test("the limit counts code points (TEXT_LIMITS, LLD 11), not UTF-16 units: 140 astral characters are accepted, 141 are INVALID_ARGUMENT", () => {
+  test("the limit counts code points (TEXT_LIMITS, LLD 11), not UTF-16 units: 140 astral characters are accepted, 141 are CONTENT_REJECTED", () => {
     const astral = (n: number) => "\u{1F600}".repeat(n); // 2 UTF-16 units each
     const ok = accepted(withPitch(true), confirm(cid(200), { pitch: ` ${astral(140)} ` }), as(2)).state.round?.submissions[0]?.pitch;
     expect([...(ok ?? "")]).toHaveLength(140);
-    expect(rejected(withPitch(true), confirm(cid(200), { pitch: astral(141) }), as(2))).toStrictEqual({ code: "INVALID_ARGUMENT" });
-    expect(rejected(withPitch(false), confirm(cid(200), { pitch: astral(141) }), as(2))).toStrictEqual({ code: "INVALID_ARGUMENT" });
+    expect(rejected(withPitch(true), confirm(cid(200), { pitch: astral(141) }), as(2))).toStrictEqual({ code: "CONTENT_REJECTED", detail: "TOO_LONG" });
+    expect(rejected(withPitch(false), confirm(cid(200), { pitch: astral(141) }), as(2))).toStrictEqual({ code: "CONTENT_REJECTED", detail: "TOO_LONG" });
   });
 
   test("a blank pitch is no pitch: accepted with the variant off, and stored as no key", () => {
@@ -374,16 +374,18 @@ describe("R4 pickWinner (7.1, 8.3)", () => {
 });
 
 describe("E15 FINISHED is terminal (8.8)", () => {
-  test("every registered command is WRONG_PHASE in FINISHED for the host (who holds a seat), and the finished game stays as it was", () => {
+  test("every registered command but endGame is WRONG_PHASE in FINISHED for the host (who holds a seat), and the finished game stays as it was", () => {
     const g = roundGame({ target: 2, scores: [0, 0, 1, 0], history: PRIOR, judge: 1, submitted: [2, 3], phase: "JUDGING" });
     const finished = accepted(g, pick(cid(206)), as(1)).state;
     expect(finished.phase).toBe("FINISHED");
     const seen = new Set<string>();
     for (const { actor, cmd: c } of junkCommands(finished)) {
-      if (actor.kind !== "user" || actor.uid !== HOST_UID || !Object.hasOwn(REGISTRY, c.type)) continue; // the host's entries: the host holds p0's seat
+      const entry = c.type === "markReminded" ? actor.kind === "system" : actor.kind === "user" && actor.uid === HOST_UID; // the host's entries (the host holds p0's seat); markReminded is system only (#24)
+      if (!entry || !Object.hasOwn(REGISTRY, c.type)) continue;
       seen.add(c.type);
       const who = c.type === "join" ? userActor(seatUidOf(GAME_ID, pid(9))) : actor; // join is for the seat uid of its playerId
       const r = decide(deepFreeze(structuredClone(finished)), c, ctxFor({ actor: who }));
+      if (c.type === "endGame") { expect(r.ok).toBe(true); continue; } // E15: endGame is the one accepted command (#23); castVote and deleteGame are not registered yet
       expect(r).toStrictEqual({ ok: false, error: { code: "WRONG_PHASE" } });
     }
     expect([...seen].sort()).toEqual(Object.keys(REGISTRY).sort());

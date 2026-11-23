@@ -1,6 +1,7 @@
 import { EngineInvariantError } from "./errors";
 import { meetsMinimums, MIN_PLAYERS, totals } from "./rules/playability";
-import { beginPlay, closeRound, voidRound } from "./rules/rounds";
+import { activateReady } from "./rules/membership";
+import { beginPlay, closeRound, reassignJudge, voidRound } from "./rules/rounds";
 import { waitingFields } from "./rules/waiting";
 import { activePlayers, seated } from "./selectors";
 import type { DomainEvent, Game, Rng } from "./types";
@@ -8,8 +9,8 @@ import type { DomainEvent, Game, Rng } from "./types";
 /**
  * `settle` runs after every aggregate-changing command, before `version` is bumped (LLD 1 section 8.2).
  * The slots are named and ordered here. Slot 2 (pause flag) and slot 5 (waiting fields) are real in 1.2, slot 1 (begin play) in 1.4 (#21),
- * slot 4 (auto-advance) in 1.5 (#22, with closeRound and voidRound). Slots 3 (recovery activation) and 3a (judge assignment) are no-ops
- * until #23, which also brings reassignJudge (activateReady, openRound and beginPlay are #21's).
+ * slot 4 (auto-advance) in 1.5 (#22, with closeRound and voidRound), slots 3 (recovery activation) and 3a (judge assignment) in 1.6 (#23, with reassignJudge).
+ * `settle` also drops `PausedChanged` events that cancel to no net change against the stored flag (Q1).
  */
 export type SlotId = "1" | "2" | "3" | "3a" | "4" | "5";
 
@@ -37,10 +38,8 @@ export interface SettleSlot {
   run(state: Game, env: SettleEnv): SettleStep;
 }
 
-const noop = (id: SlotId): SettleSlot => ({ id, run: (state) => ({ state, events: [] }) });
-
 /** Slot 1 (8.2): WRITING, at least 3 seated, every seated player ready and the minimums met at the frozen target: begin play. A null target or writeCounts never begins play.
- * When every seated player is ready but the minimums fail, nothing happens: the game stays in WRITING (LLD 1 sections 8.2 and 9.4). #23 owns the test. */
+ * When every seated player is ready but the minimums fail, nothing happens: the game stays in WRITING (LLD 1 sections 8.2 and 9.4; tested in stalls.test.ts, #23). */
 const beginPlaySlot: SettleSlot = {
   id: "1",
   run: (state, env) => {
@@ -62,7 +61,7 @@ export function computePaused(g: Game): boolean {
 /**
  * Slot 4 (8.2): auto-advance, only in PLAYING and not paused, repeated until stable. A SUBMITTING round in which no expected player (roster, not the judge, still active)
  * lacks a submission closes `allIn` when it has a submission and is voided when it has none; a JUDGING round with an empty `revealOrder` is voided.
- * Each close or void starts a new episode. A round with no judge is left to slot 3a (#23). The void branches are unreachable by commands until eviction (#23).
+ * Each close or void starts a new episode. A round with no judge is left to slot 3a. The void branches are reached by eviction and `passJudging` (#23).
  */
 const autoAdvance: SettleSlot = {
   id: "4",
@@ -95,6 +94,33 @@ const autoAdvance: SettleSlot = {
   },
 };
 
+/**
+ * Slot 3 (8.2): PLAYING, paused and `active + ready >= 3`: every ready player is activated now (7 cards, in `joinOrder`) and sits out the round in flight
+ * (they are not on `roster`), then `paused` is recomputed and `PausedChanged` emitted if it flipped. Resolves the deadlock of open question 3.
+ */
+const recoverySlot: SettleSlot = {
+  id: "3",
+  run: (state, env) => {
+    if (state.phase !== "PLAYING" || !state.paused) return { state, events: [] };
+    const ready = state.players.filter((p) => p.status === "ready").length;
+    if (ready === 0 || activePlayers(state).length + ready < MIN_PLAYERS) return { state, events: [] };
+    const activated = activateReady(state, env.rng);
+    const paused = computePaused(activated.state);
+    const events: DomainEvent[] = paused === state.paused ? activated.events : [...activated.events, { t: "PausedChanged", paused }];
+    return { state: { ...activated.state, paused }, events };
+  },
+};
+
+/** Slot 3a (8.2): PLAYING, not paused and a round with no judge (the judge was evicted while paused): `reassignJudge("resumed")`, a new episode. */
+const judgeSlot: SettleSlot = {
+  id: "3a",
+  run: (state, env) => {
+    if (state.phase !== "PLAYING" || state.paused || state.round === null || state.round.judgeId !== null) return { state, events: [] };
+    const out = reassignJudge(state, "resumed", env.rng);
+    return { state: out.state, events: out.events, episodeStarted: true };
+  },
+};
+
 const pauseFlag: SettleSlot = {
   id: "2",
   run: (state) => {
@@ -109,7 +135,7 @@ const waitingSlot: SettleSlot = {
   run: (state, env) => ({ state: { ...state, ...waitingFields(state, env.now, env.episodeStarted) }, events: [] }),
 };
 
-export const SETTLE_SLOTS: readonly SettleSlot[] = [beginPlaySlot, pauseFlag, noop("3"), noop("3a"), autoAdvance, waitingSlot];
+export const SETTLE_SLOTS: readonly SettleSlot[] = [beginPlaySlot, pauseFlag, recoverySlot, judgeSlot, autoAdvance, waitingSlot];
 
 export function runSlots(slots: readonly SettleSlot[], state: Game, rng: Rng, now: number, episodeStarted: boolean): { state: Game; events: DomainEvent[] } {
   let current = state;
@@ -125,5 +151,10 @@ export function runSlots(slots: readonly SettleSlot[], state: Game, rng: Rng, no
 }
 
 export function settle(state: Game, rng: Rng, now: number, episodeStarted: boolean): { state: Game; events: DomainEvent[] } {
-  return runSlots(SETTLE_SLOTS, state, rng, now, episodeStarted);
+  const out = runSlots(SETTLE_SLOTS, state, rng, now, episodeStarted);
+  // Q1: slot 2 may flip `paused` and slot 3 flip it back (or the reverse); only a net change against the stored flag is reported, once.
+  const flips = out.events.filter((e) => e.t === "PausedChanged");
+  if (flips.length === 0) return out;
+  const keep = out.state.paused === state.paused ? undefined : flips[flips.length - 1];
+  return { state: out.state, events: out.events.filter((e) => e.t !== "PausedChanged" || e === keep) };
 }

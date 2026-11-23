@@ -1,6 +1,7 @@
 // The only public entry (LLD 1 section 2.1). Names are added as the steps that implement them land.
 export { decide } from "./decide";
 export { EngineInvariantError } from "./errors";
+export { check as checkText } from "./moderation";
 export { makeRng } from "./rng";
 export { actorRole, seatUid } from "./roles";
 export * as playability from "./rules/playability";

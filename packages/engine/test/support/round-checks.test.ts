@@ -111,7 +111,7 @@ describe("the new round checkers each fail on a broken result", () => {
     const round = after.round as NonNullable<Game["round"]>;
     expect(() => checkJudges(withValue(p, { state: { ...after, round: { ...round, submissions: [{ playerId: round.judgeId as string, cardId: cid(1) }] } } }))).toThrow(/judge has a submission/);
     expect(() => checkJudges(withValue(p, { state: { ...after, players: after.players.map((q) => (q.id === round.judgeId ? { ...q, status: "left" as const } : q)) } }))).toThrow(/no active judge/);
-    expect(() => checkJudges(withValue(p, { state: { ...after, round: { ...round, judgeId: pid(3) } } }))).toThrow(/rotation says/);
+    expect(() => checkJudges(withValue(p, { state: { ...after, round: { ...round, judgeId: pid(3) } } }))).toThrow(/model says/);
   });
 
   test("E5 and E13 checkRoundMoves: a confirm that moves another player's card, a pick that scores the wrong player, a close that moves a card all fail", () => {
@@ -162,7 +162,8 @@ describe("the new round checkers each fail on a broken result", () => {
     const winner = p.value.events[0] as Extract<Accepted["events"][number], { t: "WinnerPicked" }>;
     expect(() => checkScoring(withValue(p, { events: [winner, winner] }))).toThrow(/two WinnerPicked/);
     expect(() => checkScoring(withValue(p, { events: [{ ...winner, winnerId: winner.judgeId }] }))).toThrow(/the judge won/);
-    expect(() => checkScoring(withValue(p, { state: { ...p.value.state, players: p.value.state.players.map((q) => (q.id === pid(2) ? { ...q, scorePile: [] } : q)) } }))).toThrow(/score piles hold/);
+    expect(() => checkScoring(withValue(p, { state: { ...p.value.state, players: p.value.state.players.map((q) => (q.id === pid(2) ? { ...q, scorePile: [] } : q)) } }))).toThrow(/score piles moved/);
+    expect(() => checkScoring(withValue(p, { state: { ...p.value.state, history: p.value.state.history.slice(0, 0) } }))).toThrow();
   });
 
   test("E15 checkFinished: FINISHED with a round, a round opened in FINISHED, and an accepted command in a finished game fail", () => {

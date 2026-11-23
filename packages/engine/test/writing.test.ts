@@ -277,7 +277,7 @@ describe("W1 saveDraft (7.1, 7.2)", () => {
     expect(rejected(writing(), { type: "saveDraft", red: 5 }, as(2))).toStrictEqual({ code: "WRONG_PHASE", detail: "finished" });
   });
 
-  test("stores trimmed text and returns it as the draft change; nothing but counts reaches the state", () => {
+  test("stores the cleaned text (trimmed, NFC, whitespace collapsed) and returns it as the draft change; nothing but counts reaches the state", () => {
     const secret = "ZZ-SECRET-TEXT-ZZ";
     const v = accepted(writing(), { type: "saveDraft", red: [`  ${secret} one  `, "two\n"], green: ["\tthree "] }, as(1));
     expect(v.draftChanges).toEqual([{ playerId: pid(1), draft: { red: [`${secret} one`, "two"], green: ["three"] } }]);
@@ -288,9 +288,10 @@ describe("W1 saveDraft (7.1, 7.2)", () => {
     expect(v.redactEnvelope).toBe(false);
   });
 
-  test("no moderation or length rule is enforced here until #25: empty strings and very long strings are stored", () => {
-    const v = accepted(writing(), { type: "saveDraft", red: ["", "x".repeat(500)], green: [] }, as(1));
-    expect(v.draftChanges[0]?.draft?.red).toEqual(["", "x".repeat(500)]);
+  test("guard 8 (#25): an empty string is CONTENT_REJECTED EMPTY and a text over 80 code points TOO_LONG; the matrix is in moderation-wiring.test.ts", () => {
+    expect(rejected(writing(), { type: "saveDraft", red: [""], green: [] }, as(1))).toStrictEqual({ code: "CONTENT_REJECTED", detail: "EMPTY" });
+    expect(rejected(writing(), { type: "saveDraft", red: ["x".repeat(81)], green: [] }, as(1))).toStrictEqual({ code: "CONTENT_REJECTED", detail: "TOO_LONG" });
+    expect(accepted(writing(), { type: "saveDraft", red: ["x".repeat(80)], green: [] }, as(1)).draftChanges[0]?.draft?.red).toEqual(["x".repeat(80)]);
   });
 });
 
