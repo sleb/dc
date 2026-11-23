@@ -10,7 +10,7 @@ export type TextKind = "name" | "card" | "pitch";
 export type CheckResult = { ok: true; text: string } | { ok: false; reason: "EMPTY" | "TOO_LONG" | "INVALID_CHARS" | "PROFANITY" };
 
 /** Control characters other than whitespace, zero-width and bidi-control characters, the soft hyphen, and lone surrogates. */
-const INVALID = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F­​-‏‪-‮⁠⁦-⁩﻿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+const INVALID = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F­؜᠎​-‏‪-‮⁠-⁤⁦-⁯﻿￹-￻\u{E0000}-\u{E007F}]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 
 /** NFC, trim, collapse every run of whitespace to one space. What is stored. */
 export const clean = (text: string): string => text.normalize("NFC").trim().replace(/\s+/gu, " ");
@@ -21,8 +21,10 @@ export const nameKey = (name: string): string => normalize(clean(name).replace(/
 function matches(folded: string, list: WordList, collapsed: boolean): boolean {
   const allow = new Set(collapsed ? list.ALLOW.map(collapseRuns) : list.ALLOW);
   const tokens = folded.split(/[^\p{L}]+/u).filter((t) => t !== "" && !allow.has(t));
-  const words = list.TERMS.filter((t) => t.match === "word").map((t) => t.term);
-  const subs = list.TERMS.filter((t) => t.match === "substring").map((t) => t.term);
+  // The collapsed pass compares the collapsed text with the terms collapsed the same way (and as written), so a doubled-letter term is caught when another letter is elongated.
+  const form = (t: string): string[] => (collapsed ? [t, collapseRuns(t)] : [t]);
+  const words = list.TERMS.filter((t) => t.match === "word").flatMap((t) => form(t.term));
+  const subs = list.TERMS.filter((t) => t.match === "substring").flatMap((t) => form(t.term));
   if (tokens.some((t) => words.includes(t) || subs.some((s) => t.includes(s)))) return true; // (a) token pass, (b) substring pass
   const squash = tokens.join("");
   return subs.some((s) => s.length >= 5 && squash.includes(s)); // (c) squash pass: separators between letters do not hide a long term

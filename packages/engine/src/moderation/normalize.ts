@@ -15,8 +15,8 @@ const FORMAT = /\p{Cf}/gu;
 const LETTER = /\p{L}/u;
 const RUN3 = /(\p{L})\1{2,}/gu;
 const RUN2 = /(\p{L})\1+/gu;
-/** Every pass can enable another (a leet character that becomes a letter makes its neighbour "next to a letter"; a lowercase can add a mark), so the pipeline runs to a fixed point. It converges in a few passes. */
-const MAX_PASSES = 16;
+/** Every pass can enable another (a leet character that becomes a letter makes its neighbour "next to a letter"; a lowercase can add a mark), so the pipeline runs to a fixed point. A long leet chain needs about one pass per character, so the cap scales with the input: each changing pass converts a symbol to a letter or settles a bounded transform, so it terminates well inside `16 + 2 * length`. */
+const BASE_PASSES = 16;
 
 function pass(text: string, leet: boolean): string {
   // 1 NFKC, then NFD and strip combining marks, then NFC so a Hangul syllable made of jamo is stable.
@@ -43,7 +43,8 @@ function pass(text: string, leet: boolean): string {
 /** The folded form, to a fixed point. `leet: false` skips step 4 (so a trailing "!" stays a separator). */
 export function fold(text: string, leet: boolean): string {
   let cur = text;
-  for (let i = 0; i < MAX_PASSES; i++) {
+  const max = BASE_PASSES + 2 * text.length;
+  for (let i = 0; i < max; i++) {
     const next = pass(cur, leet);
     if (next === cur) return cur;
     cur = next;

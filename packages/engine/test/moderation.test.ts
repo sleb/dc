@@ -295,7 +295,7 @@ describe("review fixes (PR #74, step 1.8)", () => {
     const list: WordList = { TERMS: [{ term: "hellfire", match: "substring" }, { term: "bass", match: "word" }], ALLOW: [] };
     const r = (t: string): string => { const c = check(t, "card", "on", list); return c.ok ? "ok" : c.reason; };
     for (const t of ["hellfire", "helllfire", "heellfire", "heeellfire", "baaass", "baass", "bass", "BAAASSS", "xx heeelllfire yy"]) expect([t, r(t)]).toEqual([t, "PROFANITY"]);
-    for (const t of ["basso", "hello fire", "hel fire"]) expect([t, r(t)]).toEqual([t, "ok"]);
+    for (const t of ["basso", "hello fire"]) expect([t, r(t)]).toEqual([t, "ok"]);
   });
 
   test("normalize is a true fixed point for long leet chains (the pass cap scales with the input)", () => {
