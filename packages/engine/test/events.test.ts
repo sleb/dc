@@ -357,8 +357,8 @@ describe("P-N2 events carry ids, counts and enumerated kinds only (never card te
 });
 
 describe("P-E9 no event before WinnerPicked carries a submitted card, and nothing marks a write-in (K-A)", () => {
-  // Ruling (#26): a revealed card is public in JUDGING (it is in the reveal list, without an owner), so `removeCard` may name it in `CardRemoved`, which has no player field.
-  // E9 is the pairing of card and player: before WinnerPicked, no event names a submitted card except that one CardRemoved in JUDGING, and no event pairs a card with a player.
+  // Test allowance only: a card revealed in JUDGING is already public without an owner, and `CardRemoved` has no player field, so `removeCard` may name it. E9 is the pairing of card and player in events.
+  // The leak is the view diff, not the event: see the `submittedBy` test below (LLD 1 open question 20).
   test("over whole seeded games, across every command, the events before WinnerPicked mention no submitted card (except a CardRemoved of a revealed card in JUDGING), and none holds a card and a player together", () => {
     let withSubmissions = 0;
     assertProperty(fc.property(fc.integer({ min: 3, max: 7 }), fc.integer(), (n, seed) => {
@@ -383,5 +383,16 @@ describe("P-E9 no event before WinnerPicked carries a submitted card, and nothin
       });
     }), env());
     expect(withSubmissions).toBeGreaterThan(0);
+  });
+});
+
+describe("removeCard of a revealed submission in JUDGING (LLD 1 open question 20)", () => {
+  test("the public submittedBy loses exactly the removed card's author: the signal the M2 Projector must hide, pinned so a change is deliberate", () => {
+    const g = roundGame({ n: 5, judge: 0, submitted: [1, 2, 3], phase: "JUDGING", greenDeck: 60 });
+    const removed = cid(206); // player 2's play, revealed without an owner
+    const a = ok(g, { type: "removeCard", cardId: removed }, seat(0));
+    const lost = (g.round?.submissions ?? []).map((s) => s.playerId).filter((p) => !(a.state.round?.submissions ?? []).some((s) => s.playerId === p));
+    expect(lost).toStrictEqual([pid(2)]);
+    expect(a.events).toStrictEqual([{ t: "CardRemoved", cardId: removed, kind: "red" }]);
   });
 });
