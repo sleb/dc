@@ -15,7 +15,7 @@ const engineStatuses: Record<PlayerStatus, true> = { writing: true, ready: true,
 const engineRoundPhases: Record<RoundPhase, true> = { SUBMITTING: true, JUDGING: true };
 
 test("V8 the contracts tuples list exactly the Engine's phases, statuses and round phases", () => {
-  expect([...PHASES].sort()).toEqual(Object.keys(enginePhases).sort());
-  expect([...PLAYER_STATUSES].sort()).toEqual(Object.keys(engineStatuses).sort());
-  expect([...ROUND_PHASES].sort()).toEqual(Object.keys(engineRoundPhases).sort());
+  expect([...(PHASES as readonly string[])].sort()).toEqual(Object.keys(enginePhases).sort());
+  expect([...(PLAYER_STATUSES as readonly string[])].sort()).toEqual(Object.keys(engineStatuses).sort());
+  expect([...(ROUND_PHASES as readonly string[])].sort()).toEqual(Object.keys(engineRoundPhases).sort());
 });

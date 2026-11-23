@@ -9,6 +9,7 @@ import type { GameView, GameViewLoose, RoundDoc, ViewDoc } from "../src";
 import { C, GID, gameViews, roundDocs, viewDocs } from "./fixtures/view";
 
 type Json = Record<string, unknown>;
+interface Parser { safeParse(v: unknown): { success: boolean; error?: { issues: unknown[] } } }
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const assertType = <_T extends true>(): void => undefined;
 
@@ -18,14 +19,14 @@ assertType<GameView extends GameViewLoose ? true : false>();
 assertType<Equal<ViewDoc["schema"], 1>>();
 assertType<Equal<RoundDoc["redacted"], boolean>>();
 
-interface Target { name: string; strict: { safeParse(v: unknown): { success: boolean } }; loose: { safeParse(v: unknown): { success: boolean } }; docs: Record<string, Json>; wrapped: boolean }
+interface Target { name: string; strict: Parser; loose: Parser; docs: Record<string, Json> }
 const targets: Target[] = [
-  { name: "GameView", strict: GameViewSchema, loose: GameViewLooseSchema, docs: gameViews, wrapped: false },
-  { name: "ViewDoc", strict: ViewDocSchema, loose: ViewDocLooseSchema, docs: viewDocs, wrapped: true },
-  { name: "RoundDoc", strict: RoundDocSchema, loose: RoundDocLooseSchema, docs: roundDocs, wrapped: false },
+  { name: "GameView", strict: GameViewSchema, loose: GameViewLooseSchema, docs: gameViews },
+  { name: "ViewDoc", strict: ViewDocSchema, loose: ViewDocLooseSchema, docs: viewDocs },
+  { name: "RoundDoc", strict: RoundDocSchema, loose: RoundDocLooseSchema, docs: roundDocs },
 ];
 const clone = <T>(v: T): T => structuredClone(v);
-const ok = (s: { safeParse(v: unknown): { success: boolean } }, v: unknown): boolean => s.safeParse(v).success;
+const ok = (s: Parser, v: unknown): boolean => s.safeParse(v).success;
 
 type Path = (string | number)[];
 const RECORDS = new Set(["you.myVotes"]); // a record's keys are data, not schema keys
@@ -50,7 +51,7 @@ function objectPaths(v: unknown, p: Path = [], inView = false): Path[] {
   return [p, ...Object.entries(v).flatMap(([k, x]) => objectPaths(x, [...p, k], inView))];
 }
 /** ViewDoc paths below `view` are reported as GameView paths so one allowlist serves both. */
-const viewNorm = (p: Path): string => norm(p[0] === "view" ? p.slice(1) : p);
+const viewNorm = (p: Path): string => norm(p[0] === "view" && p.length > 1 ? p.slice(1) : p);
 
 const OPTIONAL_KEYS = new Set(["draft", "draftSeq", "host(player)"]);
 const optionalKey = (root: Json, p: Path): string => {
@@ -87,8 +88,8 @@ describe("V2 fixtures exercise every nullable", () => {
   ];
   const seen = new Map<string, Set<boolean>>();
   const walk = (v: unknown, p: Path): void => {
-    if (Array.isArray(v)) return v.forEach((x, i) => walk(x, [...p, i]));
     const key = viewNorm(p);
+    if (Array.isArray(v)) { seen.set(key, (seen.get(key) ?? new Set()).add(false)); return v.forEach((x, i) => walk(x, [...p, i])); }
     if (v === null) { seen.set(key, (seen.get(key) ?? new Set()).add(true)); return; }
     if (typeof v !== "object") { seen.set(key, (seen.get(key) ?? new Set()).add(false)); return; }
     seen.set(key, (seen.get(key) ?? new Set()).add(false));
@@ -248,7 +249,7 @@ describe("V9 PublicSettings is Settings minus writeCountsOverride", () => {
   });
   for (const k of keys) {
     test(`${k} accepts exactly what SettingsSchema accepts`, () => {
-      const field = (SettingsSchema.shape as Record<string, { safeParse(v: unknown): { success: boolean } }>)[k]!;
+      const field = (SettingsSchema.shape as Record<string, Parser>)[k]!;
       for (const v of samples[k]!) {
         // SettingsSchema's objects strip unknown keys; the strict view rejects them, so compare against the strict form of the same input
         const hasUnknown = typeof v === "object" && v !== null && "x" in v;

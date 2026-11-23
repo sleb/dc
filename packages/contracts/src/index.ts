@@ -4,3 +4,4 @@ export * from "./ids";
 export * from "./limits";
 export * from "./settings";
 export * from "./version";
+export * from "./view";
