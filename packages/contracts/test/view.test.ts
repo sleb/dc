@@ -290,6 +290,15 @@ describe("V10 numeric and key rules", () => {
       expect(ok(GameViewSchema, setAt(gameViews[name], p, v))).toBe(true);
     }
   });
+  test("room codes are canonical: lowercase and padded codes are rejected, strict and loose", () => {
+    for (const [name, p] of [["host", ["host", "roomCode"]], ["player", ["you", "roomCode"]]] as [string, Path][]) {
+      for (const bad of ["bcdf", " BCDF", "BCDF ", "bcdf\n", "BCD", "BCDFG", "ABCD"]) {
+        const m = setAt(gameViews[name], p, bad);
+        expect([bad, ok(GameViewSchema, m)]).toEqual([bad, false]);
+        expect([bad, ok(GameViewLooseSchema, m)]).toEqual([bad, false]);
+      }
+    }
+  });
   test("ViewDoc and RoundDoc numbers", () => {
     expect(ok(ViewDocSchema, setAt(viewDocs["spectator"], ["viewsRev"], -1))).toBe(false);
     expect(ok(ViewDocSchema, setAt(viewDocs["spectator"], ["generatedAt"], 1.5))).toBe(false);

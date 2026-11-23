@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CardIdSchema, GameIdSchema, PlayerIdSchema, RoomCodeSchema } from "./ids";
+import { CardIdSchema, GameIdSchema, PlayerIdSchema, ROOM_CODE_RE } from "./ids";
 import { VIEW_SCHEMA } from "./version";
 
 // GameView, ViewDoc and RoundDoc (LLD 2 4.1, 4.2, 7.1 are normative for fields; LLD 5 2.5 for the strict/loose rule).
@@ -39,6 +39,7 @@ export const makeViewSchemas = (mode: "strict" | "loose") => {
   const obj = (mode === "strict" ? z.strictObject : z.looseObject) as typeof z.strictObject;
   const en = (<S extends z.ZodType>(e: S) => (mode === "strict" ? e : z.string())) as <S extends z.ZodType>(e: S) => S;
 
+  const RoomCode = z.string().regex(ROOM_CODE_RE); // no trim or uppercase transform: a view carries the canonical code
   const Counts = obj({ red: NonNeg, green: NonNeg });
   const PublicSettings = obj({
     targetOverride: z.number().int().min(2).max(10).nullable(),
@@ -64,7 +65,7 @@ export const makeViewSchemas = (mode: "strict" | "loose") => {
   });
   const YouView = obj({
     playerId: PlayerIdSchema, status: en(PlayerStatusSchema), isHost: z.boolean(), isJudge: z.boolean(), turn: en(YouTurnSchema),
-    score: NonNeg, roomCode: RoomCodeSchema,
+    score: NonNeg, roomCode: RoomCode,
     hand: z.array(obj({ id: CardIdSchema, text: z.string() })),
     writeTarget: Counts.nullable(), cardsLeft: Counts.nullable(),
     powerUsage: obj({ writeIn: z.boolean(), redraw: z.boolean() }),
@@ -72,7 +73,7 @@ export const makeViewSchemas = (mode: "strict" | "loose") => {
     myVotes: z.record(z.string().regex(/^[1-9][0-9]*$/), CardIdSchema),
   });
   const HostPanel = obj({
-    roomCode: RoomCodeSchema,
+    roomCode: RoomCode,
     playability: obj({ n: NonNeg, target: Pos, totals: Counts, rMin: NonNeg, gMin: NonNeg, meets: z.boolean() }),
     writeCountsOverride: Counts.nullable(),
   });

@@ -6,11 +6,12 @@ export const CardIdSchema = z.string().regex(/^c_[a-z0-9]{10}$/);
 export const IdempotencyKeySchema = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+export const ROOM_CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}$/;
 export const RoomCodeSchema = z
   .string()
   .trim()
   .toUpperCase()
-  .regex(/^[BCDFGHJKLMNPQRSTVWXZ]{4}$/);
+  .regex(ROOM_CODE_RE);
 
 export type GameId = z.infer<typeof GameIdSchema>;
 export type PlayerId = z.infer<typeof PlayerIdSchema>;
