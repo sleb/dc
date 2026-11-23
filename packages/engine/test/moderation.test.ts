@@ -289,3 +289,22 @@ describe("V9 M3: every reason is produced by a crafted input and the rejection n
     }), env());
   });
 });
+
+describe("review fixes (PR #74, step 1.8)", () => {
+  test("a term with a doubled letter is caught when a different letter is elongated (terms are collapsed like the text)", () => {
+    const list: WordList = { TERMS: [{ term: "hellfire", match: "substring" }, { term: "bass", match: "word" }], ALLOW: [] };
+    const r = (t: string): string => { const c = check(t, "card", "on", list); return c.ok ? "ok" : c.reason; };
+    for (const t of ["hellfire", "helllfire", "heellfire", "heeellfire", "baaass", "baass", "bass", "BAAASSS", "xx heeelllfire yy"]) expect([t, r(t)]).toEqual([t, "PROFANITY"]);
+    for (const t of ["basso", "hello fire", "hel fire"]) expect([t, r(t)]).toEqual([t, "ok"]);
+  });
+
+  test("normalize is a true fixed point for long leet chains (the pass cap scales with the input)", () => {
+    for (const s of ["a" + "@".repeat(30), "a" + "@".repeat(200), "1".repeat(100) + "a", "a" + "0|".repeat(80)]) expect(normalize(normalize(s))).toBe(normalize(s));
+  });
+
+  test("INVALID_CHARS covers the other invisible format characters, one per range", () => {
+    for (const cp of [0x2061, 0x2063, 0x2064, 0x206a, 0x206f, 0x061c, 0x180e, 0xfff9, 0xfffb, 0xe0000, 0xe0001, 0xe007f]) {
+      for (const mode of ["on", "off"] as const) expect([cp.toString(16), reason(`a${String.fromCodePoint(cp)}b`, "name", mode)]).toEqual([cp.toString(16), "INVALID_CHARS"]);
+    }
+  });
+});

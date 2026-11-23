@@ -272,6 +272,13 @@ describe("V7 NAME_TAKEN compares the Moderation fold (12)", () => {
     expect(accepted(null, { type: "createGame", gameId: GAME_ID, roomCode: "BCDF", hostId: HOST_UID, hostPlayerId: pid(0), hostName: "  Host   Name " }, as(0)).state.players[0]?.name).toBe("Host Name");
   });
 
+  test("the key runs the leet fold on the whitespace-stripped name, so a digit for a letter collides (impersonation protection, pinned): Team A / Team 4, Ann3 / Anne, Player I / Player 1, Bobo / Bob0", () => {
+    for (const [have, want] of [["Team A", "Team 4"], ["Ann3", "Anne"], ["Player I", "Player 1"], ["Bobo", "Bob0"]] as const) {
+      const h = makeGame({ totalJoins: 1, players: [makePlayer(0, { name: have }), makePlayer(1)] });
+      expect([have, want, rejected(h, { type: "join", playerId: pid(5), name: want }, as(5))]).toEqual([have, want, { code: "NAME_TAKEN" }]);
+    }
+  });
+
   test("a departed seat's name is free; a seated one is not", () => {
     const gone = { ...g, players: g.players.map((p, i) => (i === 1 ? { ...p, status: "left" as const } : p)) };
     expect(run(gone, { type: "join", playerId: pid(5), name: "ann marie" }, as(5)).ok).toBe(true);
