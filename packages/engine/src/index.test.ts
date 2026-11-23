@@ -4,9 +4,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 describe("V9 public entry point", () => {
-  test("exports exactly the names that exist so far (LLD 1 section 2.1); later steps extend this list", async () => {
+  test("exports exactly the names that exist so far (LLD 1 section 2.1); the Projector's exports (LLD 2) and `exportPools` (M9) extend this list later", async () => {
     const names = Object.keys(await import("./index")).sort();
-    expect(names).toEqual(["EngineInvariantError", "REMINDER_INTERVAL_MS", "actorRole", "activePlayers", "checkText", "decide", "makeRng", "playability", "seated", "seatUid", "shownToTable"].sort());
+    expect(names).toEqual(["EngineInvariantError", "REMINDER_INTERVAL_MS", "actorRole", "activePlayers", "awards", "cardText", "cardsStillToWrite", "checkText", "decide", "effectiveTarget", "expectedSubmitters", "handOf", "isPaused", "makeRng", "ownSubmission", "playabilityReport", "playability", "revealList", "seated", "seatUid", "shownToTable", "submissionOwner", "submittedBy", "votesFor", "waitingOn"].sort());
   });
 
   test("decide is the public pipeline over the real registry: an unregistered command is INVALID_ARGUMENT", async () => {

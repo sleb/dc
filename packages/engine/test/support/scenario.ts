@@ -104,13 +104,13 @@ export interface RunOptions {
   freeze?: boolean;
   table: Readonly<Record<string, Enumerator>>;
 }
-export interface Trace { states: (Game | null)[]; results: Result<Accepted, Rejection>[] }
+export interface Trace { states: (Game | null)[]; results: Result<Accepted, Rejection>[]; /** The command behind each result, same index. */ commands: Command[] }
 
 /** Drive `decide` from `game0` with picks from legalCommands and junkCommands, running every global checker after every step. */
 export function runScenario(decide: Decide, game0: Game | null, picks: Picks, opts: RunOptions): Trace {
   let state = game0;
   let drafts: Record<string, Draft> = {};
-  const trace: Trace = { states: [state], results: [] };
+  const trace: Trace = { states: [state], results: [], commands: [] };
   for (const [i, p] of picks.entries()) {
     let entry: LegalEntry | undefined;
     if (opts.drive !== undefined) {
@@ -131,6 +131,7 @@ export function runScenario(decide: Decide, game0: Game | null, picks: Picks, op
     const step: Step = { index: i, seed: opts.seed, before: state, cmd: entry.cmd, result, actor: entry.actor, drafts };
     checkAll(step);
     trace.results.push(result);
+    trace.commands.push(entry.cmd);
     if (result.ok) {
       for (const c of result.value.draftChanges) {
         const { [c.playerId]: _gone, ...rest } = drafts;
