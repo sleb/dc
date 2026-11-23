@@ -102,6 +102,9 @@ describe("SEL2 revealList: JUDGING only, in revealOrder, no owner (V3, E9)", () 
     expect(sel.revealList(roundGame({ judge: 0, submitted: [1, 2] }))).toStrictEqual([]);
     expect(sel.revealList({ ...roundGame({ judge: 0, submitted: [1], phase: "JUDGING" }), round: null })).toStrictEqual([]);
     expect(sel.revealList(makeGame())).toStrictEqual([]);
+    // the phase is the gate, not the presence of a revealOrder: a SUBMITTING round that somehow held one still reveals nothing
+    const sub = roundGame({ judge: 0, submitted: [1, 2] });
+    expect(sel.revealList({ ...sub, round: { ...(sub.round as NonNullable<Game["round"]>), revealOrder: [cid(106), cid(206)] } })).toStrictEqual([]);
   });
 
   test("over random JUDGING games the answer holds exactly the keys submissionId, text, pitch, and a deep scan finds no player id", () => {

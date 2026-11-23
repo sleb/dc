@@ -47,7 +47,8 @@ const accepts = (t: Trace): Accepted[] => t.results.flatMap((r) => (r.ok ? [r.va
 describe("EV1 exact ordered events per registered command (LLD 1 section 7.2), including the side-effect events", () => {
   test("a scripted game from createGame to the second round, command by command", () => {
     const seen = new Map<string, string[][]>();
-    const record = (type: string, a: Accepted): Accepted => { seen.set(type, [...(seen.get(type) ?? []), tags(a.events)]); return a; };
+    const redacted = new Set<string>();
+    const record = (type: string, a: Accepted): Accepted => { seen.set(type, [...(seen.get(type) ?? []), tags(a.events)]); if (a.redactEnvelope) redacted.add(type); return a; };
     let g = record("createGame", ok(null, { type: "createGame", gameId: GAME_ID, roomCode: "BCDF", hostId: HOST_UID, hostPlayerId: pid(0), hostName: "Host" })).state;
     const step = (type: string, c: object, actor: Actor, drafts: Record<string, Draft> = {}): Accepted => {
       const a = record(type, ok(g, { type, ...c }, actor, { drafts, mintId: (() => { let n = 100 * (g.version + 1); return () => cid(n++); })() }));
@@ -91,6 +92,7 @@ describe("EV1 exact ordered events per registered command (LLD 1 section 7.2), i
     expect(picked.events[0]).toMatchObject({ t: "WinnerPicked", round: 1, judgeId: opened.judgeId, winnerCardId: winnerCard });
     expect((picked.events[1] as { round: number }).round).toBe(2);
     expect(seen.get("saveDraft")).toStrictEqual([[], [], []]);
+    expect([...redacted]).toStrictEqual(["finishWriting"]);
   });
 
   test("closeSubmissions: SubmissionsClosed with reason closed", () => {
@@ -218,9 +220,9 @@ describe("EV3 the EventDoc inputs: redactEnvelope, seed, events", () => {
     expect(ok(g, { type: "endGame" }, seat(0), { rng: makeRng("another") }).seed).toBe("another");
     const w = makeGame({ phase: "WRITING", target: 8, writeCounts: { red: 2, green: 1 }, players: [0, 1, 2].map((i) => makePlayer(i, { status: "writing", writeTarget: { red: 2, green: 1 }, writeProgress: { red: 1, green: 0 } })) });
     const edit = ok(w, { type: "saveDraft", red: ["only"], green: [] }, seat(0));
-    expect([edit.aggregateChanged, edit.events]).toStrictEqual([false, []]);
+    expect([edit.aggregateChanged, edit.events, edit.redactEnvelope]).toStrictEqual([false, [], false]);
     const more = ok(w, { type: "saveDraft", red: ["a", "b"], green: ["c"] }, seat(0));
-    expect([more.aggregateChanged, more.events]).toStrictEqual([true, []]);
+    expect([more.aggregateChanged, more.events, more.redactEnvelope]).toStrictEqual([true, [], false]);
   });
 
   test("a rejection carries no events, and an aggregateChanged:false acceptance carries none either, over whole games with junk commands", () => {
