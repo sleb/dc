@@ -53,7 +53,7 @@ describe("SEL1 total, pure, non-mutating", () => {
     expect(sel.isPaused({ ...g, paused: true })).toBe(true);
     expect(sel.expectedSubmitters(g)).toStrictEqual([pid(0), pid(2), pid(3)]);
     expect(sel.submittedBy(g)).toStrictEqual([pid(2)]);
-    expect(sel.handOf(g, pid(0))).toStrictEqual(g.players[0]?.hand);
+    expect(sel.handOf(g, pid(0))).toStrictEqual(g.players[0]?.hand as string[]);
     expect(sel.handOf(g, pid(0))).not.toBe(g.players[0]?.hand); // a copy, so a caller cannot mutate the aggregate through it
     expect(sel.cardText(g, cid(900))).toBe("the green card");
     expect(sel.expectedSubmitters({ ...g, round: null })).toStrictEqual([]);
