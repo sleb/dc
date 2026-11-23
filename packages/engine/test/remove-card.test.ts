@@ -264,6 +264,23 @@ describe("V12 removeCard, zone by zone (8.6, E5, E17)", () => {
     expect(v.state.judgeCursor).toBe(g.judgeCursor);
   });
 
+  test("removing the only revealed play of a paused JUDGING round leaves it in limbo (no submissions, empty revealOrder, no void while paused); a joiner who finishes recovers the game, which voids it and reopens", () => {
+    let g = roundGame({ n: 3, judge: 0, submitted: [1], phase: "JUDGING", greenDeck: 40, extra: { writeCounts: { red: 10, green: 8 } } });
+    g = park(g, 2, "left");
+    g = { ...g, paused: true, round: { ...(g.round as NonNullable<Game["round"]>), roster: [pid(0), pid(1)] } };
+    const limbo = accepted(g, remove(cid(106)), as(0));
+    expect(limbo.events.map((e) => e.t)).toEqual(["CardRemoved"]);
+    expect(limbo.state.paused).toBe(true);
+    expect(limbo.state.round).toMatchObject({ phase: "JUDGING", judgeId: pid(0), submissions: [], revealOrder: [] });
+    const joined = accepted(limbo.state, { type: "join", playerId: pid(3), name: "Fourth" }, as(3)).state;
+    const target = joined.players.find((p) => p.id === pid(3))?.writeTarget as { red: number; green: number };
+    const drafts = { [pid(3)]: { red: Array.from({ length: target.red }, (_, k) => `r${k}`), green: Array.from({ length: target.green }, (_, k) => `g${k}`) } };
+    const v = accepted(joined, { type: "finishWriting" }, as(3, { drafts }));
+    expect(v.events.map((e) => e.t)).toEqual(["PlayerFinishedWriting", "PlayerActivated", "PausedChanged", "RoundVoided", "RoundOpened"]);
+    expect(v.state.paused).toBe(false);
+    expect(v.state.round).toMatchObject({ phase: "SUBMITTING", number: 1, judgeId: pid(1), roster: [pid(0), pid(1), pid(3)], submissions: [], revealOrder: null }); // a void that was not a reassignment rotates the judge (8.3)
+  });
+
   test("while paused with no judge nothing special happens either", () => {
     const g = played({ extra: { paused: true } });
     expect(run(g, remove(cid(6000))).ok).toBe(true);
