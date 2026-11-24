@@ -10,6 +10,8 @@ import {
   MAX_SEATED,
   MAX_TOTAL_JOINS,
   MAX_VOTES,
+  VIEW_DOC_BUDGET_BYTES,
+  VIEW_DOC_MAX_BYTES,
   MIN_V,
   PlayerIdSchema,
   RejectionSchema,
@@ -72,6 +74,10 @@ describe("C7 limits and details", () => {
     expect(MAX_VOTES).toBe(1500);
     expect({ ...TEXT_LIMITS }).toEqual({ name: 24, card: 80, pitch: 140 });
     expect(WIRE_DRAFT_MAX).toBe(40);
+  });
+  test("view doc size constants (PJ14): a 64 KiB test budget under a 512 KiB runtime cap, under Firestore's 1 MiB", () => {
+    expect(VIEW_DOC_BUDGET_BYTES).toBe(64 * 1024);
+    expect(VIEW_DOC_MAX_BYTES).toBe(512 * 1024);
   });
   test("WIRE_TEXT_MAX is above every text limit", () => {
     for (const v of Object.values(TEXT_LIMITS)) expect(WIRE_TEXT_MAX).toBeGreaterThan(v);
