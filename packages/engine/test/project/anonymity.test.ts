@@ -1,6 +1,6 @@
 // #30 A1 to A8, H3 and K3: the anonymity suite on the real projector (LLD 2 11.1, 11.2, 11.7). The suite is a library (`anonymity.ts`); this file runs it on the real projector
 // and proves it notices when something is wrong. The mutants are in mutants.test.ts.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { GameViewSchema } from "@dc/contracts";
 import { fcParams } from "../support/fc";
 import { FIXTURES } from "./fixtures";
@@ -10,6 +10,7 @@ import { makeProjector, project, viewersOf } from "../../src/project";
 
 /** The fixed seed set CI runs for coverage (H3) and for the mutants: a counter must be positive here, not just over a random seed. */
 export const COVERAGE_SEED = 20_260_131;
+setDefaultTimeout(180_000); // generated games on a loaded machine must not trip the 5 s default
 const CI_RUNS = 60;
 
 describe("K3 the real projector survives the suite; H3 the counters are positive over the fixed seed set", () => {

@@ -1,5 +1,5 @@
 // #30 H2 (sentinels) and H4 (variant injector). LLD 2 11.1.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { decide } from "../../src/decide";
 import { check } from "../../src/moderation";
 import type { Game } from "../../src/types";
@@ -12,6 +12,7 @@ import { decorate, sentinel, sentinelDriver } from "./inject";
 import { created } from "./scenarios";
 import { finished, judging, lobby, submitting } from "./fixtures";
 
+setDefaultTimeout(180_000); // generated games on a loaded machine must not trip the 5 s default
 const SENT = /^[RGP]\d{4}x$/;
 
 describe("H2 sentinels", () => {

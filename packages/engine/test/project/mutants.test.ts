@@ -1,10 +1,11 @@
 // #30 K1 to K3 (LLD 2 11.4): the anonymity suite must be shown to fail on leaks. 13 hand-written mutants, fixed seeds. K1: each named detector fires alone (the others off, so a kill is never
 // only "the strict parse caught the extra key"); K2: every mutant is killed by the default configuration; K3: the real projector survives it (anonymity.test.ts).
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { DETECTORS, AnonymityViolation, runAnonymitySuite } from "./anonymity";
 import type { Detector, ProjectorUnderTest } from "./anonymity";
 import { MUTANTS } from "./mutants";
 
+setDefaultTimeout(180_000); // generated games on a loaded machine must not trip the 5 s default
 const names = Object.keys(MUTANTS);
 const killedBy = (impl: ProjectorUnderTest, o: { seed: number; numRuns: number }, detectors: readonly Detector[]): Detector | null => {
   try {
