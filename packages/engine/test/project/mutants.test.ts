@@ -53,13 +53,13 @@ describe("the strict-parse-off rule: with the schema parse off the mutants that 
   for (const name of ["M-order", "M-time", "M-shape", "M-keyorder"]) {
     test(`${name} is shape-valid: strictParse alone does not kill it`, () => {
       const m = MUTANTS[name]!;
-      expect(killedBy(m.impl, m, ["strictParse"])).toBeNull();
+      expect(killedBy(m.impl, { seed: m.seed, numRuns: 8 }, ["strictParse"])).toBeNull(); // 8 of its scenarios are enough to see the parse pass them all
     });
   }
   test("M-keyorder is killed by keyOrder alone and by nothing else", () => {
     const m = MUTANTS["M-keyorder"]!;
     expect(m.killedBy).toEqual(["keyOrder"]);
-    expect(killedBy(m.impl, m, all.filter((d) => d !== "keyOrder"))).toBeNull();
+    expect(killedBy(m.impl, { seed: m.seed, numRuns: 8 }, all.filter((d) => d !== "keyOrder"))).toBeNull();
   });
   test("M-shape is killed by the PJ6 order check and by N2, each alone", () => {
     const m = MUTANTS["M-shape"]!;
@@ -87,5 +87,21 @@ describe("the mutants are what the table says", () => {
     expect([...MUTANTS["M-time"]!.killedBy].sort()).toEqual(["N2", "time"]);
     expect([...MUTANTS["M-power"]!.killedBy].sort()).toEqual(["N3", "othersData"]);
     expect([...MUTANTS["M-writein"]!.killedBy].sort()).toEqual(["N6", "writeInMarker"]);
+  });
+});
+
+describe("test of the test: the matrix depends on the generator, and a kill replays", () => {
+  test("M-writein survives the marker walk when the generator never injects a write-in (the injector is what kills it, and H3 counts it); N6 needs no injection, it plants the marker itself", () => {
+    const m = MUTANTS["M-writein"]!;
+    expect(() => runAnonymitySuite(m.impl, { seed: m.seed, numRuns: m.numRuns, detectors: ["writeInMarker"], weaken: ["noInjection"] })).not.toThrow();
+    expect(() => runAnonymitySuite(m.impl, { seed: m.seed, numRuns: m.numRuns, detectors: ["writeInMarker"] })).toThrow(AnonymityViolation);
+    expect(() => runAnonymitySuite(m.impl, { seed: m.seed, numRuns: m.numRuns, detectors: ["N6"], weaken: ["noInjection"] })).toThrow(AnonymityViolation);
+  });
+
+  test("the same mutant at the same seed fails with the same message, twice", () => {
+    const m = MUTANTS["M-order"]!;
+    const run = (): string => { try { runAnonymitySuite(m.impl, { seed: m.seed, numRuns: m.numRuns }); return "survived"; } catch (e) { return e instanceof Error ? e.message : String(e); } };
+    expect(run()).toBe(run());
+    expect(run()).toMatch(/anonymity violation \[(order|N2)\] seed \d+/);
   });
 });

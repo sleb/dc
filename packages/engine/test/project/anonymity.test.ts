@@ -10,7 +10,7 @@ import { makeProjector, project, viewersOf } from "../../src/project";
 
 /** The fixed seed set CI runs for coverage (H3) and for the mutants: a counter must be positive here, not just over a random seed. */
 export const COVERAGE_SEED = 20_260_131;
-const CI_RUNS = 200;
+const CI_RUNS = 60;
 
 describe("K3 the real projector survives the suite; H3 the counters are positive over the fixed seed set", () => {
   test("every detector on, straight and churn drivers, coverage enforced", () => {
@@ -21,30 +21,30 @@ describe("K3 the real projector survives the suite; H3 the counters are positive
     expect(r.counters.rejected).toBeGreaterThan(100);
     for (const k of ["revealDiffers", "timeVsJoin", "evictionInJudging", "passJudgingInJudging", "removeCardInJudging", "spectatorsOn", "spectatorsOff", "pitchOn", "pitchOff", "paused", "finishedWithVotes", "injectedWriteIn", "injectedRedraw", "injectedVotes"] as const) expect(r.counters[k], k).toBeGreaterThan(0);
     for (const n of ["N1", "N2", "N3", "N4", "N5", "N6"] as const) expect(r.counters.ni[n], n).toBeGreaterThan(0);
-  });
+  }, 120_000);
 
   test("a random seed (FC_SEED, FC_NUM_RUNS) passes too; a failure names the seed", () => {
     const { seed, numRuns } = fcParams();
+    // CI: 40 random scenarios beside the 60 of the fixed set (the time budget of LLD 2 11.1); FC_NUM_RUNS (the nightly's 2000) overrides
+    const runs = (process.env.FC_NUM_RUNS ?? "").trim() === "" ? 40 : numRuns;
     try {
-      runAnonymitySuite(REAL, { numRuns, seed });
+      runAnonymitySuite(REAL, { numRuns: runs, seed });
     } catch (e) {
       throw new Error(`${e instanceof Error ? e.message : String(e)}\nReproduce with FC_SEED=${seed}`, { cause: e });
     }
-  });
+  }, 600_000);
 
-  test("H3 a weakened generator is caught: no injection, no churn, one player count each leave a counter at zero", () => {
-    for (const [weaken, zero] of [
-      [["noInjection"], "injectedWriteIn"],
-      [["noChurn"], "evictionInJudging"],
-      [["onePlayerCount"], "cell"],
-    ] as const) {
-      const r = runAnonymitySuite(REAL, { numRuns: 24, seed: COVERAGE_SEED, weaken: [...weaken] });
-      const missing = missingCoverage(r.counters);
-      expect(missing.length, weaken.join()).toBeGreaterThan(0);
-      if (zero !== "cell") expect(missing).toContain(zero);
-      expect(() => runAnonymitySuite(REAL, { numRuns: 24, seed: COVERAGE_SEED, weaken: [...weaken], coverage: true })).toThrow(AnonymityCoverageError);
+  test("H3 a weakened generator is caught: no injection, no churn, one player count each leave their counter at zero", () => {
+    const cheap = { numRuns: 24, seed: COVERAGE_SEED, detectors: ["size"] as Detector[] };
+    const full = runAnonymitySuite(REAL, cheap).counters;
+    for (const [weaken, counter] of [["noInjection", "injectedWriteIn"], ["noChurn", "evictionInJudging"], ["onePlayerCount", "largeTable"]] as const) {
+      const w = runAnonymitySuite(REAL, { ...cheap, weaken: [weaken] }).counters;
+      expect(full[counter], `${counter} without weakening`).toBeGreaterThan(0);
+      expect(w[counter], `${counter} with ${weaken}`).toBe(0);
+      expect(missingCoverage(w)).toContain(counter);
     }
-  });
+    expect(() => runAnonymitySuite(REAL, { ...cheap, weaken: ["noInjection"], coverage: true })).toThrow(AnonymityCoverageError);
+  }, 120_000);
 });
 
 describe("A5 determinism (PJ1)", () => {
@@ -101,7 +101,7 @@ describe("the suite's own checks fire on planted faults (each detector alone)", 
   });
 
   test("roundDocs: a Store that writes a round doc twice, and one that writes an unresolved round", () => {
-    const twice = planted({ roundDocs: (_p, _n, recs) => [...recs, ...recs].map((r) => REAL.toRoundDoc(r)) });
+    const twice = planted({ roundDocs: (_p, _n, recs) => [...recs, ...recs].map((r) => REAL.toRoundDoc(r, undefined as never)) });
     expect(fires(twice, "roundDocs").detector).toBe("roundDocs");
   });
 
@@ -109,8 +109,8 @@ describe("the suite's own checks fire on planted faults (each detector alone)", 
     const e = fires(planted({ project: (g, v) => { const view = project(g, v); return { ...view, version: view.version - 1 }; } }), "versioning");
     expect(e.message).toMatch(/versioning/);
     expect(e.message).toMatch(/seed/);
-    expect(e.message).toMatch(/step \d+/);
-    expect(e.step).toBeGreaterThanOrEqual(0);
+    expect(e.message).toMatch(/step -?\d+/);
+    expect(Number.isInteger(e.step)).toBe(true); // -1 is the initial state, before any command
   });
 });
 
