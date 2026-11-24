@@ -40,7 +40,7 @@ Dependencies are the latest stable at the time they were added, exact-pinned (`b
 | Path | Package | Role |
 |---|---|---|
 | `packages/contracts` | `@dc/contracts` | zod schemas and types (ids, limits, error codes, settings pieces, the strict command envelope and `toEngineCommand`, the strict and loose `GameView`, `ViewDoc` and `RoundDoc` schemas with their enum tuples; callable schemas come with M4); depends only on zod, imports no other workspace package |
-| `packages/engine` | `@dc/engine` | pure game core; depends only on `@dc/contracts` |
+| `packages/engine` | `@dc/engine` | pure game core (rules and `decide` in `src/`, the view projector in `src/project/`); depends only on `@dc/contracts` |
 | `functions` | `@dc/functions` | Cloud Functions; `functions/scripts` builds the deployable bundle (see `functions/README.md`) |
 | `apps/web` | `@dc/web` | React client (Vite, Tailwind 4); imports only `@dc/contracts` (see `apps/web/README.md`) |
 | `lint-test` | | tests for the lint and compiler policy |
