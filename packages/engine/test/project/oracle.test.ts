@@ -8,8 +8,9 @@ import { cid, pid } from "../support/factories";
 import { CELLS } from "./cells";
 import { DEP, FIXTURES, HU, P, SPEC, finished, judging, submitting, unseatHost, writing } from "./fixtures";
 import { maximalFinished, maximalJudging } from "./maximal";
-import { allowedFor, checkDoc, checkRoundDoc, forbiddenFor, storedDoc } from "./oracle";
+import { allowedFor, checkDoc, checkRoundDoc, forbiddenFor } from "./oracle";
 import type { Detector, OracleViewer } from "./oracle";
+import { storedDoc } from "./stored";
 
 const range = (i: number, a: number, b: number) => Array.from({ length: b - a }, (_, k) => cid(100 * i + a + k));
 const sorted = (s: ReadonlySet<string>) => [...s].sort();
@@ -45,7 +46,8 @@ describe("O1 allowed(t) equals the 11.2 table, per audience and phase", () => {
     expect([...allowedFor(g, drafts, P(2)).texts]).toEqual(["R0003x"]);
     expect(allowedFor(g, drafts, SPEC).texts.size).toBe(0);
     const f = forbiddenFor(g, drafts, P(2));
-    expect(f.texts.has("R0001x")).toBe(true); // another player's draft
+    expect(f.draftTexts.has("R0001x")).toBe(true); // another player's draft
+    expect(f.draftTexts.has("R0003x")).toBe(false);
     expect(f.texts.has("R0003x")).toBe(false);
     expect(f.texts.has("POOLRED00")).toBe(true);
     expect(f.ids.has(cid(2000))).toBe(true);
@@ -105,7 +107,7 @@ describe("O2 each forbidden class flags a planted leak in a golden-doc copy", ()
     expect(plant((d) => { view(d).players[0]!.name = "https://x/#k=abc"; })).toContain("identity");
     expect(plant((d) => { view(d).players[0]!.name = "a token"; })).toContain("identity");
     expect(plant((d) => { view(d).players[0]!.name = "a secret"; })).toContain("identity");
-    expect(plant((d) => { view(d).players[0]!.name = g.roomCode; })).toContain("identity");
+    expect(plant((d) => { view(d).players[0]!.name = g.roomCode; })).toEqual([]); // a seated player's doc carries it in `you`
     expect(plant((d) => { view(d).players[0]!.name = g.roomCode; }, g, NONE, SPEC)).toContain("identity");
     expect(plant((d) => { view(d).players[0]!.name = g.roomCode; }, g, NONE, P(0))).toEqual([]); // the host panel may carry it
   });
