@@ -196,6 +196,10 @@ describe("L8 Projector rules (LLD 2 section 2, PJ4, PJ5)", () => {
   test("you.ts is not exempt from the spread ban", () => reported(YOU, "export const f = (p: object) => ({ ...p });\n", "no-restricted-syntax"));
   test("allows spreading the shared base", () => quiet(PROJECT, "export const f = (base: object) => ({ audience: 1, ...base });\n"));
   test("allows array spread", () => quiet(PROJECT, "export const f = (xs: number[]) => [...xs];\n"));
+  test("#29: fanout.ts, feed.ts and size.ts are under the block: a spread of a Game value is reported, an array spread and rest destructuring are not", async () => {
+    for (const f of ["fanout", "feed", "size"]) await reported(`packages/engine/src/project/${f}.ts`, "export const f = (game: object) => ({ ...game });\n", "no-restricted-syntax", /field by field/);
+    await quiet("packages/engine/src/project/fanout.ts", "export const f = (v: { version: number; a: number }) => { const { version: _v, ...rest } = v; return [...Object.keys(rest)]; };\n");
+  });
   test("outside project/, an object spread is fine", () => quiet("packages/engine/src/x.ts", "export const f = (game: object) => ({ ...game });\n"));
 
   test("still reports the clock and entropy (base re-spread)", async () => {

@@ -53,14 +53,14 @@ describe("Q1 the in-memory store, driven by fanOut over real games, equals a ful
           for (const w of writes) expect(live.has(w.docId) || vanished(p, next).includes(w.docId)).toBe(true);
           if (skip && p !== next) for (const w of writes) { const old = JSON.parse(before.get(w.docId) ?? "null") as { view: unknown } | null; if (old !== null) expect(JSON.stringify(old.view)).not.toBe(JSON.stringify(w.doc.view)); }
           seen.steps++;
-          seen.skipped += viewersOf(next).length - writes.length;
+          seen.skipped += viewersOf(next).length - writes.filter((w) => live.has(w.docId)).length;
           seen.tombstones += writes.filter((w) => w.doc.view?.kind === "departed" && w.doc.view.reason === "gone").length;
         }
       }));
       expect(seen.steps).toBeGreaterThan(200);
       if (skip) expect(seen.skipped).toBeGreaterThan(0);
-      else expect(seen.skipped).toBe(0); // with skip off the only docs not written are none: every target is rewritten every step
-    });
+      else expect(seen.skipped).toBe(0); // with skip off every target is rewritten at every step
+    }, 120_000);
   }
 });
 

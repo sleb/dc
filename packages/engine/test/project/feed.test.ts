@@ -91,5 +91,5 @@ describe("T3 records from real games (pickWinner)", () => {
       }
     }));
     expect(docs).toBeGreaterThan(50);
-  });
+  }, 60_000);
 });

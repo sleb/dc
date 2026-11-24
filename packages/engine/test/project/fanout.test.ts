@@ -282,7 +282,8 @@ describe("F8 sameContent", () => {
   test("it ignores the version, and only the version", () => {
     const g = submitting();
     expect(sameContent(doc(g), doc(bump(g)))).toBe(true);
-    expect(sameContent(doc(g), { ...doc(g), generatedAt: 99 })).toBe(true);
+    const later: ViewDoc = { ...doc(g), generatedAt: 99 };
+    expect(sameContent(doc(g), later)).toBe(true);
     expect(sameContent(doc(g), doc({ ...g, paused: true }))).toBe(false);
     expect(sameContent(doc(g), doc(writing()))).toBe(false);
     expect(sameContent(doc(g), { ...doc(g), enabled: false, view: null })).toBe(false);
@@ -307,7 +308,7 @@ describe("D1 the draft region and the region field lists", () => {
   });
   test("the two lists are disjoint and together are exactly the ViewDoc keys", () => {
     expect(VIEW_REGION_FIELDS.filter((f) => (DRAFT_REGION_FIELDS as readonly string[]).includes(f))).toEqual([]);
-    expect([...VIEW_REGION_FIELDS, ...DRAFT_REGION_FIELDS].sort()).toEqual(Object.keys(ViewDocSchema.shape).sort());
+    expect([...VIEW_REGION_FIELDS, ...DRAFT_REGION_FIELDS].map(String).sort()).toEqual(Object.keys(ViewDocSchema.shape).sort());
   });
   test("the view-region list is the key set of a write's doc, in that order", () => {
     const w = must(fanOut(null, lobby(), off)[0]);
