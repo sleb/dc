@@ -27,6 +27,8 @@ bash scripts/check-bundle-no-bun.sh   # after build:functions: the bundle loads 
 actionlint                      # lint .github/workflows (1.7.12)
 bun run test:e2e                # placeholder: prints "NO SUITE" and exits 0 until Playwright lands (5.1, #45)
 FC_SEED=<n> bun run test        # replay a failed property test; the seed is printed on failure
+FC_NUM_RUNS=2000 bun run test   # more fast-check runs (CI default 200; the anonymity suite's random run is 40 unless this is set)
+bun test packages/engine/test/project/anonymity.test.ts packages/engine/test/project/mutants.test.ts   # the M2 exit demo: the anonymity suite on the real projector, and its 13 leaky mutants killed
 bun run build:functions         # bundle functions into functions/dist and check the bundle (see functions/README.md)
 bun run build:web               # vite build --mode staging into apps/web/dist (see apps/web/README.md)
 bun scripts/check-web-size.ts   # gzip budgets for the built apps/web/dist (run build:web first)
@@ -47,5 +49,7 @@ Dependencies are the latest stable at the time they were added, exact-pinned (`b
 | `scripts` | | environment provisioning and verification, the secret scan, the log-sentinel harness, `check-web-size.ts`, the workflow policy test and the skill-layout check (see `scripts/README.md`) |
 | `.github/workflows` | | `ci.yml`: verify, emulator, preview, deploy-staging, check-tag and a guarded deploy-prod stub (LLD 0 section 8) |
 | `hosting-test` | | bun tests that run against the Hosting emulator (`bun run test:hosting`) |
+
+The Projector's privacy proof is `packages/engine/test/project/` (LLD 2 section 11): a forbidden-values oracle, a non-interference test, thirteen leaky mutants that must each be killed by named detectors alone, and type-level guards (`types.test-d.ts`, run by `bun run typecheck`). `anonymity.test.ts` is the entry point.
 
 The dependency direction and the lint rules that enforce it are in LLD 0 sections 3 and 5.
