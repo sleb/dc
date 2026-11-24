@@ -96,6 +96,17 @@ export type Picks = { kind: "legal" | "junk"; pick: number }[];
 /** Picks the next command for `runScenario` from the current state and the draft documents, or undefined when the game is over. `i` is the step index. */
 export type Driver = (state: Game, drafts: GameDrafts, i: number) => LegalEntry | undefined;
 
+/** What `afterStep` receives once per step, accepted or rejected (#30, LLD 2 11.1). `after` is the state the next step starts from (the same object as `before` when the command was rejected). */
+export interface AfterStepInfo {
+  before: Game;
+  after: Game;
+  /** The draft documents after the step, and before it. */
+  drafts: GameDrafts;
+  draftsBefore: GameDrafts;
+  accepted: boolean;
+  step: Step;
+}
+
 export interface RunOptions {
   seed: number;
   /** A driver replaces the `picks` choice: the run takes up to `picks.length` steps and stops when the driver returns undefined. */
@@ -103,6 +114,8 @@ export interface RunOptions {
   now?: (step: number) => number;
   freeze?: boolean;
   table: Readonly<Record<string, Enumerator>>;
+  /** Called once after every step, rejected ones included. Observes only: the trace is the same with and without it. */
+  afterStep?: (info: AfterStepInfo) => void;
 }
 export interface Trace { states: (Game | null)[]; results: Result<Accepted, Rejection>[]; /** The command behind each result, same index. */ commands: Command[] }
 
@@ -129,6 +142,7 @@ export function runScenario(decide: Decide, game0: Game | null, picks: Picks, op
     assertDeepEqual(state, before, `decide mutated its input state at step ${i}`);
     assertDeepEqual(entry.cmd, cmdBefore, `decide mutated its command at step ${i}`);
     const step: Step = { index: i, seed: opts.seed, before: state, cmd: entry.cmd, result, actor: entry.actor, drafts };
+    const draftsBefore = drafts;
     checkAll(step);
     trace.results.push(result);
     trace.commands.push(entry.cmd);
@@ -140,6 +154,7 @@ export function runScenario(decide: Decide, game0: Game | null, picks: Picks, op
       if (result.value.deleteGame !== true) state = result.value.state;
     }
     trace.states.push(state);
+    opts.afterStep?.({ before: step.before as Game, after: state, drafts: drafts as GameDrafts, draftsBefore: draftsBefore as GameDrafts, accepted: result.ok, step });
   }
   return trace;
 }

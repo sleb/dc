@@ -5,12 +5,12 @@ import { check } from "../../src/moderation";
 import type { Game } from "../../src/types";
 import { checkAll } from "../support/checks";
 import type { Step } from "../support/checks";
-import { cid, ctxFor, deepFreeze, pid } from "../support/factories";
+import { ctxFor, deepFreeze, pid } from "../support/factories";
 import { enumerators } from "../support/legal";
 import { membershipDriver, progressDriver, runScenario } from "../support/scenario";
 import { decorate, sentinel, sentinelDriver } from "./inject";
 import { created } from "./scenarios";
-import { finished, judging, submitting, lobby } from "./fixtures";
+import { finished, judging, lobby, submitting } from "./fixtures";
 
 const SENT = /^[RGP]\d{4}x$/;
 
@@ -114,11 +114,14 @@ describe("H4 the variant injector decorates an after-state with the shapes of ty
     if (leave.result.ok) expect(leave.result.value.state.pools.redDiscard).toContain(sub?.cardId as string);
   });
 
-  test("decorated votes and flags do not break the structural checkers on the finished fixture", () => {
-    const g = decorate(finished(), 2)?.game as Game;
-    const step = stepOf(g, { type: "endGame" }, g.hostId);
+  test("decorated votes and flags do not break the structural checkers on a finished game that real commands produced", () => {
+    const tr = runScenario(decide, created(true), Array.from({ length: 400 }, () => ({ kind: "legal" as const, pick: 0 })), { seed: 4, table: enumerators, drive: progressDriver("4", 3, enumerators, true) });
+    const end = tr.states.at(-1) as Game;
+    expect(end.phase).toBe("FINISHED");
+    const v = decorate(end, 0);
+    expect(v?.kinds).toEqual(expect.arrayContaining(["redraw", "votes"]));
+    const step = stepOf(v?.game as Game, { type: "endGame" }, end.hostId);
     expect(step.result.ok).toBe(true);
     expect(() => checkAll(step)).not.toThrow();
-    expect(cid(1)).toBeDefined();
   });
 });
