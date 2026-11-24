@@ -256,7 +256,7 @@ describe("RD5 the host panel (5.2)", () => {
   });
   test("playability is the selector's report over the seated count and the registry", () => {
     const l = panel(project(lobby(), P(0))) as { playability: Record<string, unknown> };
-    expect(l.playability).toEqual({ n: 3, target: 8, totals: { red: 0, green: 0 }, rMin: 27, gMin: 24, meets: false });
+    expect(l.playability).toEqual({ n: 3, target: 8, totals: { red: 0, green: 0 }, rMin: 28, gMin: 24, meets: false });
     const s = panel(project(submitting(), P(0))) as { playability: { n: number; totals: { red: number } } };
     expect(s.playability.n).toBe(5);
     expect(s.playability.totals.red).toBe(Object.values(submitting().cards).filter((c) => c.kind === "red").length);

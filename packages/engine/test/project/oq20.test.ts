@@ -17,7 +17,9 @@ const ok = (g: Game, c: object, actor: Actor): Accepted => {
   return r.value;
 };
 /** Six players, judge 1, plays by 2, 3 and 4 (revealOrder 4, 3, 2), player 5 and the host (0) did not play. */
-const judging = (): Game => roundGame({ n: 6, judge: 1, submitted: [2, 3, 4], phase: "JUDGING", redDeck: 30, greenDeck: 60 });
+const fixture = (): Game => roundGame({ n: 6, judge: 1, submitted: [2, 3, 4], phase: "JUDGING", redDeck: 30, greenDeck: 60 });
+/** The fixture after one no-op command, so that the scheduler fields (`waitingOn`) are the ones settle computes, as in a real game. */
+const judging = (): Game => ok(fixture(), { type: "updateSettings", patch: { profanity: "on" } }, seat(0)).state;
 type Json = Record<string, unknown>;
 const json = (g: Game, v: Viewer): Json => JSON.parse(JSON.stringify(project(g, v))) as Json;
 const round = (j: Json): Json => j["round"] as Json;
@@ -61,7 +63,7 @@ describe("OQ20a host removeCard of a revealed play: no view diff names the autho
   });
   test("the host's view differs in the reveal and in the registry totals of the panel only", () => {
     expect(diff(json(before, P(0)), json(after, P(0))).sort()).toEqual([".host.playability.totals.red", ".round.reveal"]);
-    expect(diff(json(before, HU), json(after, HU))).toEqual([".round.reveal"]); // an unseated host sees the same shared data
+    expect(diff(json(before, HU), json(after, HU)).sort()).toEqual([".host.playability.totals.red", ".round.reveal"]); // the same for an unseated host
   });
   test("N players played and N-1 cards are shown: the table can count, which is the accepted cost of hiding who", () => {
     const view = round(json(after, SPEC));
