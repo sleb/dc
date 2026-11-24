@@ -288,6 +288,7 @@ describe("F8 sameContent", () => {
     expect(sameContent(doc(g), doc(writing()))).toBe(false);
     expect(sameContent(doc(g), { ...doc(g), enabled: false, view: null })).toBe(false);
     expect(sameContent({ ...doc(g), enabled: false, view: null }, { ...doc(g), enabled: false, view: null })).toBe(true);
+    expect(sameContent(doc(g), { ...doc(g), enabled: false })).toBe(false); // the flag alone counts, whatever the view
   });
 });
 
