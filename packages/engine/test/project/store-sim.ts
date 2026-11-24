@@ -1,6 +1,6 @@
 // #29: an in-memory stand-in for the Store of LLD 3 (M3), enough to prove PJ10 and PJ11 of LLD 2 against `fanOut`. Reusable by #30.
 // It applies writes the way the real Store will (the view region replaced, the draft region left alone unless `clearDraft`), and it implements the rebuild rule of LLD 2 8.2:
-// when `store.viewsRev < PROJECTOR_REV` the first command of any kind, a draft-only one included, rewrites every doc with skip-unchanged off.
+// when `store.viewsRev !== PROJECTOR_REV` (LLD 3: fail safe, so a rollback to older code rebuilds everything too) the first command of any kind, a draft-only one included, rewrites every doc with skip-unchanged off.
 import type { ViewDoc } from "@dc/contracts";
 import { fanOutWith } from "../../src/project/fanout";
 import type { FanOutDeps, ViewWrite } from "../../src/project/fanout";
@@ -32,7 +32,7 @@ export class SimStore {
 
 /** One command's fan-out under the Store contract of LLD 2 8.2 and LLD 3. Returns what was written. */
 export function commit(store: SimStore, deps: FanOutDeps, prev: Game | null, next: Game, o: { aggregateChanged: boolean; now: number }): ViewWrite[] {
-  const stale = store.viewsRev < deps.rev;
+  const stale = store.viewsRev !== deps.rev;
   if (!o.aggregateChanged && !stale) return [];
   const writes = fanOutWith(deps, prev, next, { now: o.now, skipUnchanged: !stale });
   store.apply(writes);

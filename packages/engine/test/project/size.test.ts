@@ -64,13 +64,17 @@ describe("S3 the 512 KiB hard cap", () => {
   const padTo = (doc: ViewDoc, bytes: number): ViewDoc => {
     const view = doc.view as Extract<GameView, { audience: "spectator" }>;
     const base = utf8Length(JSON.stringify(doc));
-    const players = view.players.map((p, i) => (i === 0 ? { ...p, name: p.name + "x".repeat(bytes - base) } : p));
+    // 4-byte characters first (two UTF-16 units each), ASCII for the remainder: JSON.length and the byte count differ by a lot, so a counter that measures units cannot pass.
+    const rest = bytes - base;
+    const pad = "\u{1F600}".repeat(Math.floor(rest / 4)) + "x".repeat(rest % 4);
+    const players = view.players.map((p, i) => (i === 0 ? { ...p, name: p.name + pad } : p));
     return { ...doc, view: { ...view, players } };
   };
   const ctx = { gameId: g.id, viewsRev: PROJECTOR_REV };
   test("a doc of exactly the cap passes and one byte over throws EngineInvariantError", () => {
     const at = padTo(spectator(), VIEW_DOC_MAX_BYTES);
     expect(utf8Length(JSON.stringify(at))).toBe(VIEW_DOC_MAX_BYTES);
+    expect(JSON.stringify(at).length).toBeLessThan(VIEW_DOC_MAX_BYTES - 100_000); // the padding really is multi-byte
     expect(() => assertViewDoc(at, ctx)).not.toThrow();
     const over = padTo(spectator(), VIEW_DOC_MAX_BYTES + 1);
     expect(() => assertViewDoc(over, ctx)).toThrow(EngineInvariantError);

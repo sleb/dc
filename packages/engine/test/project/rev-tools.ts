@@ -2,6 +2,7 @@
 // fingerprint it was frozen with. A content change without a bump, or a bump without a new pin, is a problem. Test-side only: nothing here ships.
 import { createHash } from "node:crypto";
 import { CELLS, goldenOf } from "./cells";
+import { ENVELOPE_CELLS } from "./envelope-cells";
 
 /** JSON with object keys sorted at every depth, so key order never moves the fingerprint. */
 export function canonicalJson(value: unknown): string {
@@ -19,8 +20,8 @@ export function fingerprint(entries: readonly (readonly [string, unknown])[]): s
   return createHash("sha256").update(canonicalJson(sorted)).digest("hex");
 }
 
-/** The fingerprint of the golden view corpus of 2.2 (43 cells). */
-export const corpusFingerprint = (): string => fingerprint(CELLS.map((c) => [c.name, goldenOf(c)] as const));
+/** The fingerprint of the golden corpus: the 43 view cells of 2.2 and the envelope cells of 2.3 (what `fanOut` writes, `envelope/` names). */
+export const corpusFingerprint = (): string => fingerprint([...CELLS.map((c) => [c.name, goldenOf(c)] as const), ...ENVELOPE_CELLS.map((c) => [`envelope/${c.name}`, c.value()] as const)]);
 
 /** What is wrong with `pins` for this `rev` and corpus `fp`; empty when nothing is. */
 export function checkRevPins(rev: number, pins: Readonly<Record<string, string>>, fp: string): string[] {

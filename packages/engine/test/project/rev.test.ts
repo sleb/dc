@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { PROJECTOR_REV } from "../../src/project/rev";
 import { CELLS, goldenOf } from "./cells";
+import { ENVELOPE_CELLS } from "./envelope-cells";
 import { canonicalJson, checkRevPins, corpusFingerprint, fingerprint } from "./rev-tools";
 
 const pins = (): Record<string, string> => JSON.parse(readFileSync(new URL("./rev-pins.json", import.meta.url), "utf8")) as Record<string, string>;
@@ -48,6 +49,13 @@ describe("R3 the fingerprint", () => {
   test("it is stable under key reorder at every depth", () => {
     expect(canonicalJson({ b: [{ y: 1, x: 2 }], a: null })).toBe(canonicalJson({ a: null, b: [{ x: 2, y: 1 }] }));
     expect(fingerprint([["n", { b: 1, a: { d: 1, c: 2 } }]])).toBe(fingerprint([["n", { a: { c: 2, d: 1 }, b: 1 }]]));
+  });
+  test("the envelope cells are in the corpus: dropping them changes the fingerprint, and so does changing one", () => {
+    const viewsOnly = fingerprint(CELLS.map((c) => [c.name, goldenOf(c)] as const));
+    expect(corpusFingerprint()).not.toBe(viewsOnly);
+    expect(ENVELOPE_CELLS.length).toBeGreaterThanOrEqual(7);
+    const changed = fingerprint([...CELLS.map((c) => [c.name, goldenOf(c)] as const), ...ENVELOPE_CELLS.map((c, i) => [`envelope/${c.name}`, i === 3 ? { changed: true } : c.value()] as const)]);
+    expect(changed).not.toBe(corpusFingerprint());
   });
   test("the corpus fingerprint is 64 hex characters and repeatable", () => {
     expect(corpusFingerprint()).toMatch(/^[0-9a-f]{64}$/);

@@ -1,7 +1,8 @@
 // #29: Q1 the store simulation (PJ10, PJ11), Q2 a simulated projector deploy, Q3 the test of the test: a stale projector must be caught. LLD 2 8.2, 11.7.
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
-import { fanOutWith } from "../../src/project/fanout";
+import type { ViewDoc } from "@dc/contracts";
+import { fanOutWith, sameContent } from "../../src/project/fanout";
 import type { FanOutDeps } from "../../src/project/fanout";
 import { makeProjector, viewersOf } from "../../src/project";
 import type { Viewer } from "../../src/project";
@@ -51,7 +52,8 @@ describe("Q1 the in-memory store, driven by fanOut over real games, equals a ful
           // a skipped-on write is never a no-op, and every write is a target or a vanished id
           const live = new Set(viewersOf(next).map((t) => t.docId));
           for (const w of writes) expect(live.has(w.docId) || vanished(p, next).includes(w.docId)).toBe(true);
-          if (skip && p !== next) for (const w of writes) { const old = JSON.parse(before.get(w.docId) ?? "null") as { view: unknown } | null; if (old !== null) expect(JSON.stringify(old.view)).not.toBe(JSON.stringify(w.doc.view)); }
+          // with skip on, every write to an existing doc changes what its reader sees (the version alone does not count)
+          if (skip) for (const w of writes) { const old = JSON.parse(before.get(w.docId) ?? "null") as ViewDoc | null; if (old !== null) expect(sameContent(old, w.doc), `${w.docId} rewritten with the same content`).toBe(false); }
           seen.steps++;
           seen.skipped += viewersOf(next).length - writes.filter((w) => live.has(w.docId)).length;
           seen.tombstones += writes.filter((w) => w.doc.view?.kind === "departed" && w.doc.view.reason === "gone").length;
@@ -77,6 +79,18 @@ describe("Q2 a projector deploy (viewsRev behind)", () => {
       expect(s.viewsRev).toBe(PROJECTOR_REV);
       expect(commit(s, real, g, g, { aggregateChanged: false, now: NOW + 1 })).toEqual([]); // draft-only again: nothing
     }
+  });
+  test("a rollback (store.viewsRev above the running PROJECTOR_REV) never skips: every doc is rewritten and viewsRev is set back (LLD 3 rule, fail safe)", () => {
+    const g = submitting();
+    const s = new SimStore();
+    s.apply(fanOutWith(real, null, g, { now: NOW - 1, skipUnchanged: false }));
+    s.viewsRev = PROJECTOR_REV + 1;
+    const next = bump(g); // no visible change: skip-unchanged would write nothing
+    expect(fanOutWith(real, g, next, { now: NOW, skipUnchanged: true })).toEqual([]);
+    const writes = commit(s, real, g, next, { aggregateChanged: true, now: NOW });
+    expect(writes.map((w) => w.docId)).toEqual(viewersOf(next).map((t) => t.docId));
+    expect(s.viewsRev).toBe(PROJECTOR_REV);
+    expect(commit(s, real, next, bump(next), { aggregateChanged: true, now: NOW })).toEqual([]); // equal again: skipping resumes
   });
   test("an aggregate-changing first command rewrites everything too, including views whose content did not change", () => {
     const g = submitting();
