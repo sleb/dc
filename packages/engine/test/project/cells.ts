@@ -31,11 +31,12 @@ export const CELLS: Cell[] = [
   cell("writing/player-finished", "WRITING", "player", writing, P(1)),
   cell("writing/unseatedHost", "WRITING", "unseatedHost", () => unseatHost(writing()), HU),
   cell("writing/spectator", "WRITING", "spectator", writing, SPEC),
-  cell("writing/late-joiner-in-play", "WRITING", "player", lateJoiner, P(5)),
+  
 
   cell("submitting/judge", "SUBMITTING", "judge", submitting, P(1)),
   cell("submitting/player-submitted", "SUBMITTING", "player", submitting, P(2)),
   cell("submitting/player-unsubmitted", "SUBMITTING", "player", submitting, P(4)),
+  cell("submitting/player-late-joiner-writing", "SUBMITTING", "player", lateJoiner, P(5)),
   cell("submitting/player-sitting-out", "SUBMITTING", "player", sitOut, P(4)),
   cell("submitting/host", "SUBMITTING", "host", submitting, P(0)),
   cell("submitting/unseatedHost", "SUBMITTING", "unseatedHost", () => unseatHost(submitting()), HU),
@@ -49,7 +50,6 @@ export const CELLS: Cell[] = [
   cell("judging/spectator", "JUDGING", "spectator", judging, SPEC),
 
   cell("paused/judge", "PAUSED", "judge", paused, P(1)),
-  cell("paused/player", "PAUSED", "player", paused, P(0)),
   cell("paused/host", "PAUSED", "host", paused, P(0)),
   cell("paused/unseatedHost", "PAUSED", "unseatedHost", () => unseatHost(paused()), HU),
   cell("paused/spectator", "PAUSED", "spectator", paused, SPEC),

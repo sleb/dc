@@ -53,13 +53,13 @@ const withPitch = (g: Game, i: number, pitch: string): Game => g.round === null 
 
 /** Round 2 open, 5 players, judge 1, players 2 and 3 have played (3 first in time), one earlier round resolved. */
 export function submitting(): Game {
-  const g = roundGame({ n: 5, judge: 1, submitted: [3, 2], scores: [0, 0, 1, 0, 0], history: [HISTORY1], extra: { settings: settings({ pitch: true }), ...NOISE } });
+  const g = roundGame({ n: 5, judge: 1, submitted: [3, 2], scores: [0, 0, 1, 0, 0], history: [HISTORY1], extra: { settings: settings({ pitch: true }), waitingOn: [pid(0), pid(4)], ...NOISE } });
   return withPitch(named(g), 2, "PITCH-P2");
 }
 
 /** Round 1 closed with three plays (2, 3, 4), six players, judge 1, player 5 did not play. revealOrder is the plays reversed. */
 export function judging(): Game {
-  return withPitch(named(roundGame({ n: 6, judge: 1, submitted: [4, 2, 3], phase: "JUDGING", extra: { settings: settings({ pitch: true }), ...NOISE } })), 3, "PITCH-P3");
+  return withPitch(named(roundGame({ n: 6, judge: 1, submitted: [4, 2, 3], phase: "JUDGING", extra: { settings: settings({ pitch: true }), waitingOn: [pid(1)], ...NOISE } })), 3, "PITCH-P3");
 }
 
 /** Three players, one of whom left: two active, paused, round 1 open and empty. */
@@ -120,7 +120,7 @@ export function ended(): Game {
 export function unseatHost(g: Game): Game {
   if (g.phase === "LOBBY") return { ...g, players: g.players.filter((p) => p.id !== pid(0)) };
   const p0 = must(g.players.find((p) => p.id === pid(0)));
-  return { ...g, players: g.players.map((p) => (p === p0 ? { ...p, status: "left" as const, hand: [], scorePile: [] } : p)) };
+  return { ...g, waitingOn: g.waitingOn.filter((id) => id !== p0.id), players: g.players.map((p) => (p === p0 ? { ...p, status: "left" as const, hand: [], scorePile: [] } : p)) };
 }
 
 export const FIXTURES: Record<string, () => Game> = { lobby, writing, submitting, judging, paused, pausedNoJudge, pausedJudgingEmpty, sitOut, lateJoiner, finished, ended };
