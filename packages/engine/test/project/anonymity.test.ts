@@ -6,12 +6,13 @@ import { fcParams } from "../support/fc";
 import { FIXTURES } from "./fixtures";
 import { DETECTORS, REAL, AnonymityCoverageError, AnonymityViolation, missingCoverage, runAnonymitySuite, scenarioSteps } from "./anonymity";
 import type { Detector, ProjectorUnderTest } from "./anonymity";
+import type { Game } from "../../src/types";
 import { makeProjector, project, viewersOf } from "../../src/project";
 
 /** The fixed seed set CI runs for coverage (H3) and for the mutants: a counter must be positive here, not just over a random seed. */
 export const COVERAGE_SEED = 20_260_131;
-setDefaultTimeout(180_000); // generated games on a loaded machine must not trip the 5 s default
 const CI_RUNS = 60;
+setDefaultTimeout(180_000); // generated games on a loaded machine must not trip the 5 s default
 
 describe("K3 the real projector survives the suite; H3 the counters are positive over the fixed seed set", () => {
   test("every detector on, straight and churn drivers, coverage enforced", () => {
@@ -112,6 +113,24 @@ describe("the suite's own checks fire on planted faults (each detector alone)", 
     expect(e.message).toMatch(/seed/);
     expect(e.message).toMatch(/step -?\d+/);
     expect(Number.isInteger(e.step)).toBe(true); // -1 is the initial state, before any command
+  });
+});
+
+describe("N1, N4 and N5 each fire alone on a planted dependence", () => {
+  const leak = (f: (g: Game, resolved: number) => number): ProjectorUnderTest => planted({ project: (g, v, d) => { const view = project(g, v); return view.kind === "live" ? { ...view, resolved: f(g, view.resolved) } : view; } });
+  const n = (impl: ProjectorUnderTest, d: Detector): AnonymityViolation => fires(impl, d);
+  test("N1: a view that depends on the text of a card the viewer may not see", () => {
+    expect(n(leak((g, r) => r + (g.cards[g.pools.redDeck[0] ?? ""]?.text.length ?? 0)), "N1").detector).toBe("N1");
+  });
+  test("N4: a view that depends on createdAt", () => {
+    expect(n(leak((g, r) => r + (g.createdAt % 7)), "N4").detector).toBe("N4");
+  });
+  test("N5: a view that counts others' votes before the end, and one that counts player voters after it", () => {
+    expect(n(leak((g, r) => (g.phase === "FINISHED" || g.phase === "ENDED" ? r : r + g.votes.length)), "N5").detector).toBe("N5");
+    expect(n(leak((g, r) => (g.phase === "FINISHED" || g.phase === "ENDED" ? r + g.votes.filter((x) => x.voter.startsWith("p:")).length : r)), "N5").detector).toBe("N5");
+  });
+  test("the real projector passes all three alone", () => {
+    for (const d of ["N1", "N4", "N5"] as const) expect(() => runAnonymitySuite(REAL, only(d))).not.toThrow();
   });
 });
 

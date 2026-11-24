@@ -27,7 +27,9 @@ export interface Allowed {
 export interface Forbidden { ids: Set<string>; texts: Set<string>; pitches: Set<string>; draftTexts: Set<string> }
 
 /** Key names that never appear in any doc (PJ7, PJ3 and the aggregate's own fields), anywhere in the tree. */
-export const INTERNAL_KEYS = ["uid", "hostId", "seed", "episode", "episodeGen", "waitingSince", "reminderDueAt", "changedAtVersion", "openedAt", "createdAt", "totalJoins", "submissions", "revealOrder", "pools", "cards", "scorePile", "roster", "judgeReassigned", "played", "judgeCursor", "writeProgress", "redDeck", "redDiscard", "greenDeck", "greenDiscard"] as const;
+export const INTERNAL_KEYS = ["uid", "hostId", "seed", "episode", "episodeGen", "waitingSince", "reminderDueAt", "changedAtVersion", "openedAt", "createdAt", "totalJoins", "submissions", "revealOrder", "pools", "cards", "scorePile", "roster", "judgeReassigned", "played", "judgeCursor", "writeProgress", "redDeck", "redDiscard", "greenDeck", "greenDiscard", "votes", "voter"] as const;
+/** `votes` is also the count in a podium entry (`awards.podium[n].votes`, public); that one path is not the aggregate's vote list. */
+const PODIUM_VOTES_PATH = /^view\.awards\.podium\[\d+\]\.votes$/;
 /** Keys that belong to a player's own `you` block, or to their own draft region, and nowhere else. */
 const OWN_KEYS = ["powerUsage", "myVotes", "hand", "writeTarget"] as const;
 const MARKER_KEYS = ["variant", "writeIn", "isWriteIn", "writtenIn"] as const;
@@ -87,9 +89,9 @@ export function forbiddenFor(g: Game, drafts: GameDrafts, viewer: OracleViewer):
   return f;
 }
 
-/** Strings that identify a person or a secret: every uid, the host's, and the markers of a seat uid, a link key, a token. */
+/** Strings that identify a person or a secret: every uid, the host's, every voter string (`p:` and `s:` forms), and the markers of a seat uid, a link key, a token. */
 function identityStrings(g: Game, viewer: OracleViewer): string[] {
-  const out = new Set<string>([g.hostId, ...g.players.map((p) => p.uid), "seat:", "#k=", "token", "secret"]);
+  const out = new Set<string>([g.hostId, ...g.players.map((p) => p.uid), ...g.votes.map((v) => v.voter), "seat:", "#k=", "token", "secret"]);
   return [...out];
 }
 
@@ -116,10 +118,10 @@ function where(doc: unknown, needle: string): string {
 
 const issues = (e: { issues: readonly { path: readonly PropertyKey[]; code: string }[] }): string => e.issues.slice(0, 3).map((i) => `${i.path.map(String).join(".") || "(root)"} (${i.code})`).join("; ");
 
-function scanKeys(doc: unknown, out: Finding[], o: { internal: readonly string[]; own: readonly string[]; markers: boolean; whitelist: ReadonlySet<string>; ownAt: (path: string, key: string) => boolean }): void {
+function scanKeys(doc: unknown, out: Finding[], o: { podiumVotes?: boolean; internal: readonly string[]; own: readonly string[]; markers: boolean; whitelist: ReadonlySet<string>; ownAt: (path: string, key: string) => boolean }): void {
   walk(doc, (n) => {
     if (n.key === null || Array.isArray(n.parent)) return;
-    if (o.internal.includes(n.key)) out.push({ detector: "internals", path: n.path, detail: `internal key ${n.key}` });
+    if (o.internal.includes(n.key) && !(n.key === "votes" && o.podiumVotes === true && PODIUM_VOTES_PATH.test(n.path))) out.push({ detector: "internals", path: n.path, detail: `internal key ${n.key}` });
     if (o.own.includes(n.key) && !o.ownAt(n.path, n.key)) out.push({ detector: "othersData", path: n.path, detail: `own-only key ${n.key} off its path` });
     if (o.markers && (MARKER_KEYS as readonly string[]).includes(n.key) && !o.whitelist.has(n.path)) out.push({ detector: "writeInMarker", path: n.path, detail: `write-in marker key ${n.key}` });
   });
@@ -195,7 +197,7 @@ export function checkDoc(g: Game, drafts: GameDrafts, viewer: OracleViewer, doc:
   if (!hasRoomCode && json.includes(JSON.stringify(g.roomCode))) out.push({ detector: "identity", path: where(doc, g.roomCode), detail: "the room code in a doc that has none" });
   const isPlayer = viewer.kind === "player";
   scanKeys(doc, out, {
-    internal: INTERNAL_KEYS, own: [...OWN_KEYS, "draft", "draftSeq", "you"], markers: true, whitelist: WHITELIST_MARKER_PATHS,
+    podiumVotes: true, internal: INTERNAL_KEYS, own: [...OWN_KEYS, "draft", "draftSeq", "you"], markers: true, whitelist: WHITELIST_MARKER_PATHS,
     ownAt: (path, key) => (key === "draft" || key === "draftSeq" ? path === key && isPlayer : key === "you" ? path === "view.you" && isPlayer : path === `view.you.${key}` && isPlayer),
   });
   const pending = new Set((g.round?.submissions ?? []).map((s) => s.cardId));
@@ -225,7 +227,7 @@ export function checkRoundDoc(g: Game, record: RoundRecord, doc: RoundDoc, draft
   scanStrings(doc, json, pitches, "cards", "a pitch of an open round", out, mode, found);
   scanStrings(doc, json, Object.values(drafts).flatMap((x) => [...x.red, ...x.green]), "drafts", "a draft text", out, mode, found);
   scanStrings(doc, json, [g.hostId, ...g.players.map((p) => p.uid), "seat:", "#k=", "token", "secret", ...g.votes.map((v) => v.voter)], "identity", "an identity string", out);
-  scanKeys(doc, out, { internal: [...INTERNAL_KEYS, "votes", "voter"], own: [...OWN_KEYS, "draft", "draftSeq", "you"], markers: true, whitelist: new Set(), ownAt: () => false });
+  scanKeys(doc, out, { internal: INTERNAL_KEYS, own: [...OWN_KEYS, "draft", "draftSeq", "you"], markers: true, whitelist: new Set(), ownAt: () => false });
   const pending = new Set((g.round?.submissions ?? []).map((s) => s.cardId).filter((id) => !own.has(id)));
   walk(doc, (n) => { if (typeof n.value === "string" && pending.has(n.value)) out.push({ detector: "ownership", path: n.path, detail: "a pending card id in a round doc" }); });
   coOccurrence(doc, pending, new Set(g.players.map((p) => p.id)), out);

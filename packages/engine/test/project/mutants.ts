@@ -88,6 +88,8 @@ export const MUTANTS: Record<string, Mutant> = {
       return [...real, early];
     },
   } },
+  // who voted for what, in the finished game's views (the tallies are public, the voters are not)
+  "M-votes": { seed: SEED, numRuns: RUNS, killedBy: ["internals", "identity", "N5"], impl: wrapView((view, g) => (g.phase === "FINISHED" || g.phase === "ENDED" ? ({ ...view, votes: g.votes.map((x) => ({ round: x.round, voter: x.voter, cardId: x.cardId })) } as unknown as GameView) : view)) },
   // keys in reverse order everywhere (shape-valid; the only way to see it is the key-order check)
   "M-keyorder": { seed: SEED, numRuns: RUNS, killedBy: ["keyOrder"], impl: {
     ...REAL,

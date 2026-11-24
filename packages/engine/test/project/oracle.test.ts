@@ -119,6 +119,17 @@ describe("O2 each forbidden class flags a planted leak in a golden-doc copy", ()
     }
   });
 
+  test("votes: the aggregate's vote list and a voter string anywhere in a view, but not a podium's vote count", () => {
+    const f = finished();
+    const viewer = P(0);
+    const doc = (m: (d: Doc) => void): string[] => { const d = structuredClone(live(f, viewer)); m(d); return kinds(checkDoc(f, NONE, viewer, d)); };
+    expect(doc(() => undefined)).toEqual([]); // awards.podium[n].votes is a public count
+    expect(doc((d) => { (d.view as Record<string, unknown>).votes = [{ voter: "x" }]; })).toContain("internals");
+    expect(doc((d) => { (d.view as { players: Record<string, unknown>[] }).players[0]!.voter = "x"; })).toContain("internals");
+    expect(doc((d) => { (d.view as { players: Record<string, unknown>[] }).players[0]!.name = `p:${pid(1)}`; })).toContain("identity");
+    expect(doc((d) => { (d.view as { players: Record<string, unknown>[] }).players[0]!.name = "s:spectator-uid-1"; })).toContain("identity");
+  });
+
   test("unknown shape: a key outside the strict schema", () => {
     expect(plant((d) => { view(d).mystery = 1; })).toContain("strictParse");
     expect(plant((d) => { delete view(d).phase; })).toContain("strictParse");

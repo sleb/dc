@@ -7,7 +7,8 @@ type Live = Extract<GameView, { kind: "live" }>;
 type PlayerPublic = Live["players"][number];
 type RoundPublic = NonNullable<Live["round"]>;
 type RevealCard = NonNullable<RoundPublic["reveal"]>[number];
-type Secret = "scorePile" | "pools" | "cards" | "drafts" | "submissions" | "revealOrder" | "hostId" | "uid" | "seed" | "episode";
+type Secret = "scorePile" | "pools" | "cards" | "drafts" | "submissions" | "revealOrder" | "hostId" | "uid" | "seed" | "episode" | "voter";
+// (`votes` is not in the list: `awards.podium[n].votes` is a public count; the vote list and who cast each vote are the aggregate's, and `voter` is its key)
 
 // TY1: a raw aggregate is not a view
 export type TY1a = Expect<Not<Assignable<Game, GameView>>>;

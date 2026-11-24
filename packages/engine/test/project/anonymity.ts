@@ -176,6 +176,8 @@ function scenarioOf(p: ScenarioParams, maxSteps: number): Scenario {
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
   const s = scenarioSteps(p, maxSteps);
+  // shared by every run of the process: frozen, so a projector that writes into its input cannot corrupt the next run (it throws, and that is a `determinism` violation)
+  deepFreeze(s);
   cache.set(key, s);
   if (cache.size > 64) cache.delete(cache.keys().next().value as string);
   return s;
@@ -299,7 +301,8 @@ export function runAnonymitySuite(impl: ProjectorUnderTest, o: SuiteOptions): Su
       for (const t of targets) {
         viewerLabel = t.docId.startsWith("seat:") ? "seat" : t.docId;
         const off = t.viewer.kind === "spectator" && t.viewer.uid === null && !game.settings.spectators.enabled;
-        const view = off ? null : impl.project(game, t.viewer, drafts);
+        const view = off ? null : guard("determinism", "project", () => impl.project(game, t.viewer, drafts)) ?? null;
+        if (view === null && !off) continue;
         const doc = storedDoc(game, drafts, t.viewer, view);
         views.push({ t, view, doc });
         counters.docs++;

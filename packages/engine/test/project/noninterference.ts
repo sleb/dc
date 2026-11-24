@@ -113,12 +113,17 @@ const N4: Transformation = {
 };
 
 const N5: Transformation = {
-  id: "N5", name: "N5 change other players' and spectators' votes while the game is not FINISHED or ENDED",
+  id: "N5", name: "N5 change other players' and spectators' votes (before the end: which cards they name; after it: who cast them, the tallies being public)",
   apply(g, d, v) {
-    if (g.phase === "FINISHED" || g.phase === "ENDED") return null;
-    const out = clone(g);
-    const play = g.history.flatMap((h) => h.plays.map((p) => ({ round: h.round, cardId: p.cardId })));
     const mine = own(v) === null ? null : `p:${own(v)}`;
+    const out = clone(g);
+    if (g.phase === "FINISHED" || g.phase === "ENDED") {
+      // the tallies decide awards and are public; who cast a vote is not. Re-label every other voter, tallies untouched.
+      if (!g.votes.some((x) => x.voter !== mine)) return null;
+      out.votes = g.votes.map((x, i) => (x.voter === mine ? x : { ...x, voter: `s:ni-${i}` }));
+      return { game: out, drafts: d };
+    }
+    const play = g.history.flatMap((h) => h.plays.map((p) => ({ round: h.round, cardId: p.cardId })));
     out.votes = g.votes.map((x, i) => (x.voter === mine ? x : { ...x, cardId: play[(i + 1) % Math.max(1, play.length)]?.cardId ?? "c_zzzzzzzzzz" }));
     out.votes.push({ round: play[0]?.round ?? 1, voter: "s:ni-extra", cardId: play[0]?.cardId ?? "c_zzzzzzzzzz" });
     return { game: out, drafts: d };
@@ -149,6 +154,7 @@ export const SENSITIVITY: readonly { name: string; apply(g: Game, d: GameDrafts,
   { name: "own hand text", apply: (g, d, v) => { const me = g.players.find((p) => p.id === own(v)); const id = me?.hand[0]; if (id === undefined) return null; const out = clone(g); out.cards = { ...g.cards, [id]: { kind: "red", text: `${g.cards[id]?.text ?? ""}!` } }; return { game: out, drafts: d }; } },
   { name: "green text", apply: (g, d) => { if (g.round === null) return null; const id = g.round.greenCardId; const out = clone(g); out.cards = { ...g.cards, [id]: { kind: "green", text: `${g.cards[id]?.text ?? ""}!` } }; return { game: out, drafts: d }; } },
   { name: "reveal order", apply: (g, d) => { if (g.round === null || g.round.revealOrder === null || g.round.revealOrder.length < 2) return null; const out = clone(g); out.round = { ...clone(g.round), revealOrder: [...(g.round.revealOrder ?? [])].reverse() }; return { game: out, drafts: d }; } },
+  { name: "own vote", apply: (g, d, v) => { const mine = `p:${own(v)}`; const i = g.votes.findIndex((x) => x.voter === mine); const other = g.history.flatMap((h) => h.plays).find((p) => p.cardId !== g.votes[i]?.cardId); if (i < 0 || other === undefined) return null; const out = clone(g); out.votes = g.votes.map((x, k) => (k === i ? { ...x, cardId: other.cardId } : x)); return { game: out, drafts: d }; } },
   { name: "own powerUsage", apply: (g, d, v) => { const me = g.players.find((p) => p.id === own(v)); if (me === undefined) return null; const out = clone(g); out.players = g.players.map((p) => (p.id === me.id ? { ...clone(p), powerUsage: { ...p.powerUsage, writeIn: !p.powerUsage.writeIn } } : clone(p))); return { game: out, drafts: d }; } },
 ];
 

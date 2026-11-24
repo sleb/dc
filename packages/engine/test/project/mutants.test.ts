@@ -1,11 +1,13 @@
-// #30 K1 to K3 (LLD 2 11.4): the anonymity suite must be shown to fail on leaks. 13 hand-written mutants, fixed seeds. K1: each named detector fires alone (the others off, so a kill is never
+// #30 K1 to K3 (LLD 2 11.4): the anonymity suite must be shown to fail on leaks. 14 hand-written mutants, fixed seeds. K1: each named detector fires alone (the others off, so a kill is never
 // only "the strict parse caught the extra key"); K2: every mutant is killed by the default configuration; K3: the real projector survives it (anonymity.test.ts).
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { DETECTORS, AnonymityViolation, runAnonymitySuite } from "./anonymity";
 import type { Detector, ProjectorUnderTest } from "./anonymity";
 import { MUTANTS } from "./mutants";
 
-setDefaultTimeout(180_000); // generated games on a loaded machine must not trip the 5 s default
+// every test here runs a suite over generated games; a loaded machine (CI, another agent) must not turn a slow run into a failure
+setDefaultTimeout(180_000);
+
 const names = Object.keys(MUTANTS);
 const killedBy = (impl: ProjectorUnderTest, o: { seed: number; numRuns: number }, detectors: readonly Detector[]): Detector | null => {
   try {
@@ -17,8 +19,8 @@ const killedBy = (impl: ProjectorUnderTest, o: { seed: number; numRuns: number }
   }
 };
 
-test("the thirteen mutants of 11.4 plus M-keyorder and M-shape", () => {
-  expect(names).toEqual(["M-hands", "M-owner", "M-order", "M-time", "M-power", "M-writein", "M-draft", "M-uid", "M-spec", "M-deck", "M-resolve", "M-keyorder", "M-shape"]);
+test("the eleven mutants of 11.4 plus M-keyorder, M-shape and M-votes", () => {
+  expect(names).toEqual(["M-hands", "M-owner", "M-order", "M-time", "M-power", "M-writein", "M-draft", "M-uid", "M-spec", "M-deck", "M-resolve", "M-votes", "M-keyorder", "M-shape"]);
 });
 
 describe("K2 every mutant is killed by the default configuration (expect toThrow)", () => {
@@ -83,6 +85,7 @@ describe("the mutants are what the table says", () => {
     expect(MUTANTS["M-spec"]!.killedBy).toEqual(["subset"]);
     expect(MUTANTS["M-deck"]!.killedBy).toEqual(["cards"]);
     expect(MUTANTS["M-resolve"]!.killedBy).toEqual(["roundDocs"]);
+    expect([...MUTANTS["M-votes"]!.killedBy].sort()).toEqual(["N5", "identity", "internals"]);
     expect([...MUTANTS["M-hands"]!.killedBy].sort()).toEqual(["cards", "internals", "othersData"]);
     expect([...MUTANTS["M-order"]!.killedBy].sort()).toEqual(["N2", "order"]);
     expect([...MUTANTS["M-time"]!.killedBy].sort()).toEqual(["N2", "time"]);

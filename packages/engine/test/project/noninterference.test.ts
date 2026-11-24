@@ -108,14 +108,22 @@ describe("N4 server-internal times, episode and counters; never hostId", () => {
   });
 });
 
-describe("N5 other players' and spectators' votes while the game is not FINISHED or ENDED", () => {
+describe("N5 other players' and spectators' votes", () => {
+  test("after the end the tallies are public and the voters are not: re-labelling every other voter moves nothing, and t's own votes stay", () => {
+    const g = finished();
+    for (const v of [P(0), P(2), P(3), SPEC]) expect(holds("N5", g, NONE, v)).toBe(1);
+    const out = byId("N5")[0]!.apply(g, NONE, P(0))!.game;
+    expect(out.votes.filter((x) => x.voter === `p:${pid(0)}`)).toEqual(g.votes.filter((x) => x.voter === `p:${pid(0)}`) as never);
+    expect(out.votes.filter((x) => x.voter !== `p:${pid(0)}`).every((x) => x.voter.startsWith("s:ni-"))).toBe(true);
+    expect(byId("N5")[0]!.apply({ ...g, votes: [] }, NONE, SPEC)).toBeNull();
+  });
+
   const withVotes = (): Game => ({ ...submitting(), votes: [{ round: 1, voter: `p:${pid(0)}`, cardId: cid(206) }, { round: 1, voter: "s:spec-uid", cardId: cid(206) }, { round: 1, voter: `p:${pid(4)}`, cardId: cid(306) }] });
   test("the view does not move; t's own votes stay put; not applicable once the game is over", () => {
     const g = withVotes();
     for (const v of [P(0), P(1), P(4), SPEC, HU]) expect(holds("N5", v === HU ? unseatHost(g) : g, NONE, v)).toBe(1);
     const out = byId("N5")[0]!.apply(g, NONE, P(4))!.game;
     expect(out.votes.find((x) => x.voter === `p:${pid(4)}`)).toEqual(g.votes[2] as never);
-    expect(byId("N5")[0]!.apply(finished(), NONE, SPEC)).toBeNull();
   });
 });
 
@@ -144,9 +152,9 @@ describe("N6 a non-t write-in submission becomes a hand-card one and back", () =
 
 describe("N7 sensitivity: what t can observe does change the view", () => {
   test("own hand text, the green card's text, the reveal order and own powerUsage each move the view", () => {
-    expect(SENSITIVITY.map((s) => s.name).sort()).toEqual(["green text", "own hand text", "own powerUsage", "reveal order"]);
+    expect(SENSITIVITY.map((s) => s.name).sort()).toEqual(["green text", "own hand text", "own powerUsage", "own vote", "reveal order"]);
     for (const s of SENSITIVITY) {
-      const [g, v] = s.name === "own hand text" || s.name === "own powerUsage" ? [judging(), P(5)] : [judging(), SPEC];
+      const [g, v] = s.name === "own vote" ? [finished(), P(0)] : s.name === "own hand text" || s.name === "own powerUsage" ? [judging(), P(5)] : [judging(), SPEC];
       const out = s.apply(g, NONE, v);
       expect(out, s.name).not.toBeNull();
       expect(viewJson(REAL, out!.game, out!.drafts, v), s.name).not.toBe(viewJson(REAL, g, NONE, v));
