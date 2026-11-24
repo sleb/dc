@@ -163,3 +163,48 @@ describe("L7 notify T3 and sweep T1 (P21)", () => {
   test("sweep still reports Bun global (base re-included)", () => reported(SWEEP, "export const v = typeof Bun;\n", "no-restricted-globals"));
   test("sweep allows contracts", () => quiet(SWEEP, imp("@dc/contracts")));
 });
+
+// PJ4, PJ5 (LLD 2 section 2; #28): the Projector's files may not read owner-keyed data except `you.ts`, and build views field by field. The block replaces the engine block's
+// rules for these keys, so each case that must still hold from the base is asserted too.
+describe("L8 Projector rules (LLD 2 section 2, PJ4, PJ5)", () => {
+  const PROJECT = "packages/engine/src/project/base.ts";
+  const YOU = "packages/engine/src/project/you.ts";
+  const sel = (name: string) => `import { ${name} } from "../selectors";\nexport default ${name};\n`;
+  for (const name of ["handOf", "submissionOwner", "exportPools"]) {
+    test(`reports ${name} outside you.ts`, () => reported(PROJECT, sel(name), "no-restricted-imports", /you\.ts/));
+    test(`reports ${name} imported with an alias`, () => reported(PROJECT, `import { ${name} as h } from "../selectors";\nexport default h;\n`, "no-restricted-imports"));
+  }
+  test("reports a namespace import of the selectors", () => reported(PROJECT, `import * as s from "../selectors";\nexport default s;\n`, "no-restricted-imports"));
+  test("reports handOf from the engine index path too", () => reported(PROJECT, sel("handOf").replace("../selectors", "../selectors.ts"), "no-restricted-imports"));
+  test("allows the other selectors outside you.ts", () => quiet(PROJECT, sel("cardText")));
+  test("allows handOf and ownSubmission in you.ts", () => quiet(YOU, `import { handOf, ownSubmission } from "../selectors";\nexport default [handOf, ownSubmission];\n`));
+  test("you.ts still may not import submissionOwner or exportPools", () => {
+    return Promise.all([reported(YOU, sel("submissionOwner"), "no-restricted-imports"), reported(YOU, sel("exportPools"), "no-restricted-imports")]);
+  });
+  test("outside project/, the Engine may import handOf", () => quiet("packages/engine/src/x.ts", sel("handOf")));
+  test("test files in project/ are exempt", () => quiet("packages/engine/src/project/x.test.ts", sel("handOf")));
+
+  test("reports an object spread of a Game value", () => reported(PROJECT, "export const f = (game: object) => ({ ...game });\n", "no-restricted-syntax", /field by field/));
+  test("reports an object spread of a player, a round and a submission", async () => {
+    for (const v of ["player", "p", "round", "submission", "s"]) await reported(PROJECT, `export const f = (${v}: object) => ({ a: 1, ...${v} });\n`, "no-restricted-syntax");
+  });
+  test("reports a spread of a call or a member (any source but the shared base)", async () => {
+    await reported(PROJECT, "export const f = (g: { round: object }) => ({ ...g.round });\n", "no-restricted-syntax");
+    await reported(PROJECT, "export const f = (g: object) => ({ ...structuredClone(g) });\n", "no-restricted-syntax");
+  });
+  test("you.ts is not exempt from the spread ban", () => reported(YOU, "export const f = (p: object) => ({ ...p });\n", "no-restricted-syntax"));
+  test("allows spreading the shared base", () => quiet(PROJECT, "export const f = (base: object) => ({ audience: 1, ...base });\n"));
+  test("allows array spread", () => quiet(PROJECT, "export const f = (xs: number[]) => [...xs];\n"));
+  test("outside project/, an object spread is fine", () => quiet("packages/engine/src/x.ts", "export const f = (game: object) => ({ ...game });\n"));
+
+  test("still reports the clock and entropy (base re-spread)", async () => {
+    await reported(PROJECT, "export const v = Date.now();\n", "no-restricted-syntax", /ctx\.now/);
+    await reported(PROJECT, "export const v = Math.random();\n", "no-restricted-syntax", /Rng/);
+    await reported(PROJECT, "export const v = new Date();\n", "no-restricted-syntax");
+  });
+  test("still reports the engine's banned imports and globals", async () => {
+    await reported(PROJECT, imp("node:fs"), "no-restricted-imports");
+    await reported(PROJECT, imp("firebase-admin"), "no-restricted-imports");
+    await reported(PROJECT, "export const v = typeof process;\n", "no-restricted-globals");
+  });
+});
