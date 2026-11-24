@@ -67,7 +67,7 @@ describe("B1 openRound (8.3)", () => {
     const out = rounds.openRound(g, scriptedRng([]), 777);
     expect(out.state.round).toEqual({
       number: 2, judgeId: pid(2), judgeReassigned: false, greenCardId: cid(100), phase: "SUBMITTING",
-      roster: [pid(0), pid(1), pid(2), pid(3)], submissions: [], revealOrder: null, openedAt: 777, changedAtVersion: 10,
+      roster: [pid(0), pid(1), pid(2), pid(3)], submissions: [], revealOrder: null, played: [], openedAt: 777, changedAtVersion: 10,
     });
     expect(out.state.pools.greenDeck).toEqual(ids(101, 4));
     expect(out.state.judgeCursor).toBe(2);

@@ -386,13 +386,14 @@ describe("P-E9 no event before WinnerPicked carries a submitted card, and nothin
   });
 });
 
-describe("removeCard of a revealed submission in JUDGING (LLD 1 open question 20)", () => {
-  test("the public submittedBy loses exactly the removed card's author: the signal the M2 Projector must hide, pinned so a change is deliberate", () => {
+describe("removeCard of a revealed submission in JUDGING (LLD 1 open question 20, ruled in #28)", () => {
+  test("the card leaves the reveal, but Round.played still names its author, so the Projector's submittedBy does not shrink; the event names the card and no player", () => {
     const g = roundGame({ n: 5, judge: 0, submitted: [1, 2, 3], phase: "JUDGING", greenDeck: 60 });
     const removed = cid(206); // player 2's play, revealed without an owner
     const a = ok(g, { type: "removeCard", cardId: removed }, seat(0));
     const lost = (g.round?.submissions ?? []).map((s) => s.playerId).filter((p) => !(a.state.round?.submissions ?? []).some((s) => s.playerId === p));
-    expect(lost).toStrictEqual([pid(2)]);
+    expect(lost).toStrictEqual([pid(2)]); // the Engine's own record of submissions does shrink ...
+    expect(a.state.round?.played).toStrictEqual(g.round?.played); // ... the public trace does not
     expect(a.events).toStrictEqual([{ t: "CardRemoved", cardId: removed, kind: "red" }]);
   });
 });

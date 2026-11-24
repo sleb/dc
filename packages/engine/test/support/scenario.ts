@@ -74,7 +74,7 @@ export function buildGame(s: GameShape): Game {
     ...g,
     round: makeRound({
       judgeId: pid(judge), greenCardId: cid(900), roster: g.players.map((p) => p.id), submissions, changedAtVersion: 5,
-      ...(judging ? { phase: "JUDGING" as const, revealOrder: submissions.map((x) => x.cardId).reverse() } : {}),
+      ...(judging ? { phase: "JUDGING" as const, revealOrder: submissions.map((x) => x.cardId).reverse(), played: submissions.map((x) => x.playerId) } : {}),
     }),
     judgeCursor: judge,
   };

@@ -78,6 +78,7 @@ export function makeRound(over: Partial<Round> = {}): Round {
     roster: [],
     submissions: [],
     revealOrder: null,
+    played: [],
     openedAt: 0,
     changedAtVersion: 1,
     ...over,

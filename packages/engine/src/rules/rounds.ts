@@ -43,6 +43,7 @@ export function openRound(game: Game, rng: Rng, now: number, judge?: PlayerId): 
     roster: ids,
     submissions: [],
     revealOrder: null,
+    played: [],
     openedAt: now,
     changedAtVersion: state.version + 1,
   };

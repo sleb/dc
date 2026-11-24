@@ -45,6 +45,7 @@ export function roundGame(o: RoundGameOptions = {}): Game {
     roster: g.players.map((p) => p.id),
     submissions: subs,
     revealOrder: o.phase === "JUDGING" ? subs.map((s) => s.cardId).reverse() : null,
+    played: o.phase === "JUDGING" ? subs.map((s) => s.playerId) : [],
     changedAtVersion: 5,
   });
   return { ...g, round, judgeCursor: judge, history: o.history ?? [] };
