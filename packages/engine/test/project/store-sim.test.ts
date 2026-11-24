@@ -11,7 +11,10 @@ import type { Game } from "../../src/types";
 import { assertProperty } from "../support/fc";
 import { FIXTURES, judging, submitting, uidOf } from "./fixtures";
 import { stepsOf } from "./scenarios";
-import { SimStore, commit, divergence, vanished } from "./store-sim";
+import { SimRounds, SimStore, commit, divergence, vanished } from "./store-sim";
+import { decide } from "../../src/decide";
+import { toRoundDoc } from "../../src/project";
+import { ctxFor } from "../support/factories";
 
 const NOW = 1_700_000_000_000;
 const real: FanOutDeps = { project: makeProjector, rev: PROJECTOR_REV };
@@ -147,5 +150,39 @@ describe("Q3 test the test: a stale stored projection is flagged when skip is on
     t.docs.set("ghost", structuredClone(t.docs.get("spectator")!));
     expect(divergence(t, g1, makeProjector, new Set())).toEqual(["ghost: a doc that should not exist"]);
     expect(divergence(t, g1, makeProjector, new Set(["ghost"]))).toEqual(["ghost: a vanished id without a gone tombstone"]);
+  });
+});
+
+// #30 A6: the round-doc side of the store simulation (PJ13): written once, only for resolved rounds.
+describe("SimRounds", () => {
+  const resolved = (): { before: Game; after: Game; docs: ReturnType<typeof toRoundDoc>[] } => {
+    const before = judging();
+    const judge = before.players.find((p) => p.id === before.round?.judgeId);
+    const r = decide(before, { type: "pickWinner", submissionId: before.round?.revealOrder?.[0] as string, expectedVersion: before.round?.changedAtVersion as number } as never, ctxFor({ actor: { kind: "user", uid: judge?.uid as string } }));
+    if (!r.ok) throw new Error("pickWinner");
+    return { before, after: r.value.state, docs: r.value.roundRecords.map(toRoundDoc) };
+  };
+
+  test("a doc is stored once, for a round that is in the resolved history", () => {
+    const { after, docs } = resolved();
+    expect(docs.length).toBe(1);
+    const sim = new SimRounds();
+    sim.apply(docs, after);
+    expect([...sim.docs.keys()]).toEqual([1]);
+    expect(sim.docs.get(1)).toEqual(docs[0] as never);
+    expect(sim.applied).toBe(1);
+  });
+
+  test("a second write of the same round throws", () => {
+    const { after, docs } = resolved();
+    const sim = new SimRounds();
+    sim.apply(docs, after);
+    expect(() => sim.apply(docs, after)).toThrow("twice");
+  });
+
+  test("a round that is not resolved (still open in the state) throws", () => {
+    const { before, docs } = resolved();
+    const sim = new SimRounds();
+    expect(() => sim.apply(docs, before)).toThrow("unresolved");
   });
 });
