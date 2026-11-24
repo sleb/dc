@@ -86,7 +86,7 @@ export function closeRound(game: Game, rng: Rng, reason: "allIn" | "closed"): { 
   }
   const revealOrder = rng.shuffle(round.submissions.map((s) => s.cardId));
   return {
-    state: { ...game, round: { ...round, phase: "JUDGING", revealOrder, changedAtVersion: game.version + 1 } },
+    state: { ...game, round: { ...round, phase: "JUDGING", revealOrder, played: round.submissions.map((s) => s.playerId), changedAtVersion: game.version + 1 } },
     events: [{ t: "SubmissionsClosed", round: round.number, judgeId: round.judgeId, reason }],
   };
 }
@@ -117,7 +117,7 @@ export function resolveRound(game: Game, winnerCardId: CardId, rng: Rng, now: nu
     winnerCardId,
     winnerId,
   };
-  const submitters = new Set(round.submissions.map((s) => s.playerId));
+  const submitters = new Set(round.played); // not `submissions`: a play the host removed (`removeCard`) still counts as played (LLD 1 open question 20)
   const record: RoundRecord = {
     ...summary,
     green: { id: round.greenCardId, text: greenText },
@@ -189,6 +189,7 @@ export function reassignJudge(game: Game, reason: ReassignReason, rng: Rng): { s
     judgeId: next.id,
     judgeReassigned: true,
     submissions: theirs === undefined ? round.submissions : round.submissions.filter((s) => s.playerId !== next.id),
+    played: round.played.filter((id) => id !== next.id),
     revealOrder: theirs === undefined || round.revealOrder === null ? round.revealOrder : round.revealOrder.filter((c) => c !== theirs.cardId),
     roster: round.roster.includes(next.id) ? round.roster : [...round.roster, next.id],
     changedAtVersion: game.version + 1,

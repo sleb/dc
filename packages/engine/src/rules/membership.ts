@@ -48,9 +48,15 @@ export function evictPlayer(game: Game, playerId: PlayerId, status: "left" | "re
   }
   const redDeck = release.length === 0 ? game.pools.redDeck : rng.shuffle([...game.pools.redDeck, ...release]);
   const greenDeck = gone.scorePile.length === 0 ? game.pools.greenDeck : rng.shuffle([...game.pools.greenDeck, ...gone.scorePile]);
-  const left: Round | null = round === null || mine === undefined
-    ? round
-    : { ...round, submissions: round.submissions.filter((s) => s.playerId !== playerId), revealOrder: round.revealOrder === null ? null : round.revealOrder.filter((c) => c !== mine.cardId) };
+  // `played` loses the seat even when the card is already gone (a host removal), so a leaver is never counted as having played (LLD 1 open question 20).
+  const left: Round | null = round === null
+    ? null
+    : {
+      ...round,
+      submissions: round.submissions.filter((s) => s.playerId !== playerId),
+      revealOrder: round.revealOrder === null || mine === undefined ? round.revealOrder : round.revealOrder.filter((c) => c !== mine.cardId),
+      played: round.played.filter((id) => id !== playerId),
+    };
   let state: Game = {
     ...game,
     players: game.players.map((p): Player => (p === gone ? { ...p, status, hand: [], scorePile: [] } : p)),
