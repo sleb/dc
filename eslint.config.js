@@ -56,14 +56,14 @@ export default [
       "no-restricted-globals": ["error", ...ENGINE_GLOBALS],
       "no-restricted-syntax": ["error", ...CLOCK_AND_ENTROPY] } },
   // LLD 2 section 2, PJ4, PJ5 (#28): the Projector builds views field by field and reads owner-keyed data in one place. These blocks set the same three rule keys as the engine block above
-  // and so replace it for these files: every engine rule is re-spread. `handOf` is importable only by you.ts; `submissionOwner` and `exportPools` by no file in project/ (PJ4: never called).
+  // and so replace it for these files: every engine rule is re-spread. `handOf` and `ownSubmission` are importable only by you.ts; `submittedBy`, `submissionOwner` and `exportPools` by no file in project/ (PJ4: never called).
   // The spread rule is syntactic, not type-aware: the only object spread allowed is of the shared `base`, built once from named fields.
   { files: ["packages/engine/src/project/**/*.ts"], ignores: TESTS, rules: {
-      "no-restricted-imports": ["error", { patterns: [...ENGINE_IMPORT_PATTERNS, { group: SELECTORS, importNames: ["handOf", "submissionOwner", "exportPools"], message: "Owner-keyed and hand reads belong to project/you.ts only (LLD 2 section 2), and submissionOwner and exportPools are never used by the Projector (PJ4)." }] }],
+      "no-restricted-imports": ["error", { patterns: [...ENGINE_IMPORT_PATTERNS, { group: SELECTORS, importNames: ["handOf", "ownSubmission", "submittedBy", "submissionOwner", "exportPools"], message: "Hand and own-submission reads belong to project/you.ts only (LLD 2 section 2); submittedBy, submissionOwner and exportPools are never used by the Projector (PJ4, PJ6)." }] }],
       "no-restricted-globals": ["error", ...ENGINE_GLOBALS],
       "no-restricted-syntax": ["error", ...CLOCK_AND_ENTROPY, NO_OBJECT_SPREAD] } },
   { files: ["packages/engine/src/project/you.ts"], ignores: TESTS, rules: {
-      "no-restricted-imports": ["error", { patterns: [...ENGINE_IMPORT_PATTERNS, { group: SELECTORS, importNames: ["submissionOwner", "exportPools"], message: "The Projector never calls submissionOwner or exportPools (PJ4)." }] }],
+      "no-restricted-imports": ["error", { patterns: [...ENGINE_IMPORT_PATTERNS, { group: SELECTORS, importNames: ["submittedBy", "submissionOwner", "exportPools"], message: "The Projector never calls submittedBy (time order, PJ6), submissionOwner or exportPools (PJ4)." }] }],
       "no-restricted-globals": ["error", ...ENGINE_GLOBALS],
       "no-restricted-syntax": ["error", ...CLOCK_AND_ENTROPY, NO_OBJECT_SPREAD] } },
   { files: ["packages/contracts/src/**/*.ts"], ignores: TESTS, rules: {

@@ -107,6 +107,26 @@ describe("OQ20b a public action that removes a revealed play: the signal is acce
   });
 });
 
+describe("OQ20d residual signals after a host removal, accepted and pinned", () => {
+  const removed = () => ok(judging(), { type: "removeCard", cardId: cid(306) }, seat(0)).state; // player 3's card
+  test("the removed card's author leaves: submittedBy shrinks while the reveal does not, so they are identifiable", () => {
+    const after = ok(removed(), { type: "leave" }, seat(3)).state;
+    const s = json(after, SPEC);
+    expect(round(s)["submittedBy"]).toEqual([pid(2), pid(4)]);
+    expect((round(s)["reveal"] as unknown[]).length).toBe(2);
+  });
+  test("the removed card's author becomes judge by passJudging: the same residual", () => {
+    let g = removed();
+    g = ok(g, { type: "passJudging", expectedVersion: must(g.round).changedAtVersion }, seat(0)).state; // 1 -> 2
+    expect(must(g.round).judgeId).toBe(pid(2));
+    g = ok(g, { type: "passJudging", expectedVersion: must(g.round).changedAtVersion }, seat(0)).state; // 2 -> 3, the removed card's author
+    const s = json(g, SPEC);
+    expect(round(s)["judgeId"]).toBe(pid(3));
+    expect(round(s)["submittedBy"]).toEqual([pid(4)]);
+    expect((round(s)["reveal"] as unknown[]).length).toBe(1);
+  });
+});
+
 describe("OQ20c resolve after a removal", () => {
   test("the removed card's author is not recorded absent, and the round resolves for the survivors", () => {
     const g = judging();

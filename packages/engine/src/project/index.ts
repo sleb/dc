@@ -13,7 +13,7 @@ export type { Viewer, ViewTarget } from "./viewer";
 
 /**
  * A projector for one state: the shared part is built once and reused for every viewer. Pure and total except for a viewer the state cannot serve,
- * which throws `EngineInvariantError` (fail closed): a `player` viewer who is not seated, or a host viewer whose uid is not the host's.
+ * which throws `EngineInvariantError` (fail closed): a `player` viewer who is not seated or whose uid is not the seat's, or a host viewer whose uid is not the host's.
  * The returned views share the base's nested arrays and objects; callers treat them as immutable.
  */
 export function makeProjector(game: Game): (viewer: Viewer) => GameView {
@@ -27,6 +27,7 @@ export function makeProjector(game: Game): (viewer: Viewer) => GameView {
     }
     const me = game.players.find((p) => p.id === viewer.playerId && (p.status === "writing" || p.status === "ready" || p.status === "active"));
     if (me === undefined) throw new EngineInvariantError(`project: ${viewer.playerId} is not a seated player`);
+    if (me.uid !== viewer.uid) throw new EngineInvariantError(`project: viewer uid does not match seat ${viewer.playerId}`);
     const isHost = me.uid === game.hostId; // the game's word, not the viewer's, decides who gets the host panel
     const you = youView(game, me, isHost);
     return isHost ? { audience: "player", ...base, you, host: hostPanel(game) } : { audience: "player", ...base, you };

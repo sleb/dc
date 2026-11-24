@@ -1,4 +1,4 @@
-// The viewer's own secrets and affordances (LLD 2 sections 4.2, 5.2, PJ5). The only module in `project/` that reads a hand, an own submission, votes or `powerUsage`;
+// The viewer's own secrets and affordances (LLD 2 sections 4.2, 5.2, PJ5). The only module in `project/` that reads a hand, an own submission (`ownSubmission`), votes or `powerUsage`;
 // everything here is taken from the viewer's own player record. Lint keeps `handOf` and the owner-keyed selectors out of every other file in `project/`.
 import type { GameView } from "@dc/contracts";
 import { cardText, cardsStillToWrite, handOf, ownSubmission } from "../selectors";

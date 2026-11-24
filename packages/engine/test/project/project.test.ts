@@ -43,6 +43,10 @@ describe("PR1 purity and the projector instance (PJ1)", () => {
       expect(() => makeProjector(g)(v)).toThrow(EngineInvariantError);
     }
   });
+  test("a player viewer whose uid is not the seat's uid fails closed, including a host uid on a non-host seat", () => {
+    const g = roundGame({ n: 4, judge: 1 });
+    for (const v of [{ ...P(2), uid: uidOf(3) }, { ...P(2), uid: HOST_UID }, { ...P(0), uid: uidOf(1) }] as Viewer[]) expect(() => project(g, v)).toThrow(EngineInvariantError);
+  });
   test("a projector never reads the clock or entropy: the view of a game does not change between two calls with different Date", () => {
     const g = roundGame({ n: 4, judge: 1, submitted: [2] });
     const a = JSON.stringify(project(g, P(2)));

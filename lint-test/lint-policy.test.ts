@@ -170,16 +170,17 @@ describe("L8 Projector rules (LLD 2 section 2, PJ4, PJ5)", () => {
   const PROJECT = "packages/engine/src/project/base.ts";
   const YOU = "packages/engine/src/project/you.ts";
   const sel = (name: string) => `import { ${name} } from "../selectors";\nexport default ${name};\n`;
-  for (const name of ["handOf", "submissionOwner", "exportPools"]) {
+  for (const name of ["handOf", "ownSubmission", "submittedBy", "submissionOwner", "exportPools"]) {
     test(`reports ${name} outside you.ts`, () => reported(PROJECT, sel(name), "no-restricted-imports", /you\.ts/));
     test(`reports ${name} imported with an alias`, () => reported(PROJECT, `import { ${name} as h } from "../selectors";\nexport default h;\n`, "no-restricted-imports"));
   }
   test("reports a namespace import of the selectors", () => reported(PROJECT, `import * as s from "../selectors";\nexport default s;\n`, "no-restricted-imports"));
+  test("reports ownSubmission from the engine index path too", () => reported(PROJECT, `import { ownSubmission } from "../index";\nexport default ownSubmission;\n`, "no-restricted-imports"));
   test("reports handOf from the engine index path too", () => reported(PROJECT, sel("handOf").replace("../selectors", "../selectors.ts"), "no-restricted-imports"));
   test("allows the other selectors outside you.ts", () => quiet(PROJECT, sel("cardText")));
   test("allows handOf and ownSubmission in you.ts", () => quiet(YOU, `import { handOf, ownSubmission } from "../selectors";\nexport default [handOf, ownSubmission];\n`));
-  test("you.ts still may not import submissionOwner or exportPools", () => {
-    return Promise.all([reported(YOU, sel("submissionOwner"), "no-restricted-imports"), reported(YOU, sel("exportPools"), "no-restricted-imports")]);
+  test("you.ts still may not import submittedBy, submissionOwner or exportPools", () => {
+    return Promise.all(["submittedBy", "submissionOwner", "exportPools"].map((n) => reported(YOU, sel(n), "no-restricted-imports")));
   });
   test("outside project/, the Engine may import handOf", () => quiet("packages/engine/src/x.ts", sel("handOf")));
   test("test files in project/ are exempt", () => quiet("packages/engine/src/project/x.test.ts", sel("handOf")));
