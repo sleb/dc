@@ -2,6 +2,8 @@
 export { decide } from "./decide";
 export { EngineInvariantError } from "./errors";
 export { check as checkText } from "./moderation";
+export { docIdOf, makeProjector, project, viewerFor, viewersOf } from "./project";
+export type { Viewer, ViewTarget } from "./project";
 export { makeRng } from "./rng";
 export { actorRole, seatUid } from "./roles";
 export * as playability from "./rules/playability";
