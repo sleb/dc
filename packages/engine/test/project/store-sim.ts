@@ -1,7 +1,7 @@
 // #29: an in-memory stand-in for the Store of LLD 3 (M3), enough to prove PJ10 and PJ11 of LLD 2 against `fanOut`. Reusable by #30.
 // It applies writes the way the real Store will (the view region replaced, the draft region left alone unless `clearDraft`), and it implements the rebuild rule of LLD 2 8.2:
 // when `store.viewsRev !== PROJECTOR_REV` (LLD 3: fail safe, so a rollback to older code rebuilds everything too) the first command of any kind, a draft-only one included, rewrites every doc with skip-unchanged off.
-import type { ViewDoc } from "@dc/contracts";
+import type { RoundDoc, ViewDoc } from "@dc/contracts";
 import { fanOutWith } from "../../src/project/fanout";
 import type { FanOutDeps, ViewWrite } from "../../src/project/fanout";
 import { viewersOf } from "../../src/project";
@@ -81,4 +81,23 @@ export function vanished(prev: Game | null, next: Game): string[] {
   if (prev === null) return [];
   const now = new Set(viewersOf(next).map((t) => t.docId));
   return viewersOf(prev).map((t) => t.docId).filter((id) => !now.has(id));
+}
+
+/**
+ * #30: the round-doc side of the store (LLD 3 `games/{id}/rounds/{n}`), enough to prove PJ13 of LLD 2: a doc is written once, and only for a round that is in the resolved history of the state
+ * the commit produced. A leaky projection path that wrote a doc while a round was still open (M-resolve) is refused here, the way the rules and the transaction will refuse it.
+ */
+export class SimRounds {
+  docs = new Map<number, RoundDoc>();
+  applied = 0;
+
+  /** The docs one commit writes, with the state it produced; throws on a second write of a round and on a round that is not in `next.history`. */
+  apply(docs: readonly RoundDoc[], next: Game): void {
+    for (const d of docs) {
+      if (!next.history.some((h) => h.round === d.round)) throw new Error(`PJ13: round ${d.round} is unresolved (history holds ${next.history.length})`);
+      if (this.docs.has(d.round)) throw new Error(`PJ13: round ${d.round} written twice`);
+      this.docs.set(d.round, structuredClone(d));
+      this.applied++;
+    }
+  }
 }
