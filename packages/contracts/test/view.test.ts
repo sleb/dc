@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import * as contracts from "../src";
 import {
   DEPARTED_REASONS, GameViewLooseSchema, GameViewSchema, PHASES, PLAYER_STATUSES, ROUND_PHASES, RoundDocLooseSchema, RoundDocSchema,
-  SettingsSchema, ViewDocLooseSchema, ViewDocSchema, YOU_TURNS, makeViewSchemas,
+  ProfanitySchema, SettingsSchema, SpectatorsSchema, TargetOverrideSchema, VariantsSchema, ViewDocLooseSchema, ViewDocSchema, YOU_TURNS, makeViewSchemas,
 } from "../src";
 import type { GameView, GameViewLoose, RoundDoc, ViewDoc } from "../src";
 import { C, GID, gameViews, roundDocs, viewDocs } from "./fixtures/view";
@@ -345,5 +345,34 @@ describe("V12 export surface", () => {
   test("DraftSchema is the viewer's draft shape", () => {
     expect(contracts.DraftSchema.safeParse({ red: ["a"], green: [] }).success).toBe(true);
     expect(contracts.DraftSchema.safeParse({ red: ["a"] }).success).toBe(false);
+  });
+});
+
+// The view's settings pieces are declared again in view.ts (strict and loose need their own objects, so the shared schemas of settings.ts cannot be reused as they are). They must accept exactly what
+// settings.ts accepts, for every value either side could be given; this pins the two together.
+describe("view settings pieces accept what settings.ts accepts", () => {
+  const base = gameViews.spectatorJudging as Json;
+  const viewWith = (patch: Json): unknown => ({ ...clone(base), settings: { ...(base.settings as Json), ...patch } });
+  const bools = (o: Record<string, unknown>): unknown => o;
+  test("targetOverride: null, 1, 2 to 10, 11, 2.5, strings", () => {
+    for (const v of [null, 1, 2, 3, 9, 10, 11, 0, -1, 2.5, "3", undefined, true]) {
+      expect(ok(GameViewSchema, viewWith({ targetOverride: v })), `targetOverride ${String(v)}`).toBe(TargetOverrideSchema.safeParse(v).success);
+      expect(ok(GameViewLooseSchema, viewWith({ targetOverride: v })), `loose targetOverride ${String(v)}`).toBe(TargetOverrideSchema.safeParse(v).success);
+    }
+  });
+  test("profanity: strict is the enum of settings.ts; loose takes any string (the loose rule) and nothing else", () => {
+    for (const v of ["on", "off", "ON", "maybe", "", null, 1]) {
+      expect(ok(GameViewSchema, viewWith({ profanity: v })), `profanity ${String(v)}`).toBe(ProfanitySchema.safeParse(v).success);
+      expect(ok(GameViewLooseSchema, viewWith({ profanity: v })), `loose profanity ${String(v)}`).toBe(typeof v === "string");
+    }
+  });
+  test("variants and spectators: every key a boolean, none missing (extra keys are the strict view's own rule)", () => {
+    const full = { pitch: true, writeIn: false, redraw: true, peoplesChoice: false };
+    const cases: unknown[] = [full, { ...full, pitch: "yes" }, { ...full, redraw: null }, { pitch: true }, {}, null];
+    for (const v of cases) expect(ok(GameViewSchema, viewWith({ variants: v })), `variants ${JSON.stringify(v)}`).toBe(VariantsSchema.safeParse(bools(v as Json)).success);
+    const sp: unknown[] = [{ enabled: true, vote: false }, { enabled: 1, vote: false }, { enabled: true }, {}, null];
+    for (const v of sp) expect(ok(GameViewSchema, viewWith({ spectators: v })), `spectators ${JSON.stringify(v)}`).toBe(SpectatorsSchema.safeParse(v).success);
+    expect(ok(GameViewSchema, viewWith({ variants: { ...full, extra: 1 } }))).toBe(false);
+    expect(ok(GameViewLooseSchema, viewWith({ variants: { ...full, extra: 1 } }))).toBe(true);
   });
 });
