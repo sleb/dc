@@ -79,11 +79,14 @@ export function allowedFor(g: Game, drafts: GameDrafts, viewer: OracleViewer): A
 export function forbiddenFor(g: Game, drafts: GameDrafts, viewer: OracleViewer): Forbidden {
   const a = allowedFor(g, drafts, viewer);
   const f: Forbidden = { ids: new Set(), texts: new Set(), pitches: new Set(), draftTexts: new Set() };
+  // A doc is JSON: a string is a string whatever role it had in the aggregate, so a value the viewer may see as a pitch (or a text) cannot be
+  // forbidden as the other, or a correct view would raise a finding (a hidden card whose text is also someone's public pitch, and the reverse).
+  const visible = new Set([...a.texts, ...a.pitches]);
   for (const [id, c] of Object.entries(g.cards)) {
     if (!a.ids.has(id) && !a.idOnly.has(id)) f.ids.add(id);
-    if (!a.ids.has(id) && c.text !== "" && !a.texts.has(c.text)) f.texts.add(c.text);
+    if (!a.ids.has(id) && c.text !== "" && !visible.has(c.text)) f.texts.add(c.text);
   }
-  for (const s of g.round?.submissions ?? []) if (s.pitch !== undefined && s.pitch !== "" && !a.pitches.has(s.pitch)) f.pitches.add(s.pitch);
+  for (const s of g.round?.submissions ?? []) if (s.pitch !== undefined && s.pitch !== "" && !visible.has(s.pitch)) f.pitches.add(s.pitch);
   const own = viewer.kind === "player" ? viewer.playerId : null;
   for (const [pid, d] of Object.entries(drafts)) if (pid !== own) for (const t of [...d.red, ...d.green]) if (t !== "" && !a.texts.has(t)) f.draftTexts.add(t);
   return f;
@@ -194,7 +197,8 @@ export function checkDoc(g: Game, drafts: GameDrafts, viewer: OracleViewer, doc:
   scanStrings(doc, json, f.draftTexts, "drafts", "another player's draft text", out, mode, found);
   scanStrings(doc, json, identityStrings(g, viewer), "identity", "an identity string", out);
   const hasRoomCode = viewer.kind === "player" || (viewer.kind === "spectator" && viewer.isHost);
-  if (!hasRoomCode && json.includes(JSON.stringify(g.roomCode))) out.push({ detector: "identity", path: where(doc, g.roomCode), detail: "the room code in a doc that has none" });
+  // the escaped substring, as `scanStrings` does: a name that embeds the code is a finding too, not only a complete JSON string value.
+  if (!hasRoomCode && json.includes(esc(g.roomCode))) out.push({ detector: "identity", path: where(doc, g.roomCode), detail: "the room code in a doc that has none" });
   const isPlayer = viewer.kind === "player";
   scanKeys(doc, out, {
     podiumVotes: true, internal: INTERNAL_KEYS, own: [...OWN_KEYS, "draft", "draftSeq", "you"], markers: true, whitelist: WHITELIST_MARKER_PATHS,

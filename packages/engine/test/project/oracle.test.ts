@@ -110,6 +110,22 @@ describe("O2 each forbidden class flags a planted leak in a golden-doc copy", ()
     expect(plant((d) => { view(d).players[0]!.name = g.roomCode; })).toEqual([]); // a seated player's doc carries it in `you`
     expect(plant((d) => { view(d).players[0]!.name = g.roomCode; }, g, NONE, SPEC)).toContain("identity");
     expect(plant((d) => { view(d).players[0]!.name = g.roomCode; }, g, NONE, P(0))).toEqual([]); // the host panel may carry it
+    // the room code is searched as a substring, like every other forbidden string, so a value that embeds it is a finding too (review)
+    expect(plant((d) => { view(d).players[0]!.name = `join ${g.roomCode}`; }, g, NONE, SPEC)).toContain("identity");
+    expect(plant((d) => { view(d).players[0]!.name = `join ${g.roomCode}`; }, g, NONE, P(0))).toEqual([]); // still fine where it is allowed
+  });
+
+  test("a value the viewer may see in another role is never forbidden: a hidden card whose text equals a public pitch (review)", () => {
+    const base = judging(); // player 3's play is revealed with the pitch PITCH-P3
+    const pitch = base.round?.submissions.find((s) => s.playerId === pid(3))?.pitch as string;
+    expect(pitch).toBe("PITCH-P3");
+    const hidden = cid(300); // player 3's hand: the spectator may not see this card
+    const withHidden = (text: string): Game => ({ ...base, cards: { ...base.cards, [hidden]: { kind: "red", text } } });
+    // the text is public as a pitch, so a doc that contains it raises nothing; a value cannot be both seen and forbidden
+    expect(forbiddenFor(withHidden(pitch), NONE, SPEC).texts.has(pitch)).toBe(false);
+    expect(checkDoc(withHidden(pitch), NONE, SPEC, live(withHidden(pitch), SPEC))).toEqual([]);
+    // control: the same hidden text, with no public pitch of that value, stays forbidden
+    expect(forbiddenFor(withHidden("HIDDEN-TEXT"), NONE, SPEC).texts.has("HIDDEN-TEXT")).toBe(true);
   });
 
   test("internals: each internal key name anywhere in the tree", () => {

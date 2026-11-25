@@ -17,12 +17,16 @@ const roundOf = (v: Live) => must(v.round);
 describe("RD1 the shared part is the same for every viewer", () => {
   const strip = (v: GameView): unknown => { const { audience: _a, ...rest } = v as Record<string, unknown> & { audience: string }; const { you: _y, host: _h, ...shared } = rest; return shared; };
   for (const [name, make] of Object.entries(FIXTURES)) {
-    test(`${name}: every non-departed viewer's shared fields are equal`, () => {
+    test(`${name}: every non-departed viewer's shared fields are equal, the unseated host's to the hostless spectator's`, () => {
       const g = make();
-      const all = [...viewersOf(g), ...viewersOf(unseatHost(g))].map((t) => t.viewer).filter((v) => v.kind !== "departed");
+      const seated = viewersOf(g).map((t) => t.viewer).filter((v) => v.kind !== "departed");
       const first = JSON.stringify(strip(project(g, SPEC)));
-      for (const v of viewersOf(g).map((t) => t.viewer).filter((x) => x.kind !== "departed")) expect(JSON.stringify(strip(project(g, v))), `${name} ${JSON.stringify(v)}`).toBe(first);
-      expect(all.length).toBeGreaterThan(2);
+      for (const v of seated) expect(JSON.stringify(strip(project(g, v))), `${name} ${JSON.stringify(v)}`).toBe(first);
+      expect(seated.length).toBeGreaterThan(2);
+      // Unseating the host changes public state (players[], settings, target), so the hostless leg compares within that state: the unseated
+      // host's shared fields and the hostless spectator's are built from the same base (PJ8's unseated-host arm; review).
+      const h = unseatHost(g);
+      expect(JSON.stringify(strip(project(h, HU))), `${name} unseated host`).toBe(JSON.stringify(strip(project(h, SPEC))));
     });
     test(`${name}: PJ8 spot check, the spectator JSON is a subset of every seated player's, and of the unseated host's`, () => {
       const g = make();

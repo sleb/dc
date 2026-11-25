@@ -383,7 +383,9 @@ export async function runCommand(db: Firestore, d: Deps, i: CommandInput): Promi
         writeViews(prev, next, !viewsStale);                  // first command after a projector deploy rewrites everything
       } else if (viewsStale && i.actor.kind === "user") {
         // K-F: rebuild is independent of aggregateChanged, so a draft-only command after a deploy also refreshes views.
-        // No version bump (PJ10): rebuilt docs keep view.version = prev.version and win on the higher viewsRev.
+        // No version bump (PJ10): rebuilt docs keep view.version = prev.version, so clients prefer them by the higher viewsRev.
+        // In the ahead branch (a rollback that did not ship a higher PROJECTOR_REV) the rewrite carries a lower viewsRev instead and
+        // clients discard it at the same version; see 5.6.
         w.update(gameRef, { "store.viewsRev": PROJECTOR_REV, "store.updatedAt": now });
         writeViews(null, prev, false);                        // all of viewersOf(prev), as rebuildViews (6.5)
       }
@@ -465,7 +467,7 @@ export async function runCommand(db: Firestore, d: Deps, i: CommandInput): Promi
 
 - The draft region and view region of `views/{uid}` are disjoint field sets written with `mergeFields`, so another player's `finishWriting` can never wipe your draft and your draft save never touches `version`/`view` (LLD 2 8.4).
 - `finishWriting` and eviction return `draftChanges: [{playerId, draft: null}]`; the Store deletes the drafts doc and clears the draft region (`draft: null`). For the actor of `finishWriting`, `draftSeq` is the absolute `seq+1` (its drafts doc is read in step 1); every other clear, including the actor's own `leave` (self-eviction) and a writer evicted by `removePlayer`, writes `FieldValue.increment(1)`, because step 1 did not read that drafts doc and an absolute value computed from nothing would lower `draftSeq`. No extra read is needed. When fan-out also clears the same view doc, the two combine into one write (5.2a).
-- **Stale views on a draft-only command (K-F).** If `store.viewsRev !== PROJECTOR_REV` (behind after a deploy, or ahead after a rollback: fail safe, rebuild everything) when a user command commits with `aggregateChanged: false`, the Store still rebuilds every view (`fanOut(null, prev, {skipUnchanged: false})`) and updates `store.viewsRev` (and `store.updatedAt`) without bumping `version`; the rebuilt docs carry the same `version` and the higher envelope `viewsRev`, which clients prefer. Only a no-op system `markReminded` skips this (it stays zero-write; the next user command or `rebuildViews` refreshes the views).
+- **Stale views on a draft-only command (K-F).** If `store.viewsRev !== PROJECTOR_REV` (behind after a deploy, or ahead after a rollback: fail safe, rebuild everything) when a user command commits with `aggregateChanged: false`, the Store still rebuilds every view (`fanOut(null, prev, {skipUnchanged: false})`) and updates `store.viewsRev` (and `store.updatedAt`) without bumping `version`; the rebuilt docs carry the same `version` and the running envelope `viewsRev`. **Behind is the deploy case and the rebuilt docs win**, because a client applies a snapshot only if its `(version, viewsRev)` pair is greater or equal (LLD 2 8.4). **Ahead only arises from a rollback that did not follow the rule** of LLD 2 8.2 (a rollback of projector code ships with a higher `PROJECTOR_REV`, which puts it in the behind case); if it does arise, the rebuild writes the *lower* constant and clients discard those docs at the same `version`, keeping the newer-projector ones, until a rollback that follows the rule. Only a no-op system `markReminded` skips this (it stays zero-write; the next user command or `rebuildViews` refreshes the views).
 - The ledger is written for draft-only saves too: without it a delayed retry of an older save could overwrite newer text after the client moved on. Reordering of two *different* saves in flight is the client's concern (LLD 7 serializes saves).
 
 ### 5.7 Write-count budget
@@ -606,7 +608,7 @@ export async function runDeletion(db: Firestore, deps: Deps, gameId: GameId) {
 
 ### 6.5 `rebuildViews(gameId)`
 
-An admin-only Store function that, in one transaction, reads the aggregate, runs `fanOut(null-as-all, game, {skipUnchanged:false})`, writes all view docs and sets `store.viewsRev = PROJECTOR_REV` without bumping `version` (the rebuilt docs win on `(version, viewsRev)`, K-F). Active games need no script: `runCommand` rebuilds on the first accepted user command after a deploy whether or not it changes the aggregate (5.2, 5.6). Used after a projector deploy for idle games (an optional script over `where store.viewsRev < REV`) and for incident repair; PJ10 holds because `view.version` equals the unchanged aggregate version.
+An admin-only Store function that, in one transaction, reads the aggregate, runs `fanOut(null-as-all, game, {skipUnchanged:false})`, writes all view docs and sets `store.viewsRev = PROJECTOR_REV` without bumping `version` (after a deploy the rebuilt docs win on `(version, viewsRev)`, K-F; in the rollback case see 5.6). Active games need no script: `runCommand` rebuilds on the first accepted user command after a deploy whether or not it changes the aggregate (5.2, 5.6). Used after a projector deploy for idle games (an optional script over `where store.viewsRev < REV`) and for incident repair; PJ10 holds because `view.version` equals the unchanged aggregate version.
 
 ## 7. Reminder queries: `listWaitingOn`
 

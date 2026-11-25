@@ -469,8 +469,10 @@ export function runAnonymitySuite(impl: ProjectorUnderTest, o: SuiteOptions): Su
         }
       }
 
-      // PJ13, PJ15: the round docs this commit writes (a leaky write path may write one on a command that resolved nothing)
-      if (s.accepted && (on.has("roundDocs") || on.has("keyOrder") || ORACLE.some((d) => on.has(d)))) {
+      // PJ13, PJ15, N6 on round docs: the round docs this commit writes (a leaky write path may write one on a command that resolved nothing).
+      // N6 is in the gate because its round-doc comparison (below) is the only thing that sees a write-in marker leaked through `toRoundDoc`
+      // alone; without it an N6-only run would never reach the write path (review).
+      if (s.accepted && (on.has("roundDocs") || on.has("keyOrder") || on.has("N6") || ORACLE.some((d) => on.has(d)))) {
         viewerLabel = "(round docs)";
         const docs = impl.roundDocs !== undefined ? impl.roundDocs(s.before, s.after, s.records) : s.records.map((rec) => impl.toRoundDoc(rec, s.before));
         counters.roundDocs += docs.length;

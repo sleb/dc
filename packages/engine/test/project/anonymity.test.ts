@@ -2,12 +2,13 @@
 // and proves it notices when something is wrong. The mutants are in mutants.test.ts.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { GameViewSchema } from "@dc/contracts";
+import type { RoundDoc } from "@dc/contracts";
 import { fcParams } from "../support/fc";
 import { FIXTURES } from "./fixtures";
 import { DETECTORS, REAL, AnonymityCoverageError, AnonymityViolation, missingCoverage, runAnonymitySuite, scenarioSteps } from "./anonymity";
 import type { Detector, ProjectorUnderTest } from "./anonymity";
 import type { Game } from "../../src/types";
-import { makeProjector, project, viewersOf } from "../../src/project";
+import { makeProjector, project, toRoundDoc, viewersOf } from "../../src/project";
 
 /** The fixed seed set CI runs for coverage (H3) and for the mutants: a counter must be positive here, not just over a random seed. */
 export const COVERAGE_SEED = 20_260_131;
@@ -105,6 +106,15 @@ describe("the suite's own checks fire on planted faults (each detector alone)", 
   test("roundDocs: a Store that writes a round doc twice, and one that writes an unresolved round", () => {
     const twice = planted({ roundDocs: (_p, _n, recs) => [...recs, ...recs].map((r) => REAL.toRoundDoc(r, undefined as never)) });
     expect(fires(twice, "roundDocs").detector).toBe("roundDocs");
+  });
+
+  test("N6 alone reaches the round-doc write path: a write-in marker that only toRoundDoc leaks is still killed by N6 (review)", () => {
+    // M-writein's doc-side leak without its view-side leak: an N6-only run must run the round-doc comparison to see it.
+    const docOnly: ProjectorUnderTest = { ...REAL, toRoundDoc: (rec, before) => {
+      const doc = toRoundDoc(rec);
+      return { ...doc, plays: doc.plays.map((p) => (before.round?.submissions.find((s) => s.cardId === p.cardId)?.writeIn === true ? { ...p, writeIn: true } : p)) } as RoundDoc;
+    } };
+    expect(() => runAnonymitySuite(docOnly, { numRuns: 30, seed: COVERAGE_SEED, detectors: ["N6"] })).toThrow(AnonymityViolation);
   });
 
   test("a violation names the detector, the scenario seed, the step and the viewer, and never carries more than a path and a short detail", () => {
