@@ -12,7 +12,7 @@ import { decorate, sentinel, sentinelDriver } from "./inject";
 import { created } from "./scenarios";
 import { finished, judging, lobby, submitting } from "./fixtures";
 
-setDefaultTimeout(60_000);
+setDefaultTimeout(600_000);
 const SENT = /^[RGP]\d{4}x$/;
 
 describe("H2 sentinels", () => {

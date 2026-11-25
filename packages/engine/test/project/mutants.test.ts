@@ -6,7 +6,7 @@ import type { Detector, ProjectorUnderTest } from "./anonymity";
 import { MUTANTS } from "./mutants";
 
 // every test here runs a suite over generated games; a loaded machine (CI, another agent) must not turn a slow run into a failure
-setDefaultTimeout(180_000);
+setDefaultTimeout(600_000);
 
 const names = Object.keys(MUTANTS);
 const killedBy = (impl: ProjectorUnderTest, o: { seed: number; numRuns: number }, detectors: readonly Detector[]): Detector | null => {

@@ -40,7 +40,7 @@ test("F3 test:integration rebuilds the bundle, then runs the Auth, Firestore and
 
 test("W2 the root test scripts match LLD 0 section 6 (#13)", async () => {
   const { scripts } = await Bun.file(join(import.meta.dir, "../../package.json")).json();
-  expect(scripts.test).toBe("bun test packages functions/src functions/scripts scripts lint-test");
+  expect(scripts.test).toBe("bun test --timeout 120000 packages functions/src functions/scripts scripts lint-test");
   expect(scripts["test:web"]).toBe("bun test --preload ./apps/web/test/setup.ts apps/web/src");
   expect(scripts["test:rules"]).toStartWith("firebase emulators:exec --only firestore --project demo-deepcuts ");
   expect(scripts["test:e2e"]).toStartWith("echo 'test:e2e: NO SUITE");

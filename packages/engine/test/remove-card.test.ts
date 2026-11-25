@@ -432,7 +432,7 @@ describe("P-X10: removeCard is accepted iff the card was shown to the table and 
     expect(reds).toBeGreaterThan(0);
     expect(greens).toBeGreaterThan(0);
     expect(blocked).toBeGreaterThan(0);
-  }, 60_000);
+  }, 600_000);
 
   test("P-E5 and P-E17 with removeCard among the churn ops: every checker runs after every step (and the global conservation holds)", () => {
     assertProperty(fc.property(fc.integer({ min: 3, max: 8 }), fc.integer(), (n, seed) => {

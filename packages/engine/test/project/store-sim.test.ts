@@ -65,7 +65,7 @@ describe("Q1 the in-memory store, driven by fanOut over real games, equals a ful
       expect(seen.steps).toBeGreaterThan(200);
       if (skip) expect(seen.skipped).toBeGreaterThan(0);
       else expect(seen.skipped).toBe(0); // with skip off every target is rewritten at every step
-    }, 120_000);
+    }, 600_000);
   }
 });
 

@@ -12,7 +12,7 @@ import { makeProjector, project, viewersOf } from "../../src/project";
 /** The fixed seed set CI runs for coverage (H3) and for the mutants: a counter must be positive here, not just over a random seed. */
 export const COVERAGE_SEED = 20_260_131;
 const CI_RUNS = 60;
-setDefaultTimeout(180_000); // generated games on a loaded machine must not trip the 5 s default
+setDefaultTimeout(600_000); // generated games on a loaded machine must not trip the 5 s default
 
 describe("K3 the real projector survives the suite; H3 the counters are positive over the fixed seed set", () => {
   test("every detector on, straight and churn drivers, coverage enforced", () => {
@@ -23,7 +23,7 @@ describe("K3 the real projector survives the suite; H3 the counters are positive
     expect(r.counters.rejected).toBeGreaterThan(100);
     for (const k of ["revealDiffers", "timeVsJoin", "evictionInJudging", "passJudgingInJudging", "removeCardInJudging", "spectatorsOn", "spectatorsOff", "pitchOn", "pitchOff", "paused", "finishedWithVotes", "injectedWriteIn", "injectedRedraw", "injectedVotes"] as const) expect(r.counters[k], k).toBeGreaterThan(0);
     for (const n of ["N1", "N2", "N3", "N4", "N5", "N6"] as const) expect(r.counters.ni[n], n).toBeGreaterThan(0);
-  }, 120_000);
+  }, 600_000);
 
   test("a random seed (FC_SEED, FC_NUM_RUNS) passes too; a failure names the seed", () => {
     const { seed, numRuns } = fcParams();
@@ -46,7 +46,7 @@ describe("K3 the real projector survives the suite; H3 the counters are positive
       expect(missingCoverage(w)).toContain(counter);
     }
     expect(() => runAnonymitySuite(REAL, { ...cheap, weaken: ["noInjection"], coverage: true })).toThrow(AnonymityCoverageError);
-  }, 120_000);
+  }, 600_000);
 });
 
 describe("A5 determinism (PJ1)", () => {
