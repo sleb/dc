@@ -257,6 +257,8 @@ export function runAnonymitySuite(impl: ProjectorUnderTest, o: SuiteOptions): Su
   const digest = new Fnv();
   const maxSteps = o.maxSteps ?? 400;
   const niIds = new Set<NName>(NI.filter((n) => on.has(n)));
+  // the oracle classes this run reads: the oracle skips the rest (its result is the full result filtered, oracle.test.ts O5)
+  const oracleOn: ReadonlySet<OracleDetector> = new Set(ORACLE.filter((d) => on.has(d)));
   const params = sampleParams(o.seed, o.numRuns, o.weaken ?? []);
 
   for (const [pi, p] of params.entries()) {
@@ -315,7 +317,7 @@ export function runAnonymitySuite(impl: ProjectorUnderTest, o: SuiteOptions): Su
           counters.cells[`${ph}/${au}`] = (counters.cells[`${ph}/${au}`] ?? 0) + 1;
         }
         // 11.2 oracle
-        if (ORACLE.some((d) => on.has(d))) report(checkDoc(game, drafts, t.viewer, doc, { mode: "tokens", parse: kinds !== null || (states + views.length) % 4 === 0 }));
+        if (ORACLE.some((d) => on.has(d))) report(checkDoc(game, drafts, t.viewer, doc, { mode: "tokens", parse: kinds !== null || (states + views.length) % 4 === 0, detectors: oracleOn }));
         // PJ14
         if (on.has("size") && bytes(json) > VIEW_DOC_BUDGET_BYTES) fail("size", "(doc)", `${bytes(json)} bytes over the ${VIEW_DOC_BUDGET_BYTES} budget`);
         // PJ10: the view carries the aggregate's version
@@ -483,7 +485,7 @@ export function runAnonymitySuite(impl: ProjectorUnderTest, o: SuiteOptions): Su
           if (canon(d) !== canon(toRoundDoc(rec))) fail("roundDocs", "(doc)", `the doc of round ${d.round} is not toRoundDoc(record)`);
           if (!RoundDocSchema.safeParse(d).success) fail("strictParse", "(doc)", "a round doc that does not parse");
           for (const v of keyOrderViolations(d, RoundDocSchema)) fail("keyOrder", "(round doc)", v);
-          report(checkRoundDoc(s.before, rec, d, s.draftsBefore, "tokens"));
+          report(checkRoundDoc(s.before, rec, d, s.draftsBefore, "tokens", oracleOn));
         }
         // K-A: a write-in author's play must make no difference to the round doc (N6) and carry no marker
         if (t === "pickWinner" && !(o.weaken ?? []).includes("noInjection")) {
@@ -496,7 +498,7 @@ export function runAnonymitySuite(impl: ProjectorUnderTest, o: SuiteOptions): Su
             const plain = other === null || other === undefined ? null : resolveWith(impl, other.game, s.cmd, owner);
             if (marked !== null) {
               if (plain !== null) counters.ni.N6++;
-              for (let i = 0; i < marked.docs.length; i++) report(checkRoundDoc(v.game, marked.records[i] as RoundRecord, marked.docs[i] as RoundDoc, s.draftsBefore, "tokens"));
+              for (let i = 0; i < marked.docs.length; i++) report(checkRoundDoc(v.game, marked.records[i] as RoundRecord, marked.docs[i] as RoundDoc, s.draftsBefore, "tokens", oracleOn));
               if (plain !== null && canon(marked.docs) !== canon(plain.docs)) fail("N6", "(round doc)", "N6 on round docs: a write-in play changed the round doc");
             }
           }

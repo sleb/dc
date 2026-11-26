@@ -181,59 +181,81 @@ function ownValues(g: Game, drafts: GameDrafts, viewer: OracleViewer, doc: Recor
   if (ys !== null && ys.cardId !== mine?.cardId) out.push({ detector: "ownership", path: OWN_PLAY_PATH, detail: "yourSubmission is not the viewer's own play" });
 }
 
-/** Run every class of 11.2 over one stored doc (`parse: false` skips the strict schema parse, which the suite runs on a sample: every write through `fanOut` is parsed anyway) (`view` region plus the viewer's own `draft`). Returns every finding; empty means clean. `doc.view` null (spectators off) has nothing to find. */
-export function checkDoc(g: Game, drafts: GameDrafts, viewer: OracleViewer, doc: unknown, o: { mode?: ScanMode; parse?: boolean } = {}): Finding[] {
+/** A detector filter: `undefined` means every detector. A class whose detectors are all off is skipped, and findings of off detectors are dropped, so the result is always the full result filtered (O5). */
+type Only = ReadonlySet<Detector> | undefined;
+const gate = (only: Only) => (...ds: Detector[]): boolean => only === undefined || ds.some((d) => only.has(d));
+const keep = (out: Finding[], only: Only): Finding[] => (only === undefined ? out : out.filter((f) => only.has(f.detector)));
+
+/**
+ * Run every class of 11.2 over one stored doc (`parse: false` skips the strict schema parse, which the suite runs on a sample: every write through `fanOut` is parsed anyway) (`view` region plus the
+ * viewer's own `draft`). Returns every finding; empty means clean. `doc.view` null (spectators off) has nothing to find. `detectors` limits the run to those classes (the suite passes the ones it has on).
+ */
+export function checkDoc(g: Game, drafts: GameDrafts, viewer: OracleViewer, doc: unknown, o: { mode?: ScanMode; parse?: boolean; detectors?: ReadonlySet<Detector> } = {}): Finding[] {
   const mode = o.mode ?? "includes";
+  const on = gate(o.detectors);
   const out: Finding[] = [];
   const d = doc as Record<string, unknown>;
   const json = JSON.stringify(doc);
-  const found = mode === "tokens" ? new Set(json.match(TOKEN) ?? []) : undefined;
-  const parsed = o.parse === false ? null : ViewDocSchema.safeParse(doc);
+  const found = mode === "tokens" && on("cards", "drafts") ? new Set(json.match(TOKEN) ?? []) : undefined;
+  const parsed = o.parse === false || !on("strictParse") ? null : ViewDocSchema.safeParse(doc);
   if (parsed !== null && !parsed.success) out.push({ detector: "strictParse", path: "(doc)", detail: issues(parsed.error) });
-  const f = forbiddenFor(g, drafts, viewer);
-  scanStrings(doc, json, f.ids, "cards", "a card id outside the allowlist", out, mode, found);
-  scanStrings(doc, json, f.texts, "cards", "a card text outside the allowlist", out, mode, found);
-  scanStrings(doc, json, f.pitches, "cards", "a pitch outside the allowlist", out, mode, found);
-  scanStrings(doc, json, f.draftTexts, "drafts", "another player's draft text", out, mode, found);
-  scanStrings(doc, json, identityStrings(g, viewer), "identity", "an identity string", out);
-  const hasRoomCode = viewer.kind === "player" || (viewer.kind === "spectator" && viewer.isHost);
-  // the escaped substring, as `scanStrings` does: a name that embeds the code is a finding too, not only a complete JSON string value.
-  if (!hasRoomCode && json.includes(esc(g.roomCode))) out.push({ detector: "identity", path: where(doc, g.roomCode), detail: "the room code in a doc that has none" });
+  if (on("cards", "drafts")) {
+    const f = forbiddenFor(g, drafts, viewer);
+    scanStrings(doc, json, f.ids, "cards", "a card id outside the allowlist", out, mode, found);
+    scanStrings(doc, json, f.texts, "cards", "a card text outside the allowlist", out, mode, found);
+    scanStrings(doc, json, f.pitches, "cards", "a pitch outside the allowlist", out, mode, found);
+    scanStrings(doc, json, f.draftTexts, "drafts", "another player's draft text", out, mode, found);
+  }
+  if (on("identity")) {
+    scanStrings(doc, json, identityStrings(g, viewer), "identity", "an identity string", out);
+    const hasRoomCode = viewer.kind === "player" || (viewer.kind === "spectator" && viewer.isHost);
+    // the escaped substring, as `scanStrings` does: a name that embeds the code is a finding too, not only a complete JSON string value.
+    if (!hasRoomCode && json.includes(esc(g.roomCode))) out.push({ detector: "identity", path: where(doc, g.roomCode), detail: "the room code in a doc that has none" });
+  }
   const isPlayer = viewer.kind === "player";
-  scanKeys(doc, out, {
+  if (on("internals", "othersData", "writeInMarker")) scanKeys(doc, out, {
     podiumVotes: true, internal: INTERNAL_KEYS, own: [...OWN_KEYS, "draft", "draftSeq", "you"], markers: true, whitelist: WHITELIST_MARKER_PATHS,
     ownAt: (path, key) => (key === "draft" || key === "draftSeq" ? path === key && isPlayer : key === "you" ? path === "view.you" && isPlayer : path === `view.you.${key}` && isPlayer),
   });
-  const pending = new Set((g.round?.submissions ?? []).map((s) => s.cardId));
-  walk(doc, (n) => {
-    if (typeof n.value === "string" && pending.has(n.value) && !REVEAL_ID_PATH.test(n.path) && !OWN_VOTE_PATH.test(n.path) && n.path !== OWN_PLAY_PATH) out.push({ detector: "ownership", path: n.path, detail: "a pending card id off the two allowed paths" });
-  });
-  coOccurrence(doc, pending, new Set(g.players.map((p) => p.id)), out);
-  ownValues(g, drafts, viewer, d, out);
-  return out;
+  if (on("ownership")) {
+    const pending = new Set((g.round?.submissions ?? []).map((s) => s.cardId));
+    walk(doc, (n) => {
+      if (typeof n.value === "string" && pending.has(n.value) && !REVEAL_ID_PATH.test(n.path) && !OWN_VOTE_PATH.test(n.path) && n.path !== OWN_PLAY_PATH) out.push({ detector: "ownership", path: n.path, detail: "a pending card id off the two allowed paths" });
+    });
+    coOccurrence(doc, pending, new Set(g.players.map((p) => p.id)), out);
+  }
+  if (on("othersData", "ownership")) ownValues(g, drafts, viewer, d, out);
+  return keep(out, o.detectors);
 }
 
-/** The same classes over a RoundDoc built from `record` (PJ13): the cards it may name are the record's own; no key of a vote, a hand, a draft, a marker; no uid; no pending card. */
-export function checkRoundDoc(g: Game, record: RoundRecord, doc: RoundDoc, drafts: GameDrafts = {}, mode: ScanMode = "includes"): Finding[] {
+/** The same classes over a RoundDoc built from `record` (PJ13): the cards it may name are the record's own; no key of a vote, a hand, a draft, a marker; no uid; no pending card. `detectors` as in `checkDoc`. */
+export function checkRoundDoc(g: Game, record: RoundRecord, doc: RoundDoc, drafts: GameDrafts = {}, mode: ScanMode = "includes", detectors?: ReadonlySet<Detector>): Finding[] {
+  const on = gate(detectors);
   const out: Finding[] = [];
   const json = JSON.stringify(doc);
-  const found = mode === "tokens" ? new Set(json.match(TOKEN) ?? []) : undefined;
-  const parsed = RoundDocSchema.safeParse(doc);
-  if (!parsed.success) out.push({ detector: "strictParse", path: "(doc)", detail: issues(parsed.error) });
+  const found = mode === "tokens" && on("cards", "drafts") ? new Set(json.match(TOKEN) ?? []) : undefined;
+  if (on("strictParse")) {
+    const parsed = RoundDocSchema.safeParse(doc);
+    if (!parsed.success) out.push({ detector: "strictParse", path: "(doc)", detail: issues(parsed.error) });
+  }
   const own = new Set([record.green.id, ...record.playsDetail.map((p) => p.cardId)]);
-  const ownTexts = new Set([record.green.text, ...record.playsDetail.map((p) => p.text)]);
-  const ownPitches = new Set(record.playsDetail.flatMap((p) => (p.pitch === undefined ? [] : [p.pitch])));
-  const ids = Object.keys(g.cards).filter((id) => !own.has(id));
-  const texts = Object.entries(g.cards).filter(([id, c]) => !own.has(id) && !ownTexts.has(c.text)).map(([, c]) => c.text);
-  const pitches = (g.round?.submissions ?? []).flatMap((s) => (s.pitch === undefined || ownPitches.has(s.pitch) ? [] : [s.pitch]));
-  scanStrings(doc, json, ids, "cards", "a card id of another round or a zone", out, mode, found);
-  scanStrings(doc, json, texts, "cards", "a card text of another round or a zone", out, mode, found);
-  scanStrings(doc, json, pitches, "cards", "a pitch of an open round", out, mode, found);
-  scanStrings(doc, json, Object.values(drafts).flatMap((x) => [...x.red, ...x.green]), "drafts", "a draft text", out, mode, found);
-  scanStrings(doc, json, [g.hostId, ...g.players.map((p) => p.uid), "seat:", "#k=", "token", "secret", ...g.votes.map((v) => v.voter)], "identity", "an identity string", out);
-  scanKeys(doc, out, { internal: INTERNAL_KEYS, own: [...OWN_KEYS, "draft", "draftSeq", "you"], markers: true, whitelist: new Set(), ownAt: () => false });
-  const pending = new Set((g.round?.submissions ?? []).map((s) => s.cardId).filter((id) => !own.has(id)));
-  walk(doc, (n) => { if (typeof n.value === "string" && pending.has(n.value)) out.push({ detector: "ownership", path: n.path, detail: "a pending card id in a round doc" }); });
-  coOccurrence(doc, pending, new Set(g.players.map((p) => p.id)), out);
-  return out;
+  if (on("cards")) {
+    const ownTexts = new Set([record.green.text, ...record.playsDetail.map((p) => p.text)]);
+    const ownPitches = new Set(record.playsDetail.flatMap((p) => (p.pitch === undefined ? [] : [p.pitch])));
+    const ids = Object.keys(g.cards).filter((id) => !own.has(id));
+    const texts = Object.entries(g.cards).filter(([id, c]) => !own.has(id) && !ownTexts.has(c.text)).map(([, c]) => c.text);
+    const pitches = (g.round?.submissions ?? []).flatMap((s) => (s.pitch === undefined || ownPitches.has(s.pitch) ? [] : [s.pitch]));
+    scanStrings(doc, json, ids, "cards", "a card id of another round or a zone", out, mode, found);
+    scanStrings(doc, json, texts, "cards", "a card text of another round or a zone", out, mode, found);
+    scanStrings(doc, json, pitches, "cards", "a pitch of an open round", out, mode, found);
+  }
+  if (on("drafts")) scanStrings(doc, json, Object.values(drafts).flatMap((x) => [...x.red, ...x.green]), "drafts", "a draft text", out, mode, found);
+  if (on("identity")) scanStrings(doc, json, [g.hostId, ...g.players.map((p) => p.uid), "seat:", "#k=", "token", "secret", ...g.votes.map((v) => v.voter)], "identity", "an identity string", out);
+  if (on("internals", "othersData", "writeInMarker")) scanKeys(doc, out, { internal: INTERNAL_KEYS, own: [...OWN_KEYS, "draft", "draftSeq", "you"], markers: true, whitelist: new Set(), ownAt: () => false });
+  if (on("ownership")) {
+    const pending = new Set((g.round?.submissions ?? []).map((s) => s.cardId).filter((id) => !own.has(id)));
+    walk(doc, (n) => { if (typeof n.value === "string" && pending.has(n.value)) out.push({ detector: "ownership", path: n.path, detail: "a pending card id in a round doc" }); });
+    coOccurrence(doc, pending, new Set(g.players.map((p) => p.id)), out);
+  }
+  return keep(out, detectors);
 }
