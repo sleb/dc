@@ -1,11 +1,37 @@
 {
-  "indexes": [],
+  "indexes": [
+    { "collectionGroup": "games", "queryScope": "COLLECTION",
+      "fields": [ { "fieldPath": "hostId", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" } ] },
+    { "collectionGroup": "outbox", "queryScope": "COLLECTION_GROUP",
+      "fields": [ { "fieldPath": "processedAt", "order": "ASCENDING" }, { "fieldPath": "at", "order": "ASCENDING" } ] },
+    { "collectionGroup": "outbox", "queryScope": "COLLECTION_GROUP",
+      "fields": [ { "fieldPath": "topic", "order": "ASCENDING" }, { "fieldPath": "notifDoneAt", "order": "ASCENDING" }, { "fieldPath": "at", "order": "ASCENDING" } ] },
+    { "collectionGroup": "deletions", "queryScope": "COLLECTION",
+      "fields": [ { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "heartbeatAt", "order": "ASCENDING" } ] }
+  ],
   "fieldOverrides": [
-    { "collectionGroup": "idem", "fieldPath": "expiresAt", "ttl": true, "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION" }] },
-    { "collectionGroup": "outbox", "fieldPath": "expiresAt", "ttl": true, "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION" }] },
-    { "collectionGroup": "notifLog", "fieldPath": "expiresAt", "ttl": true, "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION" }] },
-    { "collectionGroup": "rateLimits", "fieldPath": "expiresAt", "ttl": true, "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION" }] },
-    { "collectionGroup": "deletions", "fieldPath": "expiresAt", "ttl": true, "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION" }] },
-    { "collectionGroup": "joinIdem", "fieldPath": "expiresAt", "ttl": true, "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION" }] }
+    { "collectionGroup": "games", "fieldPath": "cards",    "indexes": [] },
+    { "collectionGroup": "games", "fieldPath": "history",  "indexes": [] },
+    { "collectionGroup": "games", "fieldPath": "votes",    "indexes": [] },
+    { "collectionGroup": "games", "fieldPath": "players",  "indexes": [] },
+    { "collectionGroup": "games", "fieldPath": "pools",    "indexes": [] },
+    { "collectionGroup": "games", "fieldPath": "round",    "indexes": [] },
+    { "collectionGroup": "games", "fieldPath": "settings", "indexes": [] },
+    { "collectionGroup": "games", "fieldPath": "waitingOn","indexes": [] },
+    { "collectionGroup": "views", "fieldPath": "view",     "indexes": [] },
+    { "collectionGroup": "views", "fieldPath": "draft",    "indexes": [] },
+    { "collectionGroup": "rounds", "fieldPath": "plays",   "indexes": [] },
+    { "collectionGroup": "events", "fieldPath": "events",  "indexes": [] },
+    { "collectionGroup": "outbox", "fieldPath": "event",   "indexes": [] },
+    { "collectionGroup": "outbox", "fieldPath": "roster",  "indexes": [] },
+    { "collectionGroup": "drafts", "fieldPath": "red",     "indexes": [] },
+    { "collectionGroup": "drafts", "fieldPath": "green",   "indexes": [] },
+    { "collectionGroup": "idem",   "fieldPath": "meta",    "indexes": [] },
+    { "collectionGroup": "idem",   "fieldPath": "expiresAt", "ttl": true, "indexes": [ { "order": "ASCENDING", "queryScope": "COLLECTION" } ] },
+    { "collectionGroup": "outbox", "fieldPath": "expiresAt", "ttl": true, "indexes": [ { "order": "ASCENDING", "queryScope": "COLLECTION" } ] },
+    { "collectionGroup": "notifLog",   "fieldPath": "expiresAt", "ttl": true, "indexes": [ { "order": "ASCENDING", "queryScope": "COLLECTION" } ] },
+    { "collectionGroup": "rateLimits", "fieldPath": "expiresAt", "ttl": true, "indexes": [ { "order": "ASCENDING", "queryScope": "COLLECTION" } ] },
+    { "collectionGroup": "deletions",  "fieldPath": "expiresAt", "ttl": true, "indexes": [ { "order": "ASCENDING", "queryScope": "COLLECTION" } ] },
+    { "collectionGroup": "joinIdem",   "fieldPath": "expiresAt", "ttl": true, "indexes": [ { "order": "ASCENDING", "queryScope": "COLLECTION" } ] }
   ]
 }
