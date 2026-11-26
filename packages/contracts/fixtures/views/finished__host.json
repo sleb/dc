@@ -1,0 +1,139 @@
+{
+  "schema": 1,
+  "viewsRev": 1,
+  "gameId": "gameaaaaaaaaaaaaaaaa",
+  "enabled": true,
+  "version": 9,
+  "generatedAt": 1700000000000,
+  "view": {
+    "audience": "player",
+    "kind": "live",
+    "gameId": "gameaaaaaaaaaaaaaaaa",
+    "version": 9,
+    "phase": "FINISHED",
+    "paused": false,
+    "settings": {
+      "targetOverride": null,
+      "profanity": "on",
+      "variants": {
+        "pitch": false,
+        "writeIn": false,
+        "redraw": false,
+        "peoplesChoice": true
+      },
+      "spectators": {
+        "enabled": true,
+        "vote": false
+      }
+    },
+    "target": 3,
+    "targetFrozen": true,
+    "writeCounts": null,
+    "players": [
+      {
+        "id": "p_aaaaaaaa",
+        "name": "Name0",
+        "joinOrder": 0,
+        "status": "active",
+        "isHost": true,
+        "score": 0,
+        "cardsLeft": null
+      },
+      {
+        "id": "p_aaaaaaab",
+        "name": "Name1",
+        "joinOrder": 1,
+        "status": "active",
+        "isHost": false,
+        "score": 0,
+        "cardsLeft": null
+      },
+      {
+        "id": "p_aaaaaaac",
+        "name": "Name2",
+        "joinOrder": 2,
+        "status": "active",
+        "isHost": false,
+        "score": 3,
+        "cardsLeft": null
+      },
+      {
+        "id": "p_aaaaaaad",
+        "name": "Name3",
+        "joinOrder": 3,
+        "status": "active",
+        "isHost": false,
+        "score": 1,
+        "cardsLeft": null
+      }
+    ],
+    "waitingOn": [],
+    "round": null,
+    "resolved": 3,
+    "winnerId": "p_aaaaaaac",
+    "awards": {
+      "peoplesChoice": [
+        "p_aaaaaaac"
+      ],
+      "podium": [
+        {
+          "rank": 1,
+          "round": 1,
+          "cardId": "c_000000005q",
+          "playerId": "p_aaaaaaac",
+          "votes": 2
+        },
+        {
+          "rank": 2,
+          "round": 2,
+          "cardId": "c_000000005r",
+          "playerId": "p_aaaaaaac",
+          "votes": 2
+        },
+        {
+          "rank": 3,
+          "round": 3,
+          "cardId": "c_0000000001",
+          "playerId": "p_aaaaaaaa",
+          "votes": 1
+        }
+      ]
+    },
+    "you": {
+      "playerId": "p_aaaaaaaa",
+      "status": "active",
+      "isHost": true,
+      "isJudge": false,
+      "turn": "over",
+      "score": 0,
+      "roomCode": "BCDF",
+      "hand": [],
+      "writeTarget": null,
+      "cardsLeft": null,
+      "powerUsage": {
+        "writeIn": false,
+        "redraw": false
+      },
+      "yourSubmission": null,
+      "myVotes": {
+        "1": "c_000000005q",
+        "2": "c_000000005r"
+      }
+    },
+    "host": {
+      "roomCode": "BCDF",
+      "playability": {
+        "n": 4,
+        "target": 3,
+        "totals": {
+          "red": 48,
+          "green": 12
+        },
+        "rMin": 36,
+        "gMin": 12,
+        "meets": true
+      },
+      "writeCountsOverride": null
+    }
+  }
+}

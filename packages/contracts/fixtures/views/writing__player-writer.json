@@ -1,0 +1,116 @@
+{
+  "schema": 1,
+  "viewsRev": 1,
+  "gameId": "gameaaaaaaaaaaaaaaaa",
+  "enabled": true,
+  "version": 12,
+  "generatedAt": 1700000000000,
+  "view": {
+    "audience": "player",
+    "kind": "live",
+    "gameId": "gameaaaaaaaaaaaaaaaa",
+    "version": 12,
+    "phase": "WRITING",
+    "paused": false,
+    "settings": {
+      "targetOverride": null,
+      "profanity": "on",
+      "variants": {
+        "pitch": false,
+        "writeIn": false,
+        "redraw": false,
+        "peoplesChoice": false
+      },
+      "spectators": {
+        "enabled": true,
+        "vote": false
+      }
+    },
+    "target": 3,
+    "targetFrozen": true,
+    "writeCounts": {
+      "red": 10,
+      "green": 3
+    },
+    "players": [
+      {
+        "id": "p_aaaaaaaa",
+        "name": "Name0",
+        "joinOrder": 0,
+        "status": "writing",
+        "isHost": true,
+        "score": 0,
+        "cardsLeft": {
+          "red": 6,
+          "green": 2
+        }
+      },
+      {
+        "id": "p_aaaaaaab",
+        "name": "Name1",
+        "joinOrder": 1,
+        "status": "ready",
+        "isHost": false,
+        "score": 0,
+        "cardsLeft": null
+      },
+      {
+        "id": "p_aaaaaaac",
+        "name": "Name2",
+        "joinOrder": 2,
+        "status": "writing",
+        "isHost": false,
+        "score": 0,
+        "cardsLeft": {
+          "red": 10,
+          "green": 3
+        }
+      },
+      {
+        "id": "p_aaaaaaad",
+        "name": "Name3",
+        "joinOrder": 3,
+        "status": "writing",
+        "isHost": false,
+        "score": 0,
+        "cardsLeft": {
+          "red": 0,
+          "green": 1
+        }
+      }
+    ],
+    "waitingOn": [
+      "p_aaaaaaaa",
+      "p_aaaaaaac",
+      "p_aaaaaaad"
+    ],
+    "round": null,
+    "resolved": 0,
+    "winnerId": null,
+    "awards": null,
+    "you": {
+      "playerId": "p_aaaaaaac",
+      "status": "writing",
+      "isHost": false,
+      "isJudge": false,
+      "turn": "write",
+      "score": 0,
+      "roomCode": "BCDF",
+      "hand": [],
+      "writeTarget": {
+        "red": 10,
+        "green": 3
+      },
+      "cardsLeft": {
+        "red": 10,
+        "green": 3
+      },
+      "powerUsage": {
+        "writeIn": false,
+        "redraw": false
+      },
+      "yourSubmission": null,
+      "myVotes": {}
+    }
+  }
+}

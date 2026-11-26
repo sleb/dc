@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "viewsRev": 1,
+  "gameId": "gameaaaaaaaaaaaaaaaa",
+  "enabled": true,
+  "version": 9,
+  "generatedAt": 1700000000000,
+  "view": {
+    "kind": "departed",
+    "audience": "departed",
+    "gameId": "gameaaaaaaaaaaaaaaaa",
+    "version": 9,
+    "reason": "removed"
+  }
+}
