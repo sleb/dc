@@ -82,7 +82,7 @@ games/{gameId}/outbox/{rowId}       // transactional outbox, id `v{version}_{i}`
 games/{gameId}/idem/{hash}          // idempotency ledger (E4)
 games/{gameId}/seats/{playerId}     // rejoin-secret hash, epoch, notBefore, revokedAt, firstSignInAt (LLD 4). Denied to clients.
 games/{gameId}/notifLog/{rowId}_{uid}   // notification dedupe record (N1). Denied to clients.
-roomCodes/{code}                    // -> gameId. Denied to clients.
+roomCodes/{code}                    // -> gameId; released at FINISHED/ENDED/delete. Denied to clients.
 joinIdem/{keyHash}                  // join replay index, keyHash = sha256(idempotencyKey) -> {gameId, playerId, uid, createdAt, expiresAt}; lets a same-key retry recover a seat after the code expired (LLD 4). Denied to clients.
 deletions/{gameId}                  // deleteGame cascade job. Denied to clients.
 hosts/{hostUid}                     // host profile
@@ -92,7 +92,9 @@ pushSubs/{uid}_{gameId}             // FCM tokens for a seat: a `devices` map of
 rateLimits/{kind}_{key}             // abuse counters. Denied to clients.
 ```
 
-**TTL** (Firestore TTL policies on field `expiresAt`, exactly six collection groups; LLD 3 section 2.1): `idem` (both `games/*/idem`, 7 days, and `hosts/*/idem`), `outbox` (14 days), `notifLog` (30 days), `rateLimits` (two windows), `deletions` (7 days after `done`) and `joinIdem` (7 days). Nothing that defines a game expires (S5). Whether the pinned firebase-tools supports `ttl` in `fieldOverrides` is unverified; the fallback is a `gcloud firestore fields ttls update` per group in the deploy step (LLD 0).
+**TTL** (Firestore TTL policies on field `expiresAt`, exactly six collection groups; LLD 3 section 2.1): `idem` (both `games/*/idem`, 7 days, and `hosts/*/idem`), `outbox` (14 days), `notifLog` (30 days), `rateLimits` (two windows), `deletions` (7 days after `done`) and `joinIdem` (7 days). Nothing that defines a game expires (S5). The pinned firebase-tools applies them from `fieldOverrides` in `firestore.indexes.json` (proven in #15). `roomCodes` does not expire: a code is released when its game reaches FINISHED or ENDED, or is deleted (LLD 3 sections 2.1 and 6.4).
+
+The list above is the LLD 3 section 2.1 collection map, path for path (`scripts/rules-coverage.test.ts` fails if they differ, and if the rules denial matrix misses one; #32).
 
 **Why this shape**
 - *Rounds are world-readable to any signed-in user who knows the game id.* Only resolved rounds are ever written there, and players and spectators see the same resolved history (V5, V7), so correctness holds by construction. Unguessable game ids give the same "anyone with the link" access the gameplay doc specifies for spectators and finished games (Q10).
