@@ -16,7 +16,7 @@ bun install --frozen-lockfile   # exact versions from bun.lock
 bun run lint                    # ESLint, warnings are errors
 bun run typecheck               # tsc for every package, every test config and lint-test
 bun run test                    # engine and contracts, functions unit and script tests, and the lint-policy tests; files run in parallel, one worker per core, slowest first
-bun run test:timings            # the same run, rewriting test-timings.json (the order of that run); needed when a test file is added, removed or renamed
+bun run test:timings            # the same run, rewriting test-timings.json (the order of that run); needed when a test file is added, removed or renamed (that run still reports the policy test red, since it reads the old file; the next run is green)
 bun run test:lint               # just the policy tests (they prove each lint and tsconfig rule fires); also part of `test`
 bun run test:web                # web tests under happy-dom, in a separate process
 bun run fixtures:views          # re-export the 43 committed view fixtures (LLD 7 section 11.1); CI runs it before git diff --exit-code
