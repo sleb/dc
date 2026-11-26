@@ -16,6 +16,11 @@ const CLOCK_AND_ENTROPY = [
   RANDOM,
   { selector: "CallExpression[callee.object.name='performance']", message: "No clock in engine." },
 ];
+// Base restrictions for all of packages/engine/src (the Projector blocks below re-spread them).
+const ENGINE_IMPORT_PATTERNS = [{ group: [...FIREBASE, ...NODE_IO, ...BUN, "@dc/functions", "@dc/web"] }];
+const ENGINE_GLOBALS = ["process", "Buffer", "fetch", "setTimeout", "setInterval", "performance", "crypto", "Bun", "window", "document"];
+const SELECTORS = ["**/selectors", "**/selectors.*", "**/index", "**/index.*"];
+const NO_OBJECT_SPREAD = { selector: "ObjectExpression > SpreadElement[argument.name!='base']", message: "Build views field by field; only the shared `base` may be spread (LLD 2 section 2)." };
 // Base restrictions for all of functions/src. A later flat-config block that sets the same rule key
 // replaces the earlier options instead of merging them, so every narrower functions/src block below
 // spreads these in rather than restating (or dropping) them.
@@ -47,9 +52,20 @@ export default [
   },
 
   { files: ["packages/engine/src/**/*.ts"], ignores: TESTS, rules: {
-      "no-restricted-imports": ["error", { patterns: [...FIREBASE, ...NODE_IO, ...BUN, "@dc/functions", "@dc/web"] }],
-      "no-restricted-globals": ["error", "process", "Buffer", "fetch", "setTimeout", "setInterval", "performance", "crypto", "Bun", "window", "document"],
+      "no-restricted-imports": ["error", { patterns: ENGINE_IMPORT_PATTERNS }],
+      "no-restricted-globals": ["error", ...ENGINE_GLOBALS],
       "no-restricted-syntax": ["error", ...CLOCK_AND_ENTROPY] } },
+  // LLD 2 section 2, PJ4, PJ5 (#28): the Projector builds views field by field and reads owner-keyed data in one place. These blocks set the same three rule keys as the engine block above
+  // and so replace it for these files: every engine rule is re-spread. `handOf` and `ownSubmission` are importable only by you.ts; `submittedBy`, `submissionOwner` and `exportPools` by no file in project/ (PJ4: never called).
+  // The spread rule is syntactic, not type-aware: the only object spread allowed is of the shared `base`, built once from named fields.
+  { files: ["packages/engine/src/project/**/*.ts"], ignores: TESTS, rules: {
+      "no-restricted-imports": ["error", { patterns: [...ENGINE_IMPORT_PATTERNS, { group: SELECTORS, importNames: ["handOf", "ownSubmission", "submittedBy", "submissionOwner", "exportPools"], message: "Hand and own-submission reads belong to project/you.ts only (LLD 2 section 2); submittedBy, submissionOwner and exportPools are never used by the Projector (PJ4, PJ6)." }] }],
+      "no-restricted-globals": ["error", ...ENGINE_GLOBALS],
+      "no-restricted-syntax": ["error", ...CLOCK_AND_ENTROPY, NO_OBJECT_SPREAD] } },
+  { files: ["packages/engine/src/project/you.ts"], ignores: TESTS, rules: {
+      "no-restricted-imports": ["error", { patterns: [...ENGINE_IMPORT_PATTERNS, { group: SELECTORS, importNames: ["submittedBy", "submissionOwner", "exportPools"], message: "The Projector never calls submittedBy (time order, PJ6), submissionOwner or exportPools (PJ4)." }] }],
+      "no-restricted-globals": ["error", ...ENGINE_GLOBALS],
+      "no-restricted-syntax": ["error", ...CLOCK_AND_ENTROPY, NO_OBJECT_SPREAD] } },
   { files: ["packages/contracts/src/**/*.ts"], ignores: TESTS, rules: {
       "no-restricted-imports": ["error", { patterns: [...FIREBASE, ...NODE_IO, ...BUN, "@dc/*"] }] } },
   { files: ["apps/web/src/**/*.{ts,tsx}"], ignores: TESTS, rules: {

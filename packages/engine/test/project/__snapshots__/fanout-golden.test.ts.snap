@@ -1,0 +1,651 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`G1 envelope goldens player (a non-host in SUBMITTING) 1`] = `
+{
+  "doc": {
+    "enabled": true,
+    "gameId": "gameaaaaaaaaaaaaaaaa",
+    "generatedAt": 1700000000000,
+    "schema": 1,
+    "version": 9,
+    "view": {
+      "audience": "player",
+      "awards": null,
+      "gameId": "gameaaaaaaaaaaaaaaaa",
+      "kind": "live",
+      "paused": false,
+      "phase": "PLAYING",
+      "players": [
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaaa",
+          "isHost": true,
+          "joinOrder": 0,
+          "name": "Name0",
+          "score": 0,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaab",
+          "isHost": false,
+          "joinOrder": 1,
+          "name": "Name1",
+          "score": 0,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaac",
+          "isHost": false,
+          "joinOrder": 2,
+          "name": "Name2",
+          "score": 1,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaad",
+          "isHost": false,
+          "joinOrder": 3,
+          "name": "Name3",
+          "score": 0,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaae",
+          "isHost": false,
+          "joinOrder": 4,
+          "name": "Name4",
+          "score": 0,
+          "status": "active",
+        },
+      ],
+      "resolved": 1,
+      "round": {
+        "expected": [
+          "p_aaaaaaaa",
+          "p_aaaaaaac",
+          "p_aaaaaaad",
+          "p_aaaaaaae",
+        ],
+        "green": {
+          "id": "c_00000000p0",
+          "text": "the green card",
+        },
+        "judgeId": "p_aaaaaaab",
+        "number": 2,
+        "phase": "SUBMITTING",
+        "reveal": null,
+        "submittedBy": [
+          "p_aaaaaaac",
+          "p_aaaaaaad",
+        ],
+      },
+      "settings": {
+        "profanity": "on",
+        "spectators": {
+          "enabled": true,
+          "vote": false,
+        },
+        "targetOverride": null,
+        "variants": {
+          "peoplesChoice": false,
+          "pitch": true,
+          "redraw": false,
+          "writeIn": false,
+        },
+      },
+      "target": 8,
+      "targetFrozen": true,
+      "version": 9,
+      "waitingOn": [
+        "p_aaaaaaaa",
+        "p_aaaaaaae",
+      ],
+      "winnerId": null,
+      "writeCounts": null,
+      "you": {
+        "cardsLeft": null,
+        "hand": [
+          {
+            "id": "c_000000005k",
+            "text": "card c_000000005k",
+          },
+          {
+            "id": "c_000000005l",
+            "text": "card c_000000005l",
+          },
+          {
+            "id": "c_000000005m",
+            "text": "card c_000000005m",
+          },
+          {
+            "id": "c_000000005n",
+            "text": "card c_000000005n",
+          },
+          {
+            "id": "c_000000005o",
+            "text": "card c_000000005o",
+          },
+          {
+            "id": "c_000000005p",
+            "text": "card c_000000005p",
+          },
+        ],
+        "isHost": false,
+        "isJudge": false,
+        "myVotes": {},
+        "playerId": "p_aaaaaaac",
+        "powerUsage": {
+          "redraw": false,
+          "writeIn": false,
+        },
+        "roomCode": "BCDF",
+        "score": 1,
+        "status": "active",
+        "turn": "submitted",
+        "writeTarget": null,
+        "yourSubmission": {
+          "cardId": "c_000000005q",
+          "pitch": "PITCH-P2",
+          "text": "card c_000000005q",
+        },
+      },
+    },
+    "viewsRev": 1,
+  },
+  "docId": "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaac",
+}
+`;
+
+exports[`G1 envelope goldens unseated host 1`] = `
+{
+  "doc": {
+    "enabled": true,
+    "gameId": "gameaaaaaaaaaaaaaaaa",
+    "generatedAt": 1700000000000,
+    "schema": 1,
+    "version": 9,
+    "view": {
+      "audience": "host",
+      "awards": null,
+      "gameId": "gameaaaaaaaaaaaaaaaa",
+      "host": {
+        "playability": {
+          "gMin": 40,
+          "meets": true,
+          "n": 5,
+          "rMin": 45,
+          "target": 8,
+          "totals": {
+            "green": 48,
+            "red": 62,
+          },
+        },
+        "roomCode": "BCDF",
+        "writeCountsOverride": null,
+      },
+      "kind": "live",
+      "paused": false,
+      "phase": "PLAYING",
+      "players": [
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaaa",
+          "isHost": true,
+          "joinOrder": 0,
+          "name": "Name0",
+          "score": 0,
+          "status": "left",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaab",
+          "isHost": false,
+          "joinOrder": 1,
+          "name": "Name1",
+          "score": 0,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaac",
+          "isHost": false,
+          "joinOrder": 2,
+          "name": "Name2",
+          "score": 0,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaad",
+          "isHost": false,
+          "joinOrder": 3,
+          "name": "Name3",
+          "score": 0,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaae",
+          "isHost": false,
+          "joinOrder": 4,
+          "name": "Name4",
+          "score": 0,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaaf",
+          "isHost": false,
+          "joinOrder": 5,
+          "name": "Name5",
+          "score": 0,
+          "status": "active",
+        },
+      ],
+      "resolved": 0,
+      "round": {
+        "expected": [
+          "p_aaaaaaac",
+          "p_aaaaaaad",
+          "p_aaaaaaae",
+          "p_aaaaaaaf",
+        ],
+        "green": {
+          "id": "c_00000000p0",
+          "text": "the green card",
+        },
+        "judgeId": "p_aaaaaaab",
+        "number": 1,
+        "phase": "JUDGING",
+        "reveal": [
+          {
+            "pitch": "PITCH-P3",
+            "submissionId": "c_000000008i",
+            "text": "card c_000000008i",
+          },
+          {
+            "pitch": null,
+            "submissionId": "c_000000005q",
+            "text": "card c_000000005q",
+          },
+          {
+            "pitch": null,
+            "submissionId": "c_00000000ba",
+            "text": "card c_00000000ba",
+          },
+        ],
+        "submittedBy": [
+          "p_aaaaaaac",
+          "p_aaaaaaad",
+          "p_aaaaaaae",
+        ],
+      },
+      "settings": {
+        "profanity": "on",
+        "spectators": {
+          "enabled": true,
+          "vote": false,
+        },
+        "targetOverride": null,
+        "variants": {
+          "peoplesChoice": false,
+          "pitch": true,
+          "redraw": false,
+          "writeIn": false,
+        },
+      },
+      "target": 8,
+      "targetFrozen": true,
+      "version": 9,
+      "waitingOn": [
+        "p_aaaaaaab",
+      ],
+      "winnerId": null,
+      "writeCounts": null,
+    },
+    "viewsRev": 1,
+  },
+  "docId": "host-uid",
+}
+`;
+
+exports[`G1 envelope goldens enabled spectator 1`] = `
+{
+  "doc": {
+    "enabled": true,
+    "gameId": "gameaaaaaaaaaaaaaaaa",
+    "generatedAt": 1700000000000,
+    "schema": 1,
+    "version": 9,
+    "view": {
+      "audience": "spectator",
+      "awards": null,
+      "gameId": "gameaaaaaaaaaaaaaaaa",
+      "kind": "live",
+      "paused": false,
+      "phase": "PLAYING",
+      "players": [
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaaa",
+          "isHost": true,
+          "joinOrder": 0,
+          "name": "Name0",
+          "score": 0,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaab",
+          "isHost": false,
+          "joinOrder": 1,
+          "name": "Name1",
+          "score": 0,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaac",
+          "isHost": false,
+          "joinOrder": 2,
+          "name": "Name2",
+          "score": 0,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaad",
+          "isHost": false,
+          "joinOrder": 3,
+          "name": "Name3",
+          "score": 0,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaae",
+          "isHost": false,
+          "joinOrder": 4,
+          "name": "Name4",
+          "score": 0,
+          "status": "active",
+        },
+        {
+          "cardsLeft": null,
+          "id": "p_aaaaaaaf",
+          "isHost": false,
+          "joinOrder": 5,
+          "name": "Name5",
+          "score": 0,
+          "status": "active",
+        },
+      ],
+      "resolved": 0,
+      "round": {
+        "expected": [
+          "p_aaaaaaaa",
+          "p_aaaaaaac",
+          "p_aaaaaaad",
+          "p_aaaaaaae",
+          "p_aaaaaaaf",
+        ],
+        "green": {
+          "id": "c_00000000p0",
+          "text": "the green card",
+        },
+        "judgeId": "p_aaaaaaab",
+        "number": 1,
+        "phase": "JUDGING",
+        "reveal": [
+          {
+            "pitch": "PITCH-P3",
+            "submissionId": "c_000000008i",
+            "text": "card c_000000008i",
+          },
+          {
+            "pitch": null,
+            "submissionId": "c_000000005q",
+            "text": "card c_000000005q",
+          },
+          {
+            "pitch": null,
+            "submissionId": "c_00000000ba",
+            "text": "card c_00000000ba",
+          },
+        ],
+        "submittedBy": [
+          "p_aaaaaaac",
+          "p_aaaaaaad",
+          "p_aaaaaaae",
+        ],
+      },
+      "settings": {
+        "profanity": "on",
+        "spectators": {
+          "enabled": true,
+          "vote": false,
+        },
+        "targetOverride": null,
+        "variants": {
+          "peoplesChoice": false,
+          "pitch": true,
+          "redraw": false,
+          "writeIn": false,
+        },
+      },
+      "target": 8,
+      "targetFrozen": true,
+      "version": 9,
+      "waitingOn": [
+        "p_aaaaaaab",
+      ],
+      "winnerId": null,
+      "writeCounts": null,
+    },
+    "viewsRev": 1,
+  },
+  "docId": "spectator",
+}
+`;
+
+exports[`G1 envelope goldens disabled spectator 1`] = `
+{
+  "doc": {
+    "enabled": false,
+    "gameId": "gameaaaaaaaaaaaaaaaa",
+    "generatedAt": 1700000000000,
+    "schema": 1,
+    "version": 4,
+    "view": null,
+    "viewsRev": 1,
+  },
+  "docId": "spectator",
+}
+`;
+
+exports[`G1 envelope goldens departed (left) 1`] = `
+{
+  "doc": {
+    "enabled": true,
+    "gameId": "gameaaaaaaaaaaaaaaaa",
+    "generatedAt": 1700000000000,
+    "schema": 1,
+    "version": 9,
+    "view": {
+      "audience": "departed",
+      "gameId": "gameaaaaaaaaaaaaaaaa",
+      "kind": "departed",
+      "reason": "left",
+      "version": 9,
+    },
+    "viewsRev": 1,
+  },
+  "docId": "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaad",
+}
+`;
+
+exports[`G1 envelope goldens gone tombstone with clearDraft 1`] = `
+{
+  "clearDraft": true,
+  "doc": {
+    "enabled": true,
+    "gameId": "gameaaaaaaaaaaaaaaaa",
+    "generatedAt": 1700000000000,
+    "schema": 1,
+    "version": 5,
+    "view": {
+      "audience": "departed",
+      "gameId": "gameaaaaaaaaaaaaaaaa",
+      "kind": "departed",
+      "reason": "gone",
+      "version": 5,
+    },
+    "viewsRev": 1,
+  },
+  "docId": "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaac",
+}
+`;
+
+exports[`G1 the draft region with a draft and with none 1`] = `
+[
+  {
+    "draft": {
+      "green": [
+        "G1",
+      ],
+      "red": [
+        "R1",
+        "R2",
+      ],
+    },
+    "draftSeq": 4,
+  },
+  {
+    "draft": null,
+    "draftSeq": 0,
+  },
+]
+`;
+
+exports[`G1 the size table: serialized bytes of every doc of the 10-player maximal fixtures by docId order 1`] = `
+{
+  "finished": [
+    [
+      "host-uid",
+      "player",
+      35057,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaab",
+      "player",
+      3013,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaac",
+      "player",
+      3013,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaad",
+      "player",
+      3013,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaae",
+      "player",
+      3013,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaaf",
+      "player",
+      3013,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaag",
+      "player",
+      3013,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaah",
+      "player",
+      3013,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaai",
+      "player",
+      3013,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaaj",
+      "player",
+      3013,
+    ],
+    [
+      "spectator",
+      "spectator",
+      2766,
+    ],
+  ],
+  "judging": [
+    [
+      "host-uid",
+      "player",
+      14080,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaab",
+      "player",
+      13388,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaac",
+      "player",
+      13928,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaad",
+      "player",
+      13928,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaae",
+      "player",
+      13928,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaaf",
+      "player",
+      13928,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaag",
+      "player",
+      13928,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaah",
+      "player",
+      13928,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaai",
+      "player",
+      13928,
+    ],
+    [
+      "seat:gameaaaaaaaaaaaaaaaa:p_aaaaaaaj",
+      "player",
+      13928,
+    ],
+    [
+      "spectator",
+      "spectator",
+      10930,
+    ],
+  ],
+}
+`;

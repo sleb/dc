@@ -1,0 +1,51 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`T1 toRoundDoc maps field by field golden 1`] = `
+{
+  "noPlays": {
+    "absent": [],
+    "green": {
+      "id": "c_00000000m9",
+      "text": "GREEN TEXT",
+    },
+    "judgeId": "p_aaaaaaab",
+    "plays": [],
+    "redacted": false,
+    "resolvedAt": 1700000000000,
+    "round": 1,
+    "schema": 1,
+    "winnerCardId": "c_000000005q",
+    "winnerId": "p_aaaaaaac",
+  },
+  "withPitch": {
+    "absent": [
+      "p_aaaaaaae",
+    ],
+    "green": {
+      "id": "c_00000000mb",
+      "text": "GREEN TEXT",
+    },
+    "judgeId": "p_aaaaaaab",
+    "plays": [
+      {
+        "cardId": "c_000000008i",
+        "pitch": "PITCH THREE",
+        "playerId": "p_aaaaaaad",
+        "text": "THREE",
+      },
+      {
+        "cardId": "c_000000005q",
+        "pitch": null,
+        "playerId": "p_aaaaaaac",
+        "text": "TWO",
+      },
+    ],
+    "redacted": false,
+    "resolvedAt": 1700000000000,
+    "round": 3,
+    "schema": 1,
+    "winnerCardId": "c_000000005q",
+    "winnerId": "p_aaaaaaac",
+  },
+}
+`;

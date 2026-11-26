@@ -6,7 +6,11 @@ import { addCard, cid, counterMintId, ctxFor, deepFreeze, makeGame, makePlayer, 
 import { JUNK_TYPES, junkCommands, legalCommands, missingEnumerators } from "./legal";
 import { fixtureEnumerators, fixtureRegistry } from "./fixtures";
 import { makeDecide } from "../../src/decide";
-import { buildGame, zeroTime } from "./scenario";
+import { buildGame, membershipDriver, progressDriver, runScenario, zeroTime } from "./scenario";
+import type { AfterStepInfo } from "./scenario";
+import { decide } from "../../src/decide";
+import { enumerators } from "./legal";
+import { created } from "../project/scenarios";
 
 // The harness is test code and is specified here; it imports engine types, the factories and the fixture specs, so it needs the engine modules to load.
 describe("harness: factories", () => {
@@ -142,5 +146,49 @@ describe("harness: legalCommands, junkCommands, coverage", () => {
     const z = zeroTime({ ...g, createdAt: 5, waitingSince: 6, reminderDueAt: 7, round: g.round === null ? null : { ...g.round, openedAt: 8 } });
     expect([z.createdAt, z.waitingSince, z.reminderDueAt, z.round?.openedAt]).toEqual([0, 0, 0, 0]);
     expect(zeroTime(makeGame()).waitingSince).toBeNull();
+  });
+});
+
+// #30 H1: runScenario's afterStep hook (LLD 2 11.1).
+describe("H1 afterStep", () => {
+  const picks = Array.from({ length: 150 }, (_, i) => ({ kind: i % 5 === 4 ? ("junk" as const) : ("legal" as const), pick: 0 }));
+  // picks without a driver: legal and junk commands drawn from the pools, so some steps are rejected
+  const run = (afterStep?: (i: AfterStepInfo) => void) => runScenario(decide, created(true), picks.map((p, i) => ({ ...p, pick: i * 7 })), { seed: 11, table: enumerators, ...(afterStep === undefined ? {} : { afterStep }) });
+
+  test("called once per step, accepted and rejected, with the state before and after; the trace is identical with and without it", () => {
+    const seen: AfterStepInfo[] = [];
+    const without = run();
+    const withHook = run((i) => seen.push(i));
+    expect(JSON.stringify(withHook)).toBe(JSON.stringify(without));
+    expect(seen.length).toBe(withHook.results.length);
+    expect(seen.length).toBeGreaterThan(20);
+    expect(seen.some((i) => !i.accepted)).toBe(true);
+    expect(seen.some((i) => i.accepted)).toBe(true);
+    seen.forEach((info, k) => {
+      expect(info.step.index).toBeGreaterThanOrEqual(k);
+      expect(info.before).toBe(withHook.states[k] as never);
+      expect(info.after).toBe(withHook.states[k + 1] as never);
+      expect(info.accepted).toBe(withHook.results[k]?.ok === true);
+      if (!info.accepted) expect(info.after).toBe(info.before);
+    });
+  });
+
+  test("drafts is the draft map after the step, draftsBefore the map before it", () => {
+    const seen: AfterStepInfo[] = [];
+    runScenario(decide, created(true), picks, { seed: 11, table: enumerators, drive: membershipDriver("11", 4, enumerators), afterStep: (i) => seen.push(i) });
+    const saved = seen.filter((i) => i.accepted && (i.step.cmd as { type: string }).type === "saveDraft");
+    expect(saved.length).toBeGreaterThan(0);
+    for (const i of saved) {
+      const uid = i.step.actor?.kind === "user" ? i.step.actor.uid : "";
+      const who = i.before.players.find((p) => p.uid === uid);
+      expect(who === undefined ? undefined : i.drafts[who.id]).toBeDefined();
+    }
+    for (let k = 1; k < seen.length; k++) expect(seen[k]?.draftsBefore).toEqual(seen[k - 1]?.drafts as never);
+  });
+
+  test("works with the straight driver too", () => {
+    let n = 0;
+    runScenario(decide, created(false), picks, { seed: 3, table: enumerators, drive: progressDriver("3", 4, enumerators, true), afterStep: () => { n++; } });
+    expect(n).toBeGreaterThan(30);
   });
 });

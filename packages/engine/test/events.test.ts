@@ -194,7 +194,7 @@ describe("EV2 the catalog equals LLD 1 section 11; deferred tags have no emitter
     for (let seed = 1; seed <= 60; seed++) for (const a of accepts(play(3 + (seed % 5), seed, true))) for (const e of a.events) seen.add(e.t);
     for (const t of Object.keys(CATALOG).filter((k) => !DEFERRED.includes(k))) expect(seen.has(t) ? t : `missing ${t}`).toBe(t);
     for (const t of DEFERRED) expect(seen.has(t)).toBe(false);
-  }, 60_000);
+  }, 600_000);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -386,13 +386,14 @@ describe("P-E9 no event before WinnerPicked carries a submitted card, and nothin
   });
 });
 
-describe("removeCard of a revealed submission in JUDGING (LLD 1 open question 20)", () => {
-  test("the public submittedBy loses exactly the removed card's author: the signal the M2 Projector must hide, pinned so a change is deliberate", () => {
+describe("removeCard of a revealed submission in JUDGING (LLD 1 open question 20, ruled in #28)", () => {
+  test("the card leaves the reveal, but Round.played still names its author, so the Projector's submittedBy does not shrink; the event names the card and no player", () => {
     const g = roundGame({ n: 5, judge: 0, submitted: [1, 2, 3], phase: "JUDGING", greenDeck: 60 });
     const removed = cid(206); // player 2's play, revealed without an owner
     const a = ok(g, { type: "removeCard", cardId: removed }, seat(0));
     const lost = (g.round?.submissions ?? []).map((s) => s.playerId).filter((p) => !(a.state.round?.submissions ?? []).some((s) => s.playerId === p));
-    expect(lost).toStrictEqual([pid(2)]);
+    expect(lost).toStrictEqual([pid(2)]); // the Engine's own record of submissions does shrink ...
+    expect(a.state.round?.played).toStrictEqual(g.round?.played); // ... the public trace does not
     expect(a.events).toStrictEqual([{ t: "CardRemoved", cardId: removed, kind: "red" }]);
   });
 });

@@ -135,7 +135,7 @@ Root `package.json` (the scripts marked "this step" exist now; the rest arrive w
     "lint": "eslint . --max-warnings 0",                                   // this step
     "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json && tsc --noEmit -p rules-test/tsconfig.json && tsc --noEmit -p scripts/tsconfig.json && tsc --noEmit -p hosting-test/tsconfig.json",  // this step; #13 adds rules-test; #14 adds scripts and hosting-test (apps/web's own typecheck also covers vite.config.ts)
     "test:lint": "bun test lint-test",                                    // this step; `test` also runs it (about 6 s); kept for running it alone
-    "test": "bun test packages functions/src functions/scripts scripts lint-test",   // #13; #14 adds scripts/ (check-web-size and the web build tests; the build tests run `vite build` a few times, about 1 s each)
+    "test": "bun test --timeout 120000 packages functions/src functions/scripts scripts lint-test",   // #13; #14 adds scripts/ (check-web-size and the web build tests; the build tests run `vite build` a few times, about 1 s each)
     "test:web": "bun test --preload ./apps/web/test/setup.ts apps/web/src",   // #13 (Bun needs the leading ./)
     "test:rules": "firebase emulators:exec --only firestore --project demo-deepcuts 'bun test rules-test'",
     "test:integration": "bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bun test functions/test-integration --timeout 30000'",

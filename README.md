@@ -27,6 +27,8 @@ bash scripts/check-bundle-no-bun.sh   # after build:functions: the bundle loads 
 actionlint                      # lint .github/workflows (1.7.12)
 bun run test:e2e                # placeholder: prints "NO SUITE" and exits 0 until Playwright lands (5.1, #45)
 FC_SEED=<n> bun run test        # replay a failed property test; the seed is printed on failure
+FC_NUM_RUNS=2000 bun run test   # more fast-check runs (CI default 200; the anonymity suite's random run is 40 unless this is set)
+bun test packages/engine/test/project/anonymity.test.ts packages/engine/test/project/mutants.test.ts   # the M2 exit demo: the anonymity suite on the real projector, and its 14 leaky mutants killed
 bun run build:functions         # bundle functions into functions/dist and check the bundle (see functions/README.md)
 bun run build:web               # vite build --mode staging into apps/web/dist (see apps/web/README.md)
 bun scripts/check-web-size.ts   # gzip budgets for the built apps/web/dist (run build:web first)
@@ -39,13 +41,15 @@ Dependencies are the latest stable at the time they were added, exact-pinned (`b
 
 | Path | Package | Role |
 |---|---|---|
-| `packages/contracts` | `@dc/contracts` | zod schemas and types (ids, limits, error codes, settings pieces, the strict command envelope and `toEngineCommand`; view and callable schemas come with #27 and M4); depends only on zod, imports no other workspace package |
-| `packages/engine` | `@dc/engine` | pure game core; depends only on `@dc/contracts` |
+| `packages/contracts` | `@dc/contracts` | zod schemas and types (ids, limits, error codes, settings pieces, the strict command envelope and `toEngineCommand`, the strict and loose `GameView`, `ViewDoc` and `RoundDoc` schemas with their enum tuples; callable schemas come with M4); depends only on zod, imports no other workspace package |
+| `packages/engine` | `@dc/engine` | pure game core (rules and `decide` in `src/`, the view projector in `src/project/`: `project`, `fanOut` with skip-unchanged and the 512 KiB cap, `toRoundDoc`, `PROJECTOR_REV`); depends only on `@dc/contracts` |
 | `functions` | `@dc/functions` | Cloud Functions; `functions/scripts` builds the deployable bundle (see `functions/README.md`) |
 | `apps/web` | `@dc/web` | React client (Vite, Tailwind 4); imports only `@dc/contracts` (see `apps/web/README.md`) |
 | `lint-test` | | tests for the lint and compiler policy |
 | `scripts` | | environment provisioning and verification, the secret scan, the log-sentinel harness, `check-web-size.ts`, the workflow policy test and the skill-layout check (see `scripts/README.md`) |
 | `.github/workflows` | | `ci.yml`: verify, emulator, preview, deploy-staging, check-tag and a guarded deploy-prod stub (LLD 0 section 8) |
 | `hosting-test` | | bun tests that run against the Hosting emulator (`bun run test:hosting`) |
+
+The Projector's privacy proof is `packages/engine/test/project/` (LLD 2 section 11): a forbidden-values oracle, a non-interference test, fourteen leaky mutants that must each be killed by named detectors alone, and type-level guards (`types.test-d.ts`, run by `bun run typecheck`). `anonymity.test.ts` is the entry point. **The proof is partial**: write-in, redraw and vote behaviour is checked on states a test-side injector models, not on real commands (those arrive in M7), and the `draftSeq` clause and `removeCard` round-doc redaction are not covered; LLD 2 section 11.7 lists what is built, modelled and deferred. Cost: the suite adds about 30 s to `bun test packages` (52 s to about 83 s alone, about 100 s with two test runs sharing the machine); the 150-step fallback cap of the plan was not needed (games end at about 130 steps, so the 400-step cap is never reached): the scenario count was cut instead (60 fixed-seed + 40 random).
 
 The dependency direction and the lint rules that enforce it are in LLD 0 sections 3 and 5.

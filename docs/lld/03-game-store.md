@@ -55,6 +55,7 @@ interface StoreMeta {
 - `load` splits `store` off before calling `decide`; `decide` returns a `Game`, and the Store re-attaches a fresh `store`. The Engine therefore stays ignorant of Firestore (X2: no `undefined`, no `Map`, no nested arrays, all of which Firestore rejects; the Admin client keeps `ignoreUndefinedProperties: false` so a bug fails loudly).
 - Denormalized, top-level, queryable fields all come from the Engine's own `Game`: `phase`, `paused`, `reminderDueAt`, `waitingOn`, `waitingSince`, `episode`, `episodeGen` (K-E, LLD 1 4.2), `hostId`, `roomCode`, `createdAt`, `version`. The Store adds none and writes none of them separately: they change only when `decide` returns a new `Game` (ST12).
 - Large fields are exempt from indexing (section 4) so the 40,000 index-entries-per-document limit and write-time index cost cannot matter.
+- **No stored game predates the Store.** Nothing writes `games/{gameId}` before M3: the Engine is pure, `createGame` and `runCommand` are the only writers, and they land with the Store. So the persisted `Game` shape has no earlier version to migrate from, and a field the Engine adds (LLD 1's `Round.played`, M2) needs no defaulting or schema bump on read. A shape change after launch is a migration and takes `store.schema` (`StoreMeta.schema`, 2.2), not a per-field `??` fallback: a default would turn a loud failure into a wrong record (a round whose `played` defaults to `[]` records every roster member as absent).
 
 ### 2.3 Other document shapes
 
@@ -114,7 +115,7 @@ Conclusions and rules:
 - Normal games are an order of magnitude below the limit; even the adversarial bound is under 1 MiB, but only **if** the Engine caps total joins at 50 (`MAX_TOTAL_JOINS`, counted by the monotonic `totalJoins`, so LOBBY leavers count) and votes at 1500 (`MAX_VOTES`); both are defined in LLD 1 and `packages/contracts` (C-CAPS; open question 8, resolved). The Store guard below is the backstop.
 - **Guard (ST6).** Before writing, `estimateBytes(nextDoc)`: above 600 KiB log `store.size.warn`; above 900 KiB the command fails with `AGGREGATE_TOO_LARGE` (nothing commits) **unless** `estimateBytes(next) <= estimateBytes(prev)`, so shrinking commands (`endGame`, `deleteGame`, `removeCard`) always work.
 - **What spills out of the aggregate:** draft text (`drafts`), resolved-round texts and pitches (`rounds`), event history (`events`), and every viewer's data (`views`). **What stays in:** the card registry, id-only `history` summaries, `votes`, and `players`, all needed by `decide` in one read (tech-stack: a command is one read plus one write for state).
-- Other docs: view docs at most 64 KiB tested and 512 KiB hard cap (LLD 2 PJ14); draft docs about 4 KiB; round docs at most about 10 KiB; event docs about 0.2 to 2 KiB; outbox rows about 1 to 3 KiB (roster of at most 10 seats); idem docs under 2 KiB; deck docs under 700 KiB at the Library's 2000-card cap.
+- Other docs: view docs at most 64 KiB tested and 512 KiB hard cap (LLD 2 PJ14; `VIEW_DOC_BUDGET_BYTES` and `VIEW_DOC_MAX_BYTES` in `@dc/contracts`, the cap enforced inside `fanOut`); draft docs about 4 KiB; round docs at most about 10 KiB; event docs about 0.2 to 2 KiB; outbox rows about 1 to 3 KiB (roster of at most 10 seats); idem docs under 2 KiB; deck docs under 700 KiB at the Library's 2000-card cap.
 
 ### 2.6 Retention and TTL
 
@@ -356,9 +357,10 @@ export async function runCommand(db: Firestore, d: Deps, i: CommandInput): Promi
         return { kind: "deleting" };                        // no ledger row: a replay hits the `deleting` check above and gets NOT_FOUND (6.4)
       }
 
-      // Views: LLD 2 fan-out, strict-parsed (PJ2); a parse failure throws and aborts the whole transaction.
-      const writeViews = (from: Game | null, to: Game, skipUnchanged: boolean) => {
-        for (const vw of fanOut(from, to, { now, skipUnchanged })) {
+      // Views: LLD 2 fan-out. fanOut itself strict-parses and size-caps every doc (PJ2, PJ14, `assertViewDoc`) and throws EngineInvariantError, which aborts the whole transaction;
+      // the parse below is a redundant second check at the Store boundary (kept: it narrows the type and costs microseconds).
+      const writeViews = (from: Game | null, to: Game) => {
+        for (const vw of fanOut(from, to, { now, storedRev: store.viewsRev })) {   // a skip needs store.viewsRev === PROJECTOR_REV (LLD 2 8.2)
           const vd = ViewDocSchema.parse(vw.doc);             // envelope carries viewsRev = PROJECTOR_REV (LLD 2, K-F)
           w.merge(viewRef(i.gameId, vw.docId), viewFields(vd), VIEW_FIELDS);
           if (vw.clearDraft) w.merge(viewRef(i.gameId, vw.docId), { draft: null, draftSeq: FieldValue.increment(1) }, DRAFT_FIELDS);   // may collide with draftChanges below: WriteSet rules, 5.2a
@@ -379,12 +381,14 @@ export async function runCommand(db: Firestore, d: Deps, i: CommandInput): Promi
         for (const row of buildOutbox(prev, next, i.cmd, a, now)) w.create(outboxRef(i.gameId, row.id), row.doc);
         if (leftJoinable(prev, next)) w.delete(roomCodeRef(next.roomCode));   // FINISHED or ENDED releases the code (ST8)
 
-        writeViews(prev, next, !viewsStale);                  // first command after a projector deploy rewrites everything
+        writeViews(prev, next);                               // first command after a projector deploy rewrites everything
       } else if (viewsStale && i.actor.kind === "user") {
         // K-F: rebuild is independent of aggregateChanged, so a draft-only command after a deploy also refreshes views.
-        // No version bump (PJ10): rebuilt docs keep view.version = prev.version and win on the higher viewsRev.
+        // No version bump (PJ10): rebuilt docs keep view.version = prev.version, so clients prefer them by the higher viewsRev.
+        // In the ahead branch (a rollback that did not ship a higher PROJECTOR_REV) the rewrite carries a lower viewsRev instead and
+        // clients discard it at the same version; see 5.6.
         w.update(gameRef, { "store.viewsRev": PROJECTOR_REV, "store.updatedAt": now });
-        writeViews(null, prev, false);                        // all of viewersOf(prev), as rebuildViews (6.5)
+        writeViews(null, prev);                               // all of viewersOf(prev), as rebuildViews (6.5)
       }
 
       // Drafts (also the whole story for a text-only saveDraft, where aggregateChanged is false).
@@ -423,7 +427,7 @@ export async function runCommand(db: Firestore, d: Deps, i: CommandInput): Promi
 }
 ```
 
-`viewFor(game, actor)` is `makeProjector(game)(viewerFor(game, uid))` (LLD 2 8.5), computed in memory with no extra read, `null` for the system actor. `VIEW_FIELDS = ["schema","viewsRev","gameId","enabled","version","generatedAt","view"]` and `DRAFT_FIELDS = ["draftSeq","draft"]` are the `mergeFields` lists of LLD 2 8.4 (`viewsRev` is the envelope field of K-F: clients order view snapshots by `(version, viewsRev)` lexicographically, so a rebuilt doc at the same `version` replaces the older one); `w.merge` unions the field lists when the same view doc is written twice (fan-out plus draft region), so each document is one write. The exact rules are in 5.2a.
+`viewFor(game, actor)` is `makeProjector(game)(viewerFor(game, uid))` (LLD 2 8.5), computed in memory with no extra read, `null` for the system actor. `VIEW_FIELDS = ["schema","viewsRev","gameId","enabled","version","generatedAt","view"]` and `DRAFT_FIELDS = ["draftSeq","draft"]` are the `mergeFields` lists of LLD 2 8.4 (the Engine exports them as `VIEW_REGION_FIELDS` and `DRAFT_REGION_FIELDS`, with a test that they partition the `ViewDoc` keys; the Store imports them) (`viewsRev` is the envelope field of K-F: clients order view snapshots by `(version, viewsRev)` lexicographically, so a rebuilt doc at the same `version` replaces the older one); `w.merge` unions the field lists when the same view doc is written twice (fan-out plus draft region), so each document is one write. The exact rules are in 5.2a.
 
 ### 5.2a `WriteSet` merge semantics
 
@@ -464,7 +468,7 @@ export async function runCommand(db: Firestore, d: Deps, i: CommandInput): Promi
 
 - The draft region and view region of `views/{uid}` are disjoint field sets written with `mergeFields`, so another player's `finishWriting` can never wipe your draft and your draft save never touches `version`/`view` (LLD 2 8.4).
 - `finishWriting` and eviction return `draftChanges: [{playerId, draft: null}]`; the Store deletes the drafts doc and clears the draft region (`draft: null`). For the actor of `finishWriting`, `draftSeq` is the absolute `seq+1` (its drafts doc is read in step 1); every other clear, including the actor's own `leave` (self-eviction) and a writer evicted by `removePlayer`, writes `FieldValue.increment(1)`, because step 1 did not read that drafts doc and an absolute value computed from nothing would lower `draftSeq`. No extra read is needed. When fan-out also clears the same view doc, the two combine into one write (5.2a).
-- **Stale views on a draft-only command (K-F).** If `store.viewsRev < PROJECTOR_REV` when a user command commits with `aggregateChanged: false`, the Store still rebuilds every view (`fanOut(null, prev, {skipUnchanged: false})`) and updates `store.viewsRev` (and `store.updatedAt`) without bumping `version`; the rebuilt docs carry the same `version` and the higher envelope `viewsRev`, which clients prefer. Only a no-op system `markReminded` skips this (it stays zero-write; the next user command or `rebuildViews` refreshes the views).
+- **Stale views on a draft-only command (K-F).** If `store.viewsRev !== PROJECTOR_REV` (behind after a deploy, or ahead after a rollback: fail safe, rebuild everything) when a user command commits with `aggregateChanged: false`, the Store still rebuilds every view (`fanOut(null, prev, {now, storedRev: store.viewsRev})` (which cannot skip, K-F)) and updates `store.viewsRev` (and `store.updatedAt`) without bumping `version`; the rebuilt docs carry the same `version` and the running envelope `viewsRev`. **Behind is the deploy case and the rebuilt docs win**, because a client applies a snapshot only if its `(version, viewsRev)` pair is greater or equal (LLD 2 8.4). **Ahead only arises from a rollback that did not follow the rule** of LLD 2 8.2 (a rollback of projector code ships with a higher `PROJECTOR_REV`, which puts it in the behind case); if it does arise, the rebuild writes the *lower* constant and clients discard those docs at the same `version`, keeping the newer-projector ones, until a rollback that follows the rule. Only a no-op system `markReminded` skips this (it stays zero-write; the next user command or `rebuildViews` refreshes the views).
 - The ledger is written for draft-only saves too: without it a delayed retry of an older save could overwrite newer text after the client moved on. Reordering of two *different* saves in flight is the client's concern (LLD 7 serializes saves).
 
 ### 5.7 Write-count budget
@@ -521,7 +525,7 @@ export async function createGame(db: Firestore, d: Deps, i: { hostId: Uid; hostN
         const a = res.value, w = new WriteSet(tx, { max: MAX_WRITES });
         w.create(gameRef(gameId), withStore(a.state, now));
         w.create(eventRef(gameId, 1), eventDoc(1, now, a, i, seed));
-        for (const vw of fanOut(null, a.state, { now, skipUnchanged: false })) w.merge(viewRef(gameId, vw.docId), viewFields(ViewDocSchema.parse(vw.doc)), VIEW_FIELDS);
+        for (const vw of fanOut(null, a.state, { now, storedRev: 0 })) w.merge(viewRef(gameId, vw.docId), viewFields(ViewDocSchema.parse(vw.doc)), VIEW_FIELDS);
         w.create(db.doc(`roomCodes/${code}`), { gameId, createdAt: now });
         w.create(ledger, { at: now, expiresAt: ttl(now, 7), gameId, roomCode: code, version: 1 });   // 6 writes in all: game, event, 2 views (host, spectator), roomCode, ledger
         return { gameId, roomCode: code, replay: false };
@@ -605,7 +609,7 @@ export async function runDeletion(db: Firestore, deps: Deps, gameId: GameId) {
 
 ### 6.5 `rebuildViews(gameId)`
 
-An admin-only Store function that, in one transaction, reads the aggregate, runs `fanOut(null-as-all, game, {skipUnchanged:false})`, writes all view docs and sets `store.viewsRev = PROJECTOR_REV` without bumping `version` (the rebuilt docs win on `(version, viewsRev)`, K-F). Active games need no script: `runCommand` rebuilds on the first accepted user command after a deploy whether or not it changes the aggregate (5.2, 5.6). Used after a projector deploy for idle games (an optional script over `where store.viewsRev < REV`) and for incident repair; PJ10 holds because `view.version` equals the unchanged aggregate version.
+An admin-only Store function that, in one transaction, reads the aggregate, runs `fanOut(null-as-all, game, {now, storedRev: 0})`, writes all view docs and sets `store.viewsRev = PROJECTOR_REV` without bumping `version` (after a deploy the rebuilt docs win on `(version, viewsRev)`, K-F; in the rollback case see 5.6). Active games need no script: `runCommand` rebuilds on the first accepted user command after a deploy whether or not it changes the aggregate (5.2, 5.6). Used after a projector deploy for idle games (an optional script over `where store.viewsRev < REV`) and for incident repair; PJ10 holds because `view.version` equals the unchanged aggregate version.
 
 ## 7. Reminder queries: `listWaitingOn`
 
@@ -783,7 +787,7 @@ A typical 600-command game costs about 6,000 writes, about 1,200 command reads, 
 |---|---|---|
 | 0 Platform | `firestore.rules`, `firestore.indexes.json` (indexes, exemptions, TTL), `rules-test/` matrix, Store integration suites for `bun run test:integration`, log events `command.done`/`command.rejected`/`txn.retry` with `attempts` and `latencyMs`, `deletion.stuck`, `store.size.warn` | Emulator harness against the Node bundle (P9); `fn-runtime` Firestore role; TTL policies for exactly the six collection groups of 2.1 (incl. `joinIdem`); deploy order rules, then indexes, then functions (P16); P10 name-coverage check satisfied by 3.3; emulator-only `clock` and `faults` env gating |
 | 1 Engine | The only caller of `decide`; passes `expectedVersion` untouched; supplies `ctx` (`now`, `makeRng(seed)`, `actor`, `drafts` limited to the actor's); persists `state`, `events`, `draftChanges`, `roundRecords`, `seed` (stored only for non-minting commands); supplies `ctx.mintId`; handles `deleteGame` (6.4) and `aggregateChanged: false` (5.6); adopts `markReminded` (7) | Everything in LLD 1 section 10 and Interfaces table; adopted additions: total-joins and vote caps (open question 8); event-doc-per-version rule (section 9); keep `Game` plain JSON (X2); `markReminded` kept; scheduler fields maintained in `settle` (X8) |
-| 2 Projector | Calls `fanOut(prev, next, {now, skipUnchanged})`, strict-parses every `ViewDoc` (PJ2), writes with `mergeFields` lists of 8.4, maintains `draftSeq` and `viewsRev` (store field and view-envelope field; views rebuilt whenever the stored `viewsRev` is behind, even for `aggregateChanged: false`, K-F), tombstones and `clearDraft`, creates `rounds/{n}` from `toRoundDoc`, redacts round docs on `removeCard` (`redacted`), rules per 11.8 there | `fanOut`, `viewersOf`, `viewerFor`, `makeProjector`, `toRoundDoc`, `draftRegion`, `PROJECTOR_REV`, `ViewDocSchema`, `RoundDocSchema` (strict); the `redacted` field on `RoundDoc` |
+| 2 Projector | Calls `fanOut(prev, next, {now, storedRev})`, strict-parses every `ViewDoc` (PJ2), writes with `mergeFields` lists of 8.4, maintains `draftSeq` and `viewsRev` (store field and view-envelope field; views rebuilt whenever the stored `viewsRev` is behind, even for `aggregateChanged: false`, K-F), tombstones and `clearDraft`, creates `rounds/{n}` from `toRoundDoc`, redacts round docs on `removeCard` (`redacted`), rules per 11.8 there | `fanOut` (which already strict-parses and size-caps every doc, LLD 2 PJ2), `viewersOf`, `viewerFor`, `makeProjector`, `toRoundDoc`, `draftRegion`, `VIEW_REGION_FIELDS`, `DRAFT_REGION_FIELDS` (the `mergeFields` lists, to import rather than redeclare), `PROJECTOR_REV`, `ViewDocSchema`, `RoundDocSchema` (strict); the `redacted` field on `RoundDoc` |
 | 4 Identity | `findByRoomCode`; `runCommand` with `meta` and pure `extraWrites` so the seat record commits atomically with `join`; `topic: "identity"` outbox rows for `PlayerLeft`/`PlayerRemoved`; `deletions` job, `seatUids` and the `seats/*` union for `purgeSeats`; the `games/{g}/seats/*` reservation | Mint `playerId`, secret and hash deterministically from `(gameId, idemKey)` before the call; mint custom tokens only after commit; implement `purgeSeats(gameId, uids)` (idempotent, tolerates missing users, revokes refresh tokens); own `seats` fields (`uid`, `secretHash` nullable, `epoch` (mirrored as the `ep` claim, K-B), `notBefore` (strict `auth_time > notBefore`), `firstSignInAt`, `revokedAt`); hash the join key (`keyHash`) before calling `runCommand` and write `joinIdem/{keyHash}` in `extraWrites` (K-C); export `handleIdentityRow`, be the only writer of `processedAt` on `identity` rows and `hosts/{uid}`; confirm the host's Auth account is never deleted by the cascade |
 | 5 Command API & contracts | `CommandOutcome` and `StoreError` kinds (5.1, 5.8), the replay semantics (5.4), `createGame` and `listGamesByHost`, the error mapping table | Pass `gameId`, `actor`, `idemKey` (and `hostId` for `createGame`); never interpret `expectedVersion`; map `StoreError` to `HttpsError` codes in 5.8; expose the host game list; document that on replay `result.version <= result.view.version` |
 | 6 Notifications & Scheduler | Outbox rows (`topic: "notify"`, `Reminder`), self-contained `roster`, `round`, `waitingOn`, `id`, stable `v{n}_{i}` ids, 14-day retention, `listWaitingOn` pages, `markReminded` path, the redrive indexes (incl. the `identity`/`notifDoneAt == null` push-cleanup redrive, section 8), `deletions` stuck-job sweep hook; `episodeGen` in `listWaitingOn` items and `Reminder` rows (K-E); `WritingStarted`, `JudgeChanged`, `GameEnded` and unpause rows with context; `notifDoneAt: null` on every identity row at creation | Triggers on `outbox`, filtering by `topic`; set `processedAt` on `notify` rows only (own fields `notifAttempts`, `poisonedAt`, `notifSkipped`, `notifDoneAt`); drop live reads in favor of the row context; `clearSeatPush` for `identity` rows; own `notifLog` (TTL 30 days) and `pushSubs` (with `gameId`, `uid`); loop `listWaitingOn` pages and call `runCommand(markReminded)` with key `remind:{episode}:{dueAt}`; accept or veto the reminder-as-outbox-row design (open question 5); decide the sweep cadence |

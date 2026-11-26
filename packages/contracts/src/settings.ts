@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// Pieces shared by the command envelope and the view schemas.
+// Pieces of the command envelope. view.ts declares its own strict and loose copies of the public ones (they need closed and open objects); test/view.test.ts pins the two to accept the same values.
 export const VariantsSchema = z.object({
   pitch: z.boolean(), writeIn: z.boolean(), redraw: z.boolean(), peoplesChoice: z.boolean(),
 });

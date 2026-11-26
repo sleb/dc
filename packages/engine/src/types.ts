@@ -48,6 +48,8 @@ export interface Round {
   roster: PlayerId[]; // active players at open time, judge included; fixed
   submissions: Submission[];
   revealOrder: CardId[] | null; // set once at close (E10)
+  /** Who played this round, snapshotted by `closeRound`; [] while SUBMITTING. Pruned when a player leaves or the new judge takes their play back, never by `removeCard` (LLD 1 OQ 20). Authors only, no cards. */
+  played: PlayerId[];
   openedAt: number;
   changedAtVersion: number; // version of the last judge, phase or voiding change (STALE, 5.3)
 }

@@ -29,15 +29,15 @@ packages/contracts/
     ids.ts             # GameId, PlayerId, CardId, Uid, IdempotencyKey schemas and regexes
     limits.ts          # shared numeric caps (MAX_SEATED, MAX_TOTAL_JOINS, MAX_VOTES, text caps)
     errors.ts          # ERROR_CODES, REJECTION_DETAILS, DETAIL_BY_CODE, RejectionSchema, GATE_REASONS
-    settings.ts        # Settings pieces shared by the command patch (2.4) and the view schemas (2.5): VariantsSchema, SpectatorsSchema, SettingsPatchSchema, Settings
+    settings.ts        # Settings pieces of the command patch (2.4): VariantsSchema, SpectatorsSchema, SettingsPatchSchema, Settings (view.ts declares its own strict and loose copies of the public pieces, pinned to these by `contracts/test/view.test.ts`)
     commands.ts        # payload schemas, CommandEnvelopeSchema, toEngineCommand, SERVER_ONLY_COMMANDS, Command/ClientCommand/ServerOnlyCommand types
-    view.ts            # (not yet built, issue #27) GameView, ViewDoc, RoundDoc schema factory (strict and loose)
+    view.ts            # GameView, ViewDoc, RoundDoc schema factory (strict and loose), enum tuples, DraftSchema (issue #27)
     callables.ts       # (not yet built, M4) request/response schemas for every callable, CALLABLES, RESERVED_CALLABLES
   test/                # schema, compat and fixture tests (bun:test)
   compat/              # (not yet built, #38) frozen JSON-Schema snapshots per released CONTRACT_V (section 2.6)
 ```
 
-- Built so far (issue #18): `version`, `ids`, `limits`, `errors`, `settings`, `commands` and `index`. `view.ts`, `callables.ts` and `compat/` arrive with their own steps. Tests are in `test/`, included by `tsconfig.test.json`. The Playwright browser smoke and the Node 22 run are deferred to the first bundling step (#45); until then isolation is covered by a dependencies assertion and a source scan (no `node:*`, `bun*`, `firebase*`, `@dc/*` import; no `Date`, `crypto`, `fetch`). zod is pinned to 4.6.7.
+- Built so far (issues #18 and #27): `version`, `ids`, `limits`, `errors`, `settings`, `commands`, `view` and `index`. `callables.ts` and `compat/` arrive with their own steps. Tests are in `test/`, included by `tsconfig.test.json`. The Playwright browser smoke and the Node 22 run are deferred to the first bundling step (#45); until then isolation is covered by a dependencies assertion and a source scan (no `node:*`, `bun*`, `firebase*`, `@dc/*` import; no `Date`, `crypto`, `fetch`). zod is pinned to 4.6.7.
 - Consumed as TypeScript source (LLD 0 section 3); never built separately. `functions` bundles it, Vite compiles it for `web`. Types come from `z.infer`; no hand-written duplicate of a wire type exists (tech-stack section 8).
 - Runtime dependency: **zod only**. No `firebase*`, `node:*`, `bun*`, no `@dc/*` import (LLD 0 P5 already lints this). No `Date`, `crypto`, `fetch`: uuid and hashing helpers live in `functions` and `web`. Runs unchanged in Node 22 and in browsers (tests run it under `bun test` now; the Playwright page-evaluate smoke and the Node 22 run are deferred to #45).
 - zod is pinned to one exact version in `packages/contracts/package.json`; the APIs used (`object`, `strictObject`, `discriminatedUnion`, `infer`, `looseObject`) exist in zod 3.25 and 4. `bun.lock` carries it.
@@ -54,6 +54,7 @@ export const IdempotencyKeySchema = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4
 export const RoomCodeSchema = z.string().trim().toUpperCase().regex(/^[BCDFGHJKLMNPQRSTVWXZ]{4}$/);   // alphabet from LLD 3 2.4
 
 // limits.ts: DoS guards at the edge; the Engine remains the semantic authority (X1, M-rules)
+export const VIEW_DOC_BUDGET_BYTES = 64 * 1024, VIEW_DOC_MAX_BYTES = 512 * 1024;   // PJ14, built in 2.3 (#29); the cap is enforced inside the Engine's fanOut
 export const MAX_SEATED = 10, MAX_TOTAL_JOINS = 50, MAX_VOTES = 1500;      // last two are Engine-enforced via totalJoins and votes.length (section 8.2)
 export const TEXT_LIMITS = { name: 24, card: 80, pitch: 140 } as const;     // code points; the Engine's semantic limits; LLD 7 imports it for input maxlength and counters
 export const WIRE_TEXT_MAX = 400;     // UTF-16 units per card/name/pitch string at the edge; deliberately above every TEXT_LIMITS value
@@ -166,46 +167,36 @@ The required five are exactly the commands LLD 1 5.3 step 3 can answer with `STA
 LLD 2 section 4.2 and 7.1 are normative for every field name, nullability and meaning; this LLD owns the zod. The schemas are built by a factory so the server gets strict and the client gets lenient parsing from one definition:
 
 ```ts
-// view.ts
+// view.ts (built, issue #27; the file is the reference for every field, LLD 2 4.2 and 7.1 for meaning)
+export const PHASES = ["LOBBY", "WRITING", "PLAYING", "FINISHED", "ENDED"] as const;   // also PLAYER_STATUSES, ROUND_PHASES, YOU_TURNS, DEPARTED_REASONS
 export const makeViewSchemas = (mode: "strict" | "loose") => {
   const obj = mode === "strict" ? z.strictObject : z.looseObject;
-  const en = <S extends z.ZodTypeAny>(e: S) => (mode === "strict" ? e : z.string());   // loose: any string in enum positions (forward compatibility)
-  const Counts = obj({ red: z.number().int().nonnegative(), green: z.number().int().nonnegative() });
-  const Settings = obj({ targetOverride: z.number().int().min(2).max(10).nullable(), profanity: en(z.enum(["on", "off"])),
-    variants: obj({ pitch: z.boolean(), writeIn: z.boolean(), redraw: z.boolean(), peoplesChoice: z.boolean() }),
-    spectators: obj({ enabled: z.boolean(), vote: z.boolean() }) });
-  const PlayerPublic = obj({ id: PlayerIdSchema, name: z.string(), joinOrder: z.number().int(), status: en(PlayerStatusSchema),
-    isHost: z.boolean(), score: z.number().int().nonnegative(), cardsLeft: Counts.nullable() });
-  const RoundPublic = obj({ number: z.number().int().positive(), judgeId: PlayerIdSchema.nullable() /* null only while paused, LLD 1 8.3 */, phase: en(RoundPhaseSchema),
-    green: obj({ id: CardIdSchema, text: z.string() }), expected: z.array(PlayerIdSchema), submittedBy: z.array(PlayerIdSchema),
-    reveal: z.array(obj({ submissionId: CardIdSchema, text: z.string(), pitch: z.string().nullable() })).nullable() });
-  const YouView = obj({ /* playerId, status, isHost, isJudge, turn: en(YouTurnSchema), score, roomCode, hand[], writeTarget, cardsLeft,
-                          powerUsage, yourSubmission, myVotes: z.record(z.string(), CardIdSchema): LLD 2 4.2, field for field */ });
-  const HostPanel = obj({ /* roomCode, playability{...}, writeCountsOverride: LLD 2 4.2 */ });
-  const AwardsView = obj({ /* peoplesChoice[], podium[]: LLD 2 4.2 */ });
-  const Live = { kind: z.literal("live"), gameId: GameIdSchema, version: Int, phase: en(PhaseSchema), paused: z.boolean(), settings: Settings,
-    target: Int, targetFrozen: z.boolean(), writeCounts: Counts.nullable(), players: z.array(PlayerPublic), waitingOn: z.array(PlayerIdSchema),
-    round: RoundPublic.nullable(), resolved: Int, winnerId: PlayerIdSchema.nullable(), awards: AwardsView.nullable() };
-  const GameView = z.discriminatedUnion("audience", [
-    obj({ ...Live, audience: z.literal("spectator") }),
-    obj({ ...Live, audience: z.literal("host"), host: HostPanel }),
-    obj({ ...Live, audience: z.literal("player"), you: YouView, host: HostPanel.optional() }),
-    obj({ kind: z.literal("departed"), audience: z.literal("departed"), gameId: GameIdSchema, version: Int,
-          reason: en(z.enum(["left", "removed", "gone"])) }),
-  ]);
+  const en = (e) => (mode === "strict" ? e : z.string());   // loose: any string in enum positions (forward compatibility)
+  // Counts, PublicSettings, PlayerPublic, RevealCard, RoundPublic, AwardsView, YouView, HostPanel, Live: LLD 2 4.2, field for field
+  const GameView = z.discriminatedUnion("audience", [spectator, host, player /* host optional */, departed]);
   // viewsRev: clients order snapshots by (version, viewsRev) lexicographically, so a rebuild at the same version wins (LLD 2)
-  const ViewDoc = obj({ schema: z.literal(VIEW_SCHEMA), viewsRev: Int, gameId: GameIdSchema, enabled: z.boolean(), version: Int, generatedAt: Int,
-    view: GameView.nullable(), draftSeq: Int.optional(), draft: obj({ red: z.array(z.string()), green: z.array(z.string()) }).nullable().optional() });
-  const RoundDoc = obj({ /* schema, round, judgeId, winnerId, winnerCardId, green{id,text|null}, plays[], absent[], resolvedAt, redacted: LLD 2 7.1 */ });
+  const ViewDoc = obj({ schema: z.literal(VIEW_SCHEMA), viewsRev, gameId, enabled, version, generatedAt,
+    view: GameView.nullable(), draftSeq: NonNeg.optional(), draft: Draft.nullable().optional() });
+  const RoundDoc = obj({ schema, round, judgeId, winnerId, winnerCardId, green: { id, text: string | null }, plays, absent, resolvedAt, redacted });
   return { GameView, ViewDoc, RoundDoc };
 };
 export const { GameView: GameViewSchema, ViewDoc: ViewDocSchema, RoundDoc: RoundDocSchema } = makeViewSchemas("strict");  // server only: PJ2
 export const { GameView: GameViewLooseSchema, ViewDoc: ViewDocLooseSchema, RoundDoc: RoundDocLooseSchema } = makeViewSchemas("loose");  // web
 ```
 
+Built shape (issue #27), where it refines the sketch above:
+
+- **Types** `GameView`, `ViewDoc`, `RoundDoc` are inferred from the strict schemas. The loose exports are re-typed with a `WidenEnums` mapped type (`GameViewLoose`, `ViewDocLoose`, `RoundDocLoose`): every `phase`, `status`, `turn`, `profanity` and `reason` key is `string`, discriminators stay literal. The factory itself returns the strict shape; the loose set is cast once, where it is exported.
+- **Names.** The settings leaf is `PublicSettings` inside the factory (`settings.ts` already exports `Settings`, which includes `writeCountsOverride`); `Draft` is exported as `DraftSchema`/`Draft`, a strict object in strict mode; loose mode uses a loose draft object inside `ViewDoc`. The enum tuples are `PHASES`, `PLAYER_STATUSES`, `ROUND_PHASES`, `YOU_TURNS`, `DEPARTED_REASONS`, each with a `...Schema` (`z.enum`) and a type.
+- **Optional and nullable.** `ViewDoc.draft` and `ViewDoc.draftSeq` and `PlayerView.host` are omitted, not `undefined`; every "nothing here" field is `null`. `draft` is also nullable (LLD 2 4.1).
+- **Numbers.** Counts, `version`, `viewsRev`, `generatedAt`, `resolved`, `score`, `votes`, `joinOrder` are nonnegative integers; `round.number`, `target`, `podium.round` and `RoundDoc.round` are positive; `podium.rank` is 1, 2 or 3; `myVotes` keys are decimal round numbers (`/^[1-9][0-9]*$/`) with `CardId` values. There are no length caps on view strings or arrays: the Engine owns semantic limits, and the size budget is the Projector's: `fanOut` enforces the 512 KiB hard cap (PJ14, built in 2.3) with the constants above.
+- **Room code.** `roomCode` (`you` and host panel) uses `z.string().regex(ROOM_CODE_RE)`, the alphabet constant exported from `ids.ts` and shared with `RoomCodeSchema`, with no trim or uppercase transform: a view carries the canonical code, so lowercase and whitespace-padded codes are rejected in strict and loose.
+- **Not enforced by the schema.** `ViewDoc.version == view.version`, and `enabled == false` iff `view == null`, are Projector and Store obligations (steps 2.3 and M3), not parse-time checks.
+
+
 **Loose-schema rule (forward compatibility, LLD 7 open question 21).** The loose variant differs from the strict one in exactly two ways: objects accept unknown keys (`looseObject`), and every enum position (`phase`, `status`, `turn`, `profanity`, departed `reason`, and any enum added later, through `en()`) is parsed as `z.string()`, so an additive enum member (for example a new `YouTurn`) reaches the client's default branch instead of failing the parse. The strict server schemas stay closed. The `audience` discriminator and the `schema` literal stay exact: the client checks the raw envelope `schema` before parsing and treats any loose parse failure as "Update needed" (LLD 7 section 4.1).
 
-- Enumerations (`Phase`, `PlayerStatus`, `RoundPhase`, `YouTurn`, `ERROR_CODES`) are declared here as `as const` tuples. The Engine's types must equal them (type test in `packages/engine/test`, LLD 2 11.6 `_d`); the Engine imports `ErrorCode` from here, so that one cannot drift.
+- Enumerations (`Phase`, `PlayerStatus`, `RoundPhase`, `YouTurn`, departed `reason`, `ERROR_CODES`) are declared here as `as const` tuples. The Engine keeps its own literal types, and they must equal the tuples (built in #27: `packages/engine/test/contracts-view-enums.test.ts`, an `Equal<>` type assertion plus exhaustive `Record<EnginePhase, true>` maps, LLD 2 11.6 `_d`; `ErrorCode` is imported, not duplicated); the Engine imports `ErrorCode` from here, so that one cannot drift.
 - `project()` is declared to return the contracts `GameView` type, so a Projector field that is not in the schema is a compile error; the strict parse (PJ2) is the runtime half. The contracts tests also assert that `JSON.parse(JSON.stringify(game))` fails `GameViewSchema` (LLD 2 11.6).
 - **Client rule for unknown enum values.** Every `switch` over a view enum (`turn`, `phase`, `status`) has a default branch that shows the "update needed" banner (2.6). Enum **additions** are therefore additive; removals and renames are breaking.
 
@@ -221,7 +212,7 @@ Client (Hosting) and server (Functions) deploy at different times: functions fir
 | **Additive-only within a `v`** | Allowed: new optional request fields; new response and view fields (clients parse leniently); new callables; new `ErrorCode`/enum values (clients default-branch). Forbidden without bumping `v`: removing or renaming a field, making an optional request field required, changing a type, narrowing an accepted value set, changing a field's meaning |
 | **Breaking request/response change** | Bump `CONTRACT_V`. For one release the server accepts both (`MIN_V` stays at the old value, handlers branch on `input.v` through an adapter in `functions/src/api/compat/`). After the old client share is negligible, raise `MIN_V` (this is what turns old clients into `CLIENT_OUTDATED`) |
 | **Breaking view change (`ViewDoc.schema`)** | A viewer has exactly one stored doc, so the server cannot serve two schemas at once. Sequence: (1) ship a web release that parses schema N and N+1; (2) after it is dominant, deploy the server writing N+1 and run `rebuildViews` (LLD 3 6.5, which also bumps `viewsRev`); (3) drop N support later. Old clients that still run see `schema` above theirs and show the hard block |
-| **`PROJECTOR_REV`** | Content change within a schema (LLD 2 8.2), unrelated to compatibility |
+| **`PROJECTOR_REV`** | Content change within a schema (LLD 2 8.2), unrelated to compatibility; a golden change needs a bump and a new pin in `test/project/rev-pins.json`, enforced by `rev.test.ts` |
 
 The compat gate in CI (section 10.4) enforces the additive rules mechanically from frozen JSON-Schema snapshots in `packages/contracts/compat/v{N}.json`, generated at release (`bun run contracts:snapshot`).
 
@@ -622,8 +613,8 @@ Extends LLD 0 section 9. The wrapper emits one line per call through the typed l
 |---|---|
 | Command table (built, #18) | A fixture per client command parses with `CommandEnvelopeSchema`; `toEngineCommand` output deep-equals the Engine command of LLD 1 section 7; required-`expectedVersion` set equals `{confirmSubmission, writeIn, closeSubmissions, pickWinner, passJudging}` |
 | Engine round trip (in `engine/test`, since contracts cannot import the Engine) | For every `legalCommands` entry of random scenarios (LLD 1 15.1) that is a client command: wrap in an envelope, JSON round trip, parse, `toEngineCommand`, deep-equal the original (G1-style) |
-| Type equality | `ClientCommandType \| ServerOnly` equals `Command["type"]`; `ErrorCode`, `Phase`, `PlayerStatus`, `RoundPhase`, `YouTurn` equal the Engine's; `project` returns the contracts `GameView` (LLD 2 11.6) |
-| View schemas | Every golden snapshot of LLD 2 11.5 parses with the strict and the loose schema; the strict schema rejects an extra key, a missing key, `uid`, `scorePile`, and `JSON.parse(JSON.stringify(game))`; loose accepts extra keys and unknown strings in every enum position (a snapshot with `turn: "future_turn"` parses loose, fails strict) |
+| Type equality | `ClientCommandType \| ServerOnly` equals `Command["type"]`; `ErrorCode`, `Phase`, `PlayerStatus`, `RoundPhase` equal the Engine's (built, #27; `YouTurn` is pinned by an exhaustive table, and since 2.2 the Engine's `youTurn` returns the contracts `YouTurn` itself); `project` returns the contracts `GameView` (LLD 2 11.6, `types.test-d.ts`) |
+| View schemas (built, #27 and 2.2: fixtures per audience; extra and missing key at every object path; PJ7 fields; loose rule; enum tuples; the settings pieces pinned to `settings.ts`; `JSON.parse(JSON.stringify(game))` in `engine/test/view-schema-vs-game.test.ts`; the 43 view goldens and the 7 envelope cells parse strict and loose in `engine/test/project/golden-loose.test.ts`) | Every golden snapshot of LLD 2 11.5 parses with the strict and the loose schema; the strict schema rejects an extra key, a missing key, `uid`, `scorePile`, and `JSON.parse(JSON.stringify(game))`; loose accepts extra keys and unknown strings in every enum position (a snapshot with `turn: "future_turn"` parses loose, fails strict) |
 | Limits export | `MAX_SEATED`, `MAX_TOTAL_JOINS` (50), `MAX_VOTES` (1500) and `TEXT_LIMITS` (`{name:24, card:80, pitch:140}`) are exported from the index; `WIRE_TEXT_MAX` exceeds every `TEXT_LIMITS` value; `DETAIL_BY_CODE.ROOM_FULL` is `["join_cap"]`, `VARIANT_UNAVAILABLE` is `["vote_cap"]`, `NOT_AUTHORIZED` contains `seat_revoked`; the Engine imports the constants (no literal 50 or 1500 in its `join`/`castVote`) |
 | Push schemas | `RegisterPushRequestSchema` accepts and rejects at the exact boundaries of the LLD 6 regexes (`deviceId` 8 and 40 chars; `fcmToken` 50 and 4096) |
 | Error closure | Every `DETAIL_BY_CODE` value is in the `RejectionSchema` enum; every Engine `Rejection.detail` string appears in `DETAIL_BY_CODE[code]` (scan of the Engine's `reject()` call sites) |

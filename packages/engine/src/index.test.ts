@@ -6,7 +6,12 @@ import { join } from "node:path";
 describe("V9 public entry point", () => {
   test("exports exactly the names that exist so far (LLD 1 section 2.1); the Projector's exports (LLD 2) and `exportPools` (M9) extend this list later", async () => {
     const names = Object.keys(await import("./index")).sort();
-    expect(names).toEqual(["EngineInvariantError", "REMINDER_INTERVAL_MS", "actorRole", "activePlayers", "awards", "cardText", "cardsStillToWrite", "checkText", "decide", "effectiveTarget", "expectedSubmitters", "handOf", "isPaused", "makeRng", "ownSubmission", "playabilityReport", "playability", "revealList", "seated", "seatUid", "shownToTable", "submissionOwner", "submittedBy", "votesFor", "waitingOn"].sort());
+    expect(names).toEqual(["EngineInvariantError", "PROJECTOR_REV", "REMINDER_INTERVAL_MS", "DRAFT_REGION_FIELDS", "VIEW_REGION_FIELDS", "draftRegion", "fanOut", "projectFeed", "toRoundDoc", "actorRole", "activePlayers", "awards", "cardText", "cardsStillToWrite", "checkText", "decide", "docIdOf", "effectiveTarget", "expectedSubmitters", "handOf", "isPaused", "makeProjector", "makeRng", "ownSubmission", "playabilityReport", "playability", "project", "revealList", "seated", "seatUid", "shownToTable", "submissionOwner", "submittedBy", "viewerFor", "viewersOf", "votesFor", "waitingOn"].sort());
+  });
+
+  test("the Projector's internal seams are not exported: fanOutWith, assertViewDoc, sameContent, utf8Length (#29)", async () => {
+    const names = Object.keys(await import("./index"));
+    for (const hidden of ["fanOutWith", "assertViewDoc", "sameContent", "utf8Length"]) expect(names).not.toContain(hidden);
   });
 
   test("decide is the public pipeline over the real registry: an unregistered command is INVALID_ARGUMENT", async () => {

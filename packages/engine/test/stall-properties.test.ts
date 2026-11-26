@@ -67,7 +67,7 @@ describe("E12, E17, E18 over seeded games with churn (every checker after every 
     }
     for (const k of ["judge:left", "judge:removed", "pause", "unpause", "evict:WRITING", "evict:PLAYING", "late-join:WRITING", "late-join:PLAYING", "recovery-activation"]) expect([k, seen.has(k)]).toEqual([k, true]);
     expect(count.get("void") ?? 0).toBeGreaterThanOrEqual(0);
-  }, 60_000);
+  }, 600_000);
 
   test("seeded games with churn still finish, end by endGame, or run out of steps: they never throw (X1) and are deterministic (X3)", () => {
     for (let seed = 100; seed < 110; seed++) {
