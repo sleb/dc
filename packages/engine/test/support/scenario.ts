@@ -2,7 +2,6 @@ import fc from "fast-check";
 import type { Command } from "@dc/contracts";
 import { makeRng } from "../../src/rng";
 import type { Accepted, Ctx, Draft, Game, GameDrafts, Rejection, Result } from "../../src/types";
-import { assertDeepEqual } from "./assert";
 import { checkAll } from "./checks";
 import type { Step } from "./checks";
 import { counterMintId, ctxFor, deepFreeze, cid, makeGame, makePlayer, makeRound, pid, addCard } from "./factories";
@@ -112,6 +111,7 @@ export interface RunOptions {
   /** A driver replaces the `picks` choice: the run takes up to `picks.length` steps and stops when the driver returns undefined. */
   drive?: Driver;
   now?: (step: number) => number;
+  /** Also freeze the ctx. The state and the command are always frozen (the mutation guard). */
   freeze?: boolean;
   table: Readonly<Record<string, Enumerator>>;
   /** Called once after every step, rejected ones included. Observes only: the trace is the same with and without it. */
@@ -135,12 +135,18 @@ export function runScenario(decide: Decide, game0: Game | null, picks: Picks, op
     }
     if (entry === undefined || state === null) continue;
     const ctx = ctxFor({ now: opts.now?.(i) ?? 1_000 + i, rng: makeRng(`${opts.seed}:${i}`), mintId: counterMintId(10_000 * (i + 1)), actor: entry.actor, drafts: drafts as GameDrafts });
-    const before = structuredClone(state);
-    const cmdBefore = structuredClone(entry.cmd);
-    if (opts.freeze === true) { deepFreeze(state); deepFreeze(entry.cmd); deepFreeze(ctx); }
-    const result = decide(state, entry.cmd, ctx);
-    assertDeepEqual(state, before, `decide mutated its input state at step ${i}`);
-    assertDeepEqual(entry.cmd, cmdBefore, `decide mutated its command at step ${i}`);
+    // decide must not write into its inputs: they are frozen, so any write throws at the write (ES modules are strict). Only the objects the last step built are new;
+    // `deepFreeze` stops at a frozen subtree, so the cost is the step's own allocations. This replaced a structuredClone and deep compare per step (about 40% of a run).
+    deepFreeze(state);
+    deepFreeze(entry.cmd);
+    if (opts.freeze === true) deepFreeze(ctx);
+    let result: Result<Accepted, Rejection>;
+    try {
+      result = decide(state, entry.cmd, ctx);
+    } catch (e) {
+      if (e instanceof TypeError && /read.?only|frozen|not extensible|non-?configurable|delete/i.test(e.message)) throw new Error(`decide mutated its input state or command at step ${i}: ${e.message}`, { cause: e });
+      throw e;
+    }
     const step: Step = { index: i, seed: opts.seed, before: state, cmd: entry.cmd, result, actor: entry.actor, drafts };
     const draftsBefore = drafts;
     checkAll(step);

@@ -30,14 +30,18 @@ const v2: FanOutDeps = { project: v2Project, rev: PROJECTOR_REV + 1 };
 const bump = (g: Game): Game => ({ ...g, version: g.version + 1 });
 
 describe("Q1 the in-memory store, driven by fanOut over real games, equals a full rewrite after every step (PJ10, PJ11)", () => {
-  for (const storedRev of [PROJECTOR_REV, 0]) {
-    test(`storedRev ${storedRev}`, () => {
-      const seen = { steps: 0, skipped: 0, tombstones: 0 };
-      assertProperty(fc.property(fc.integer({ min: 3, max: 7 }), fc.integer(), fc.boolean(), (n, seed, churn) => {
+  // Both stored revisions run over the same generated games: generating a game is most of the cost, so each is generated once (it was twice, one property per revision).
+  test(`storedRev ${PROJECTOR_REV} (skipping) and storedRev 0 (every target rewritten), over the same games`, () => {
+    const revs = [PROJECTOR_REV, 0] as const;
+    const seenBy = new Map(revs.map((r) => [r, { steps: 0, skipped: 0, tombstones: 0 }]));
+    assertProperty(fc.property(fc.integer({ min: 3, max: 7 }), fc.integer(), fc.boolean(), (n, seed, churn) => {
+      const steps = stepsOf(seed, n, churn, true);
+      for (const storedRev of revs) {
+        const seen = seenBy.get(storedRev)!;
         const store = new SimStore();
         const gone = new Set<string>();
         let prev: Game | null = null;
-        for (const { prev: p, next } of stepsOf(seed, n, churn, true)) {
+        for (const { prev: p, next } of steps) {
           if (prev === null) {
             store.apply(fanOutWith(real, null, p, { now: NOW, storedRev }));
             store.viewsRev = PROJECTOR_REV;
@@ -61,12 +65,15 @@ describe("Q1 the in-memory store, driven by fanOut over real games, equals a ful
           seen.skipped += viewersOf(next).length - writes.filter((w) => live.has(w.docId)).length;
           seen.tombstones += writes.filter((w) => w.doc.view?.kind === "departed" && w.doc.view.reason === "gone").length;
         }
-      }));
-      expect(seen.steps).toBeGreaterThan(200);
-      if (storedRev === PROJECTOR_REV) expect(seen.skipped).toBeGreaterThan(0);
-      else expect(seen.skipped).toBe(0); // with every doc stored at another rev, every target is rewritten at every step
-    }, 600_000);
-  }
+      }
+    }));
+    for (const storedRev of revs) {
+      const seen = seenBy.get(storedRev)!;
+      expect(seen.steps, `storedRev ${storedRev}`).toBeGreaterThan(200);
+      if (storedRev === PROJECTOR_REV) expect(seen.skipped, `storedRev ${storedRev}`).toBeGreaterThan(0);
+      else expect(seen.skipped, `storedRev ${storedRev}`).toBe(0); // with every doc stored at another rev, every target is rewritten at every step
+    }
+  }, 600_000);
 });
 
 describe("Q2 a projector deploy (viewsRev behind)", () => {

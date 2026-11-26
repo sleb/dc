@@ -6,6 +6,8 @@ import { addCard, cid, counterMintId, ctxFor, deepFreeze, makeGame, makePlayer, 
 import { JUNK_TYPES, junkCommands, legalCommands, missingEnumerators } from "./legal";
 import { fixtureEnumerators, fixtureRegistry } from "./fixtures";
 import { makeDecide } from "../../src/decide";
+import type { Command } from "@dc/contracts";
+import type { Ctx, Game } from "../../src/types";
 import { buildGame, membershipDriver, progressDriver, runScenario, zeroTime } from "./scenario";
 import type { AfterStepInfo } from "./scenario";
 import { decide } from "../../src/decide";
@@ -191,4 +193,30 @@ describe("H1 afterStep", () => {
     runScenario(decide, created(false), picks, { seed: 3, table: enumerators, drive: progressDriver("3", 4, enumerators, true), afterStep: () => { n++; } });
     expect(n).toBeGreaterThan(30);
   });
+});
+
+// runScenario guards decide's inputs: a decide that writes into the state or the command it was given fails the run, at any depth, on any step, and
+// whether the write changes a value, adds a key (an undefined one included) or removes one. Proven before and after the guard moved from clone-and-compare to freezing.
+describe("H2 runScenario refuses a decide that mutates its inputs", () => {
+  const picks = Array.from({ length: 60 }, () => ({ kind: "legal" as const, pick: 0 }));
+  const at = (k: number, mutate: (state: Game, cmd: Command) => void) => {
+    let i = 0;
+    // the write happens inside the call, after decide has read its inputs: a handler that writes into the input as it builds the result
+    return (state: Game | null, cmd: Command, ctx: Ctx) => { const r = decide(state, cmd, ctx); if (i++ === k && state !== null) mutate(state, cmd); return r; };
+  };
+  const drive = () => membershipDriver("5", 4, enumerators);
+  const runWith = (d: ReturnType<typeof at>) => runScenario(d, created(true), picks, { seed: 5, table: enumerators, drive: drive() });
+
+  test("the unmutated run completes (the cases below fail for the mutation, not for the wrapper)", () => {
+    expect(runWith(at(-1, () => {})).results.length).toBeGreaterThan(20);
+  });
+  const cases: [string, number, (s: Game, c: Command) => void][] = [
+    ["a top-level field on the first step", 0, (s) => { (s as { roomCode: string }).roomCode = "ZZZZ"; }],
+    ["a nested field after the state has been through earlier steps", 12, (s) => { (s.players[0] as { name: string }).name = "Mutated"; }],
+    ["an array push deep in the state", 15, (s) => { (s.players as unknown[]).push(structuredClone(s.players[0])); }],
+    ["a new key holding undefined", 8, (s) => { (s as unknown as Record<string, unknown>).extra = undefined; }],
+    ["a deleted key", 10, (s) => { delete (s.settings as unknown as Record<string, unknown>).profanity; }],
+    ["the command", 6, (_s, c) => { (c as unknown as Record<string, unknown>).type = "mutated"; }],
+  ];
+  for (const [name, k, mutate] of cases) test(`${name}`, () => { expect(() => runWith(at(k, mutate))).toThrow(); });
 });

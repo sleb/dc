@@ -233,3 +233,48 @@ describe("O4 the oracle is independent of the code it checks", () => {
     for (const i of imports) expect(i, i).not.toMatch(/src\/(selectors|project|rules)|\.\.\/selectors|\.\.\/rules/);
   });
 });
+
+// The suite passes the detectors a run has on, and the oracle skips the classes nobody will read (a run with one detector on paid for all eight).
+// Gating must change nothing a caller sees: for every subset, the findings are the full findings filtered to that subset, in the same order.
+describe("O5 gating by detector is the full result filtered", () => {
+  const ALL: readonly Detector[] = ["cards", "drafts", "ownership", "identity", "internals", "strictParse", "othersData", "writeInMarker"];
+  const g = judging();
+  const w = writing();
+  const wDrafts: GameDrafts = { [pid(0)]: { red: ["R0001x"], green: [] } };
+  type V = Record<string, unknown> & { players: Record<string, unknown>[]; round: { reveal: Record<string, unknown>[] } & Record<string, unknown>; you: Record<string, unknown> };
+  const leaky = (game: Game, viewer: OracleViewer & Parameters<typeof project>[1], drafts: GameDrafts, m: (v: V, d: Doc) => void): Doc => { const d = structuredClone(live(game, viewer, drafts)); m(d.view as V, d); return d; };
+  // every class at once, in one doc, so a gate that drops or reorders a class shows up
+  const docs: [Game, GameDrafts, OracleViewer, Doc][] = [
+    [g, NONE, P(5), live(g, P(5))],
+    [g, NONE, P(5), leaky(g, P(5), NONE, (v) => {
+      v.players[0]!.name = g.cards[cid(100)]!.text; v.players[1]!.name = cid(101); v.players[2]!.name = "host-uid";
+      v.round.reveal[0]!.playerId = pid(2); v.round.reveal[0]!.writeIn = true; v.round.revealOrder = 1; v.mystery = 1; v.players[3]!.hand = {};
+    })],
+    [g, NONE, SPEC, leaky(g, SPEC, NONE, (v) => { v.players[0]!.name = `join ${g.roomCode}`; v.you = { playerId: pid(1) }; })],
+    [w, wDrafts, P(2), leaky(w, P(2), wDrafts, (v, d) => { v.players[1]!.name = "R0001x"; d.draft = { red: ["R0001x"], green: [] }; })],
+  ];
+  const subsets: Detector[][] = [[], ...ALL.map((d) => [d]), ["cards", "strictParse"], ["identity", "ownership", "writeInMarker"], ALL.filter((d) => d !== "strictParse"), [...ALL]];
+
+  test("the corpus raises every class (the comparison below is not vacuous)", () => {
+    expect(kinds(docs.flatMap(([gm, dr, vw, d]) => checkDoc(gm, dr, vw, d)))).toEqual([...ALL].sort());
+  });
+  test("checkDoc, every mode and parse setting", () => {
+    for (const [gm, dr, vw, d] of docs) for (const mode of ["includes", "tokens"] as const) for (const parse of [true, false]) {
+      const full = checkDoc(gm, dr, vw, d, { mode, parse });
+      for (const s of subsets) expect(checkDoc(gm, dr, vw, d, { mode, parse, detectors: new Set(s) }), `${s.join()} ${mode} ${parse}`).toEqual(full.filter((f) => s.includes(f.detector)));
+    }
+  });
+  test("checkRoundDoc", () => {
+    const rec = { round: 1, judgeId: pid(1), greenCardId: cid(900), plays: [], winnerCardId: cid(206), winnerId: pid(2), green: { id: cid(900), text: "the green card" }, playsDetail: [{ playerId: pid(2), cardId: cid(206), text: g.cards[cid(206)]!.text }], absent: [], resolvedAt: 5 };
+    const bad = structuredClone(toRoundDoc(rec)) as unknown as Record<string, unknown> & { plays: Record<string, unknown>[] };
+    bad.votes = []; bad.hand = []; bad.owner = pid(3); bad.extra = "host-uid";
+    bad.plays[0]!.text = g.cards[cid(100)]!.text; bad.plays[0]!.writeIn = true; bad.plays[0]!.cardId = cid(306);
+    const drafts: GameDrafts = { [pid(4)]: { red: ["R0002x"], green: [] } };
+    (bad.plays[0] as Record<string, unknown>).pitch = "R0002x";
+    for (const mode of ["includes", "tokens"] as const) {
+      const full = checkRoundDoc(g, rec, bad as unknown as RoundDoc, drafts, mode);
+      expect(kinds(full).length).toBeGreaterThanOrEqual(6);
+      for (const s of subsets) expect(checkRoundDoc(g, rec, bad as unknown as RoundDoc, drafts, mode, new Set(s)), `${s.join()} ${mode}`).toEqual(full.filter((f) => s.includes(f.detector)));
+    }
+  });
+});
