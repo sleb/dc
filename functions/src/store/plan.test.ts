@@ -16,7 +16,8 @@ import type { DocWrite } from "./writeset";
 
 // P1-P6 (LLD 3 sections 5.2-5.7): the pure planner, from the step-1 reads to an outcome and the writes. Games are real, built through `decide`.
 const NOW = 50_000_000;
-const DEPS: PlanDeps = { now: NOW, seed: "plan-seed", mintId: () => "c_zzzzzzzzzz" };
+let minted = 0;
+const DEPS: PlanDeps = { now: NOW, seed: "plan-seed", mintId: () => `c_z${(minted++).toString(36).padStart(9, "0")}` };
 
 const docOf = (game: Game, viewsRev = PROJECTOR_REV, deleting: GameDoc["store"]["deleting"] = null): GameDoc => ({ ...game, store: { schema: 1, viewsRev, updatedAt: 1, deleting } });
 const userOf = (uid: string): Actor => ({ kind: "user", uid });
@@ -158,18 +159,18 @@ describe("P2 the writes of an accepted aggregate change", () => {
     const m = MemGame.playing(3);
     let last: MemGame["steps"][number] | undefined;
     while (m.game.phase === "PLAYING") {
+      m.submitAll();
       const before = m.game;
       const r = m.game.round;
-      if (r?.phase === "JUDGING") {
-        const judge = m.game.players.find((p) => p.id === r.judgeId);
-        const cmd = { type: "pickWinner", submissionId: r.revealOrder?.[0], expectedVersion: r.changedAtVersion } as Command;
-        const p = plan({ game: docOf(before), idem: null }, input(before, userOf(judge?.uid ?? ""), cmd));
-        m.run(userOf(judge?.uid ?? ""), cmd);
-        const del = byPath(p.writes).get(roomCodePath(before.roomCode));
-        if ((m.game.phase as string) === "FINISHED") expect(del?.op).toBe("delete");
-        else expect(del).toBeUndefined();
-        last = m.steps.at(-1);
-      } else m.playRound();
+      if (r?.phase !== "JUDGING") throw new Error("not judging");
+      const judge = m.game.players.find((p) => p.id === r.judgeId);
+      const cmd = { type: "pickWinner", submissionId: r.revealOrder?.[0], expectedVersion: r.changedAtVersion } as Command;
+      const p = plan({ game: docOf(before), idem: null }, input(before, userOf(judge?.uid ?? ""), cmd));
+      m.run(userOf(judge?.uid ?? ""), cmd);
+      const del = byPath(p.writes).get(roomCodePath(before.roomCode));
+      if ((m.game.phase as string) === "FINISHED") expect(del?.op).toBe("delete");
+      else expect(del).toBeUndefined();
+      last = m.steps.at(-1);
     }
     expect(last?.next.phase).toBe("FINISHED");
     const e = MemGame.playing(3);

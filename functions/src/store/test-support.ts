@@ -101,20 +101,23 @@ export class MemGame {
     return this;
   }
 
-  /** Submits for everyone owed, closes if needed, and picks the first revealed card. Returns false when no round is open. */
-  playRound(): boolean {
-    const r0 = this.game.round;
-    if (this.game.phase !== "PLAYING" || r0 === null || this.game.paused) return false;
-    if (r0.phase === "SUBMITTING") {
-      for (const p of this.game.players) {
-        const r = this.game.round;
-        if (r === null || r.phase !== "SUBMITTING") break;
-        if (p.status !== "active" || !r.roster.includes(p.id) || p.id === r.judgeId || r.submissions.some((s) => s.playerId === p.id) || p.hand.length === 0) continue;
-        this.run({ kind: "user", uid: p.uid }, { type: "confirmSubmission", cardId: p.hand[0], expectedVersion: r.changedAtVersion } as Command);
-      }
+  /** Submits for everyone owed and closes the round if it is still open; leaves it JUDGING. */
+  submitAll(): void {
+    if (this.game.phase !== "PLAYING" || this.game.paused) return;
+    for (const p of this.game.players) {
+      const r = this.game.round;
+      if (r === null || r.phase !== "SUBMITTING") break;
+      if (p.status !== "active" || !r.roster.includes(p.id) || p.id === r.judgeId || r.submissions.some((s) => s.playerId === p.id) || p.hand.length === 0) continue;
+      this.run({ kind: "user", uid: p.uid }, { type: "confirmSubmission", cardId: p.hand[0], expectedVersion: r.changedAtVersion } as Command);
     }
     const r1 = this.game.round;
     if (r1 !== null && r1.phase === "SUBMITTING") this.host({ type: "closeSubmissions", expectedVersion: r1.changedAtVersion } as Command);
+  }
+
+  /** Submits for everyone owed, closes if needed, and picks the first revealed card. Returns false when no round is open. */
+  playRound(): boolean {
+    if (this.game.phase !== "PLAYING" || this.game.round === null || this.game.paused) return false;
+    this.submitAll();
     const r2 = this.game.round;
     if (r2 === null || r2.phase !== "JUDGING") return this.game.round !== null;
     const judge = this.game.players.find((p) => p.id === r2.judgeId);
