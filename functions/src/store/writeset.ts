@@ -96,6 +96,6 @@ export function applyWrites(tx: Transaction, db: Firestore, writes: readonly Doc
     else if (w.op === "set") tx.set(ref, toFirestore(w.data));
     else if (w.op === "update") tx.update(ref, toFirestore(w.data));
     else if (w.op === "delete") tx.delete(ref);
-    else tx.set(ref, toFirestore(w.data), { mergeFields: w.fields });
+    else if (w.op === "merge") tx.set(ref, toFirestore(w.data), { mergeFields: w.fields });
   }
 }

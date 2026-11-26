@@ -132,4 +132,29 @@ export class MemGame {
     if (m.game.phase !== "PLAYING") throw new Error(`playing: phase ${m.game.phase}`);
     return m;
   }
+
+  /**
+   * The `departed40` shape of LLD 3 section 10.1, in WRITING: 50 joins (the cap), 40 departed, 10 seated, the host unseated (their seat left), so
+   * `viewersOf` names 52 docs: 10 seated, the unseated host, the spectator doc, 40 tombstones (LLD 3 section 5.7's worst case). Departures are after
+   * `startGame` because a LOBBY leaver leaves no record.
+   */
+  static departed40(o: Parameters<typeof MemGame.create>[0] = {}): MemGame {
+    const m = MemGame.create(o).joinAll(10);
+    m.start();
+    m.host({ type: "leave" } as Command);
+    for (let k = 10; k < 50; k++) {
+      m.join(k);
+      m.as(k, { type: "leave" } as Command);
+    }
+    m.join(50);
+    return m;
+  }
 }
+
+/** A copy of `game` whose history repeats its first resolved round until it holds `rounds` entries (numbered 1..rounds), so one card is in every round. */
+export function withRepeatedHistory(game: Game, rounds: number): Game {
+  const first = game.history[0];
+  if (first === undefined) throw new Error("withRepeatedHistory: no resolved round");
+  return { ...game, history: Array.from({ length: rounds }, (_, k) => ({ ...first, round: k + 1 })) };
+}
+
