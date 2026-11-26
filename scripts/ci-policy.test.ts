@@ -266,11 +266,12 @@ describe("C8 verify (P7, P8, P13)", () => {
     expect(indexOfRun("verify", "git diff --exit-code")).toBeGreaterThan(indexOfRun("verify", "bun run build:web"));
   });
   // #31: the view fixtures are regenerated immediately before the drift check, so a golden change that is not re-exported fails CI.
-  test("the view fixtures are regenerated immediately before git diff --exit-code", () => {
-    const fixtures = indexOfRun("verify", "bun run fixtures:views");
-    const diff = indexOfRun("verify", "git diff --exit-code");
+  test("the view fixtures are regenerated in the step immediately before git diff --exit-code", () => {
+    // Step indices, not run indices: a `uses:` step inserted between them must fail too.
+    const fixtures = steps("verify").findIndex((s) => s.run?.includes("bun run fixtures:views"));
+    const diff = steps("verify").findIndex((s) => s.run?.includes("git diff --exit-code"));
     expect(fixtures).toBeGreaterThanOrEqual(0);
-    expect(fixtures).toBe(diff - 1);
+    expect(diff).toBe(fixtures + 1);
   });
   test("installs with a frozen lockfile and uses the pinned Bun and Node", () => {
     expect(v().some((r) => r.trim() === "bun install --frozen-lockfile")).toBe(true);
