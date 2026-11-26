@@ -8,14 +8,14 @@ import { FIXTURES, judging, finished, submitting, unseatHost, writing } from "./
 import { keyOrderViolations, reverseKeys } from "./keyorder";
 
 const NOW = 1_700_000_000_000;
-const docsOf = () => Object.values(FIXTURES).flatMap((make) => [make(), unseatHost(make())]).flatMap((g) => fanOut(null, g, { now: NOW, skipUnchanged: false }).map((w) => w.doc));
+const docsOf = () => Object.values(FIXTURES).flatMap((make) => [make(), unseatHost(make())]).flatMap((g) => fanOut(null, g, { now: NOW, storedRev: 0 }).map((w) => w.doc));
 
 describe("A7 keyOrderViolations", () => {
   test("every doc of every fixture, every audience, is in schema order (draft region too)", () => {
     const docs = docsOf();
     expect(docs.length).toBeGreaterThan(50);
     for (const d of docs) expect(keyOrderViolations(d, ViewDocSchema)).toEqual([]);
-    expect(keyOrderViolations({ ...fanOut(null, writing(), { now: NOW, skipUnchanged: false })[2]!.doc, draftSeq: 1, draft: { red: [], green: [] } }, ViewDocSchema)).toEqual([]);
+    expect(keyOrderViolations({ ...fanOut(null, writing(), { now: NOW, storedRev: 0 })[2]!.doc, draftSeq: 1, draft: { red: [], green: [] } }, ViewDocSchema)).toEqual([]);
   });
 
   test("a RoundDoc built by toRoundDoc is in schema order", () => {
@@ -24,7 +24,7 @@ describe("A7 keyOrderViolations", () => {
   });
 
   test("swapping two keys anywhere is reported with its path: top level, nested, inside an array element, inside a union member", () => {
-    const doc = structuredClone(fanOut(null, judging(), { now: NOW, skipUnchanged: false }).find((w) => w.doc.view?.audience === "player")!.doc) as unknown as Record<string, unknown>;
+    const doc = structuredClone(fanOut(null, judging(), { now: NOW, storedRev: 0 }).find((w) => w.doc.view?.audience === "player")!.doc) as unknown as Record<string, unknown>;
     expect(keyOrderViolations(doc, ViewDocSchema)).toEqual([]);
     const swap = (o: Record<string, unknown>, a: string, b: string): Record<string, unknown> => {
       const keys = Object.keys(o);
@@ -48,7 +48,7 @@ describe("A7 keyOrderViolations", () => {
   });
 
   test("the audience tag leads in a live view, and an optional key may be absent", () => {
-    const v = fanOut(null, submitting(), { now: NOW, skipUnchanged: false }).find((w) => w.doc.view?.audience === "player")!.doc.view!;
+    const v = fanOut(null, submitting(), { now: NOW, storedRev: 0 }).find((w) => w.doc.view?.audience === "player")!.doc.view!;
     expect(Object.keys(v)[0]).toBe("audience");
     const { audience, ...rest } = v;
     expect(keyOrderViolations({ schema: "x", viewsRev: 1, gameId: v.gameId, enabled: true, version: 1, generatedAt: 1, view: { ...rest, audience } }, ViewDocSchema).length).toBeGreaterThan(0);
@@ -66,7 +66,7 @@ describe("A7 keyOrderViolations", () => {
 
   test("a record is ascending by its numeric key", () => {
     const g = finished();
-    const w = fanOut(null, g, { now: NOW, skipUnchanged: false }).find((x) => x.doc.view?.audience === "player")!.doc as unknown as { view: { you: { myVotes: Record<string, string> } } };
+    const w = fanOut(null, g, { now: NOW, storedRev: 0 }).find((x) => x.doc.view?.audience === "player")!.doc as unknown as { view: { you: { myVotes: Record<string, string> } } };
     expect(Object.keys(w.view.you.myVotes).length).toBeGreaterThan(1);
     expect(keyOrderViolations(w, ViewDocSchema)).toEqual([]);
     // a record whose keys are not ascending (only possible for non-integer keys) is reported

@@ -30,8 +30,8 @@ const v2: FanOutDeps = { project: v2Project, rev: PROJECTOR_REV + 1 };
 const bump = (g: Game): Game => ({ ...g, version: g.version + 1 });
 
 describe("Q1 the in-memory store, driven by fanOut over real games, equals a full rewrite after every step (PJ10, PJ11)", () => {
-  for (const skip of [true, false]) {
-    test(`skipUnchanged ${skip}`, () => {
+  for (const storedRev of [PROJECTOR_REV, 0]) {
+    test(`storedRev ${storedRev}`, () => {
       const seen = { steps: 0, skipped: 0, tombstones: 0 };
       assertProperty(fc.property(fc.integer({ min: 3, max: 7 }), fc.integer(), fc.boolean(), (n, seed, churn) => {
         const store = new SimStore();
@@ -39,14 +39,14 @@ describe("Q1 the in-memory store, driven by fanOut over real games, equals a ful
         let prev: Game | null = null;
         for (const { prev: p, next } of stepsOf(seed, n, churn, true)) {
           if (prev === null) {
-            store.apply(fanOutWith(real, null, p, { now: NOW, skipUnchanged: skip }));
+            store.apply(fanOutWith(real, null, p, { now: NOW, storedRev }));
             store.viewsRev = PROJECTOR_REV;
             expect(divergence(store, p, makeProjector, gone)).toEqual([]);
           }
           prev = p;
           for (const id of vanished(p, next)) gone.add(id);
           const before = new Map([...store.docs].map(([k, d]) => [k, JSON.stringify(d)]));
-          const writes = fanOutWith(real, p, next, { now: NOW, skipUnchanged: skip });
+          const writes = fanOutWith(real, p, next, { now: NOW, storedRev });
           const written = new Set(writes.map((w) => w.docId));
           store.apply(writes);
           expect(divergence(store, next, makeProjector, gone)).toEqual([]);
@@ -55,16 +55,16 @@ describe("Q1 the in-memory store, driven by fanOut over real games, equals a ful
           // a skipped-on write is never a no-op, and every write is a target or a vanished id
           const live = new Set(viewersOf(next).map((t) => t.docId));
           for (const w of writes) expect(live.has(w.docId) || vanished(p, next).includes(w.docId)).toBe(true);
-          // with skip on, every write to an existing doc changes what its reader sees (the version alone does not count)
-          if (skip) for (const w of writes) { const old = JSON.parse(before.get(w.docId) ?? "null") as ViewDoc | null; if (old !== null) expect(sameContent(old, w.doc), `${w.docId} rewritten with the same content`).toBe(false); }
+          // skipping, every write to an existing doc changes what its reader sees (the version alone does not count)
+          if (storedRev === PROJECTOR_REV) for (const w of writes) { const old = JSON.parse(before.get(w.docId) ?? "null") as ViewDoc | null; if (old !== null) expect(sameContent(old, w.doc), `${w.docId} rewritten with the same content`).toBe(false); }
           seen.steps++;
           seen.skipped += viewersOf(next).length - writes.filter((w) => live.has(w.docId)).length;
           seen.tombstones += writes.filter((w) => w.doc.view?.kind === "departed" && w.doc.view.reason === "gone").length;
         }
       }));
       expect(seen.steps).toBeGreaterThan(200);
-      if (skip) expect(seen.skipped).toBeGreaterThan(0);
-      else expect(seen.skipped).toBe(0); // with skip off every target is rewritten at every step
+      if (storedRev === PROJECTOR_REV) expect(seen.skipped).toBeGreaterThan(0);
+      else expect(seen.skipped).toBe(0); // with every doc stored at another rev, every target is rewritten at every step
     }, 600_000);
   }
 });
@@ -86,10 +86,10 @@ describe("Q2 a projector deploy (viewsRev behind)", () => {
   test("a rollback (store.viewsRev above the running PROJECTOR_REV) never skips: every doc is rewritten and viewsRev is set back (LLD 3 rule, fail safe)", () => {
     const g = submitting();
     const s = new SimStore();
-    s.apply(fanOutWith(real, null, g, { now: NOW - 1, skipUnchanged: false }));
+    s.apply(fanOutWith(real, null, g, { now: NOW - 1, storedRev: 0 }));
     s.viewsRev = PROJECTOR_REV + 1;
     const next = bump(g); // no visible change: skip-unchanged would write nothing
-    expect(fanOutWith(real, g, next, { now: NOW, skipUnchanged: true })).toEqual([]);
+    expect(fanOutWith(real, g, next, { now: NOW, storedRev: PROJECTOR_REV })).toEqual([]);
     const writes = commit(s, real, g, next, { aggregateChanged: true, now: NOW });
     expect(writes.map((w) => w.docId)).toEqual(viewersOf(next).map((t) => t.docId));
     expect(s.viewsRev).toBe(PROJECTOR_REV);
@@ -112,19 +112,20 @@ describe("Q2 a projector deploy (viewsRev behind)", () => {
   test("SimStore refuses a write that would lower (version, viewsRev)", () => {
     const g = judging();
     const s = new SimStore();
-    s.apply(fanOutWith(real, null, bump(g), { now: NOW, skipUnchanged: false }));
-    expect(() => s.apply(fanOutWith(real, null, g, { now: NOW, skipUnchanged: false }))).toThrow(/PJ10/);
+    s.apply(fanOutWith(real, null, bump(g), { now: NOW, storedRev: 0 }));
+    expect(() => s.apply(fanOutWith(real, null, g, { now: NOW, storedRev: 0 }))).toThrow(/PJ10/);
   });
 });
 
-describe("Q3 test the test: a stale stored projection is flagged when skip is on across a deploy, and converges with skip off", () => {
+describe("Q3 test the test: a stale stored projection is flagged, and the Store contract converges", () => {
   const g1 = submitting();
   // one change only player 4 can see: after the deploy every other doc would be skipped
   const g2 = bump({ ...g1, cards: { ...g1.cards, [g1.players[4]?.hand[0] ?? ""]: { kind: "red", text: "CHANGED" } } });
-  const populate = (): SimStore => { const s = new SimStore(); s.apply(fanOutWith(real, null, g1, { now: NOW, skipUnchanged: false })); return s; };
-  test("skip on across the deploy: the oracle sees stale docs", () => {
+  const populate = (): SimStore => { const s = new SimStore(); s.apply(fanOutWith(real, null, g1, { now: NOW, storedRev: 0 })); return s; };
+  test("a store that kept the old docs across the deploy is flagged (the bug the storedRev check rules out)", () => {
     const s = populate();
-    s.apply(fanOutWith(v2, g1, g2, { now: NOW, skipUnchanged: true }));
+    // `fanOut` refuses to skip while the stored rev is behind, so a skipping store is hand-built here: only the doc whose content changed.
+    s.apply(fanOutWith(v2, g1, g2, { now: NOW, storedRev: PROJECTOR_REV }).filter((w) => w.docId === uidOf(4)));
     const bad = divergence(s, g2, v2Project, new Set());
     expect(bad.length).toBeGreaterThan(0);
     expect(bad.some((b) => b.includes("differs from the projection"))).toBe(true);
@@ -132,7 +133,7 @@ describe("Q3 test the test: a stale stored projection is flagged when skip is on
   });
   test("skip off (the rebuild rule) converges", () => {
     const s = populate();
-    s.apply(fanOutWith(v2, g1, g2, { now: NOW, skipUnchanged: false }));
+    s.apply(fanOutWith(v2, g1, g2, { now: NOW, storedRev: 0 }));
     expect(divergence(s, g2, v2Project, new Set())).toEqual([]);
   });
   test("the Store contract (commit) converges, because viewsRev is behind", () => {

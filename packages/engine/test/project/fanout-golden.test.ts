@@ -19,7 +19,7 @@ describe("G1 the draft region", () => {
 
 describe("G1 the size table: serialized bytes of every doc of the 10-player maximal fixtures", () => {
   test("by docId order", () => {
-    const table = (g: Game) => fanOut(null, g, { now: NOW, skipUnchanged: false }).map((w) => [w.docId, w.doc.view?.audience ?? "disabled", utf8Length(JSON.stringify(w.doc))]);
+    const table = (g: Game) => fanOut(null, g, { now: NOW, storedRev: 0 }).map((w) => [w.docId, w.doc.view?.audience ?? "disabled", utf8Length(JSON.stringify(w.doc))]);
     expect({ judging: table(maximalJudging()), finished: table(maximalFinished()) }).toMatchSnapshot();
   });
 });

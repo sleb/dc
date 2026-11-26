@@ -35,7 +35,7 @@ describe("S2 every doc of the maximal fixtures stays within the 64 KiB budget", 
     test(name, () => {
       const g = make();
       expect(viewersOf(g).length).toBeGreaterThanOrEqual(11);
-      const writes = fanOut(null, g, { now: 1_700_000_000_000, skipUnchanged: false });
+      const writes = fanOut(null, g, { now: 1_700_000_000_000, storedRev: 0 });
       expect(writes.length).toBe(viewersOf(g).length);
       let largest = 0;
       for (const w of writes) {
@@ -49,7 +49,7 @@ describe("S2 every doc of the maximal fixtures stays within the 64 KiB budget", 
   }
   test("the 1500 votes are really in the host's doc", () => {
     const g = maximalFinished();
-    const host = fanOut(null, g, { now: 1, skipUnchanged: false }).find((w) => w.doc.view?.audience === "player" && w.doc.view.you.isHost);
+    const host = fanOut(null, g, { now: 1, storedRev: 0 }).find((w) => w.doc.view?.audience === "player" && w.doc.view.you.isHost);
     const view = host?.doc.view;
     expect(view?.audience === "player" ? Object.keys(view.you.myVotes).length : 0).toBe(1500);
   });
@@ -90,7 +90,7 @@ describe("S3 the 512 KiB hard cap", () => {
     };
     let message = "";
     try {
-      fanOutWith({ project: inflate, rev: PROJECTOR_REV }, null, g, { now: 1, skipUnchanged: false });
+      fanOutWith({ project: inflate, rev: PROJECTOR_REV }, null, g, { now: 1, storedRev: 0 });
     } catch (e) {
       expect(e).toBeInstanceOf(EngineInvariantError);
       message = (e as Error).message;

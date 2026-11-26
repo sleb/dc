@@ -20,8 +20,8 @@ import { maximalJudging } from "./maximal";
 import { stepsOf } from "./scenarios";
 
 const NOW = 1_700_000_000_000;
-const on = { now: NOW, skipUnchanged: true } as const;
-const off = { now: NOW, skipUnchanged: false } as const;
+const on = { now: NOW, storedRev: PROJECTOR_REV } as const;
+const off = { now: NOW, storedRev: 0 } as const;
 const ids = (ws: readonly ViewWrite[]): string[] => ws.map((w) => w.docId);
 const bump = (g: Game): Game => ({ ...g, version: g.version + 1 });
 const reverseKeys = <T extends object>(o: T): T => Object.fromEntries(Object.entries(o).reverse()) as T;
@@ -159,6 +159,17 @@ describe("F2 only what a viewer can see counts as a change", () => {
   });
   test("a version bump alone writes nothing", () => {
     for (const make of Object.values(FIXTURES)) { const g = make(); expect(fanOut(g, bump(g), on)).toEqual([]); }
+  });
+  test("skipping needs the stored docs at the running rev: any other stored rev rewrites every doc, so no doc can keep an older viewsRev", () => {
+    for (const make of Object.values(FIXTURES)) {
+      const g = make();
+      const next = bump(g); // no visible change: the skip case
+      expect(fanOut(g, next, { now: NOW, storedRev: PROJECTOR_REV })).toEqual([]);
+      for (const storedRev of [0, PROJECTOR_REV - 1, PROJECTOR_REV + 1]) {
+        if (storedRev === PROJECTOR_REV) continue;
+        expect(ids(fanOut(g, next, { now: NOW, storedRev })), `storedRev ${storedRev}`).toEqual(viewersOf(next).map((t) => t.docId));
+      }
+    }
   });
   test("a vote changes only the voter's own myVotes (hand-built)", () => {
     const g = { ...lobby(), settings: settings({ peoplesChoice: true }) };

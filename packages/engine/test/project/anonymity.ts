@@ -395,7 +395,7 @@ export function runAnonymitySuite(impl: ProjectorUnderTest, o: SuiteOptions): Su
     const NOW = 1_700_000_000_000;
     if (fanOk) {
       viewerLabel = "(fanOut)";
-      const ok = guard("strictParse", "the first fan-out", () => { store.apply(fanOutWith(fan, null, spec0, { now: NOW, skipUnchanged: false })); store.viewsRev = PROJECTOR_REV; return true; });
+      const ok = guard("strictParse", "the first fan-out", () => { store.apply(fanOutWith(fan, null, spec0, { now: NOW, storedRev: 0 })); store.viewsRev = PROJECTOR_REV; return true; });
       fanOk = ok === true;
     }
     let lastGame: Game = spec0;
@@ -463,7 +463,7 @@ export function runAnonymitySuite(impl: ProjectorUnderTest, o: SuiteOptions): Su
             for (const v of keyOrderViolations(w.doc, ViewDocSchema)) fail("keyOrder", w.docId, v);
           }
           if (s.index % 5 === 0) {
-            const reissue = guard("strictParse", "a reissue", () => fanOutWith(fan, s.after, s.after, { now: NOW + 1, skipUnchanged: true }));
+            const reissue = guard("strictParse", "a reissue", () => fanOutWith(fan, s.after, s.after, { now: NOW + 1, storedRev: PROJECTOR_REV }));
             if (reissue !== undefined && reissue.length > 0) fail("versioning", "(fanOut)", "a rejoin or reissue wrote a view");
           }
         }

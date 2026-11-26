@@ -1,5 +1,5 @@
 // Fan-out (LLD 2 section 8): from the state before and after a command, every view write the Store must make, in `viewersOf` order, then the tombstones. Pure and deterministic (PJ1).
-// Correctness never depends on events (PJ11); skip-unchanged only removes writes whose content did not change. Every returned doc has been strict-parsed and size-capped (PJ2, PJ14).
+// Correctness never depends on events (PJ11); skip-unchanged only removes writes whose content did not change, and only while the stored docs already carry the running rev (8.2). Every returned doc has been strict-parsed and size-capped (PJ2, PJ14).
 import { VIEW_DOC_MAX_BYTES, VIEW_SCHEMA, ViewDocSchema } from "@dc/contracts";
 import type { Draft, GameView, ViewDoc } from "@dc/contracts";
 import { EngineInvariantError } from "../errors";
@@ -27,6 +27,18 @@ export const DRAFT_REGION_FIELDS = ["draftSeq", "draft"] as const;
 /** The draft region for a draft save: a fresh copy of the draft and its counter. */
 export function draftRegion(draft: Draft | null, seq: number): { draftSeq: number; draft: Draft | null } {
   return { draftSeq: seq, draft: draft === null ? null : { red: [...draft.red], green: [...draft.green] } };
+}
+
+/** The fan-out inputs that are not `Game`s: the Store's own `viewsRev` and `now`, and the test seam's projector and revision. */
+export interface FanOutOptions {
+  now: number;
+  /**
+   * The `viewsRev` of the view docs already stored for `prev` (the Store's `store.viewsRev`, LLD 3 2.2; 0 when nothing is written yet).
+   * A doc is skipped only when this equals `deps.rev`, so a skip can never leave a doc behind at an older `viewsRev`: a deploy
+   * (stored behind) or a rollback (stored ahead) rewrites every doc, the LLD 2 8.2 rule the Store relies on. Deliberately not a
+   * boolean: the caller cannot ask for a skip while claiming nothing about what is stored.
+   */
+  storedRev: number;
 }
 
 /** The test seam: a projector factory and a revision, so a stale or leaky projector can be exercised without touching the real one. */
@@ -84,7 +96,8 @@ function tombstone(game: Game, rev: number, now: number): ViewDocBody {
   return { schema: VIEW_SCHEMA, viewsRev: rev, gameId: game.id, enabled: true, version: game.version, generatedAt: now, view: { kind: "departed", audience: "departed", gameId: game.id, version: game.version, reason: "gone" } };
 }
 
-export function fanOutWith(deps: FanOutDeps, prev: Game | null, next: Game, o: { now: number; skipUnchanged: boolean }): ViewWrite[] {
+export function fanOutWith(deps: FanOutDeps, prev: Game | null, next: Game, o: FanOutOptions): ViewWrite[] {
+  const skip = o.storedRev === deps.rev;
   const at = deps.project(next);
   const before = new Map((prev === null ? [] : targetsOf(prev)).map((t) => [t.docId, t]));
   const atPrev = prev === null ? null : deps.project(prev);
@@ -98,14 +111,14 @@ export function fanOutWith(deps: FanOutDeps, prev: Game | null, next: Game, o: {
     live.add(t.docId);
     const body = bodyOf(next, t, at, deps.rev, o.now);
     const b = before.get(t.docId);
-    if (o.skipUnchanged && b !== undefined && prev !== null && atPrev !== null && sameContent(bodyOf(prev, b, atPrev, deps.rev, o.now), body)) continue;
+    if (skip && b !== undefined && prev !== null && atPrev !== null && sameContent(bodyOf(prev, b, atPrev, deps.rev, o.now), body)) continue;
     keep(t.docId, body, b?.viewer.kind === "player" && t.viewer.kind !== "player");
   }
   for (const [docId, b] of before) if (!live.has(docId)) keep(docId, tombstone(next, deps.rev, o.now), b.viewer.kind === "player");
   return out;
 }
 
-/** Every view write for the step from `prev` (null at creation) to `next`. With `skipUnchanged` a view whose content is the same for its reader is not rewritten. */
-export function fanOut(prev: Game | null, next: Game, o: { now: number; skipUnchanged: boolean }): ViewWrite[] {
+/** Every view write for the step from `prev` (null at creation) to `next`. A view whose content is the same for its reader is not rewritten (8.2), unless the stored docs are not at the running rev. */
+export function fanOut(prev: Game | null, next: Game, o: FanOutOptions): ViewWrite[] {
   return fanOutWith({ project: makeProjector, rev: PROJECTOR_REV }, prev, next, o);
 }

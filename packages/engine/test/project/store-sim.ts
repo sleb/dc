@@ -34,7 +34,7 @@ export class SimStore {
 export function commit(store: SimStore, deps: FanOutDeps, prev: Game | null, next: Game, o: { aggregateChanged: boolean; now: number }): ViewWrite[] {
   const stale = store.viewsRev !== deps.rev;
   if (!o.aggregateChanged && !stale) return [];
-  const writes = fanOutWith(deps, prev, next, { now: o.now, skipUnchanged: !stale });
+  const writes = fanOutWith(deps, prev, next, { now: o.now, storedRev: store.viewsRev });
   store.apply(writes);
   store.viewsRev = deps.rev;
   return writes;

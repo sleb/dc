@@ -52,6 +52,8 @@ export const makeViewSchemas = (mode: "strict" | "loose") => {
     isHost: z.boolean(), score: NonNeg, cardsLeft: Counts.nullable(),
   });
   const RevealCard = obj({ submissionId: CardIdSchema, text: z.string(), pitch: z.string().nullable() });
+  // expected: who still owes a play. submittedBy: who played, and it is NOT the reveal: a play the host removed keeps its author here
+  // (LLD 1 open question 20), so `submittedBy.length >= reveal.length` and a client must not assert equality or map one to the other.
   const RoundPublic = obj({
     number: Pos, judgeId: PlayerIdSchema.nullable(), phase: en(RoundPhaseSchema),
     green: obj({ id: CardIdSchema, text: z.string() }),
