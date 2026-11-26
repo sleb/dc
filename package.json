@@ -10,7 +10,8 @@
   "scripts": {
     "lint": "eslint . --max-warnings 0",
     "typecheck": "bun run --filter '*' typecheck && tsc --noEmit -p lint-test/tsconfig.json && tsc --noEmit -p rules-test/tsconfig.json && tsc --noEmit -p scripts/tsconfig.json && tsc --noEmit -p hosting-test/tsconfig.json",
-    "test": "bun test --timeout 120000 packages functions/src functions/scripts scripts lint-test",
+    "test": "bun test --parallel --timings=test-timings.json --timeout 120000 packages functions/src functions/scripts scripts lint-test",
+    "test:timings": "bun test --parallel --timings=test-timings.json --timeout 120000 packages functions/src functions/scripts scripts lint-test --update-timings",
     "test:lint": "bun test lint-test",
     "test:web": "bun test --preload ./apps/web/test/setup.ts apps/web/src",
     "test:rules": "firebase emulators:exec --only firestore --project demo-deepcuts 'bun test rules-test'",
