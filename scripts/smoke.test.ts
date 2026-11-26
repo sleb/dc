@@ -356,3 +356,9 @@ test("S2 a token failure throws without a token value", async () => {
   const run = smokeModule.runQueryRest(PROJECT, { fetch: f, token: async () => Promise.reject(new Error("no access token")) });
   await expect(run(byId("gamesByHost"))).rejects.toThrow("no access token");
 });
+
+test("S2 a null value under any operator but == is refused, not rewritten to another filter", () => {
+  const q = { ...byId("outboxRedrive"), where: [{ field: "processedAt", op: "<" as const, value: null }] };
+  expect(() => smokeModule.structuredQuery(q)).toThrow("outboxRedrive");
+  expect(() => smokeModule.structuredQuery(byId("outboxRedrive"))).not.toThrow();
+});

@@ -276,11 +276,14 @@ const valueOf = (v: string | number): Record<string, string> =>
 
 /** A declared query as a Firestore REST `StructuredQuery` with `limit 1`. */
 export function structuredQuery(q: DeclaredQuery): Record<string, unknown> {
-  const filters = q.where.map((w) =>
-    w.value === null
-      ? { unaryFilter: { field: { fieldPath: w.field }, op: w.op === "==" ? "IS_NULL" : "IS_NOT_NULL" } }
-      : { fieldFilter: { field: { fieldPath: w.field }, op: OPS[w.op], value: valueOf(w.value) } },
-  );
+  const filters = q.where.map((w) => {
+    if (w.value === null) {
+      // Only `== null` has a REST form (IS_NULL); anything else would run a different query from the one checked.
+      if (w.op !== "==") throw new Error(`query ${q.id}: ${w.field} ${w.op} null has no Firestore filter; only == null is allowed`);
+      return { unaryFilter: { field: { fieldPath: w.field }, op: "IS_NULL" } };
+    }
+    return { fieldFilter: { field: { fieldPath: w.field }, op: OPS[w.op], value: valueOf(w.value) } };
+  });
   return {
     from: [{ collectionId: q.collectionGroup, allDescendants: q.scope === "COLLECTION_GROUP" }],
     ...(filters.length === 0 ? {} : { where: filters.length === 1 ? filters[0] : { compositeFilter: { op: "AND", filters } } }),
