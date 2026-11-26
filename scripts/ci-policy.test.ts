@@ -127,6 +127,22 @@ describe("C3 actions are pinned (P18)", () => {
       expect([u, /@(v\d+(\.\d+){0,2}|[0-9a-f]{40})$/.test(u)]).toEqual([u, true]);
     }
   });
+  // The oldest major of each action that runs on Node 24 and is still maintained. A new action must be added here.
+  test("every action is at or above its minimum major (no deprecated Node runtime)", () => {
+    const minimum: Record<string, number> = {
+      "actions/cache": 6,
+      "actions/checkout": 7,
+      "actions/setup-java": 6,
+      "actions/setup-node": 7,
+      "google-github-actions/auth": 3,
+      "oven-sh/setup-bun": 2,
+    };
+    for (const u of jobNames.flatMap((n) => steps(n).flatMap((s) => (s.uses ? [s.uses] : [])))) {
+      const [action = "", ref = ""] = u.split("@");
+      const major = Number(/^v(\d+)/.exec(ref)?.[1]);
+      expect([u, major >= (minimum[action] ?? Infinity)]).toEqual([u, true]);
+    }
+  });
 });
 
 describe("C4 deploy commands (P15)", () => {
