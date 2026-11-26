@@ -56,6 +56,8 @@ jobs:
         run: bash scripts/check-bundle-no-bun.sh functions
       - run: bun run build:web
       - run: bun scripts/check-web-size.ts
+      # #31: the committed view fixtures must match the goldens, so re-export them immediately before the drift check.
+      - run: bun run fixtures:views
       - run: git diff --exit-code
 
   emulator:

@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "viewsRev": 1,
+  "gameId": "gameaaaaaaaaaaaaaaaa",
+  "enabled": true,
+  "version": 9,
+  "generatedAt": 1700000000000,
+  "view": {
+    "audience": "spectator",
+    "kind": "live",
+    "gameId": "gameaaaaaaaaaaaaaaaa",
+    "version": 9,
+    "phase": "ENDED",
+    "paused": false,
+    "settings": {
+      "targetOverride": null,
+      "profanity": "on",
+      "variants": {
+        "pitch": false,
+        "writeIn": false,
+        "redraw": false,
+        "peoplesChoice": true
+      },
+      "spectators": {
+        "enabled": true,
+        "vote": false
+      }
+    },
+    "target": 8,
+    "targetFrozen": true,
+    "writeCounts": null,
+    "players": [
+      {
+        "id": "p_aaaaaaaa",
+        "name": "Name0",
+        "joinOrder": 0,
+        "status": "active",
+        "isHost": true,
+        "score": 0,
+        "cardsLeft": null
+      },
+      {
+        "id": "p_aaaaaaab",
+        "name": "Name1",
+        "joinOrder": 1,
+        "status": "active",
+        "isHost": false,
+        "score": 0,
+        "cardsLeft": null
+      },
+      {
+        "id": "p_aaaaaaac",
+        "name": "Name2",
+        "joinOrder": 2,
+        "status": "active",
+        "isHost": false,
+        "score": 0,
+        "cardsLeft": null
+      },
+      {
+        "id": "p_aaaaaaad",
+        "name": "Name3",
+        "joinOrder": 3,
+        "status": "active",
+        "isHost": false,
+        "score": 0,
+        "cardsLeft": null
+      }
+    ],
+    "waitingOn": [],
+    "round": null,
+    "resolved": 1,
+    "winnerId": null,
+    "awards": {
+      "peoplesChoice": [
+        "p_aaaaaaac"
+      ],
+      "podium": [
+        {
+          "rank": 1,
+          "round": 1,
+          "cardId": "c_000000005q",
+          "playerId": "p_aaaaaaac",
+          "votes": 1
+        }
+      ]
+    }
+  }
+}

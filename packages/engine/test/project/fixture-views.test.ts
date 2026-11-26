@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { VIEW_SCHEMA, ViewDocSchema } from "@dc/contracts";
 import { PROJECTOR_REV, VIEW_REGION_FIELDS, docIdOf, fanOut } from "../../src/project";
+import type { ViewDocBody } from "../../src/project/fanout";
 import { CELLS, goldenOf } from "./cells";
 import { writeViewFixtures } from "./export-views";
 import { FIXED_NOW, VIEW_FIXTURES_DIR, fixtureFileName, fixtureViews, viewFixtureDoc } from "./fixture-views";
@@ -54,8 +55,8 @@ describe("#31 the envelope compared with what the Store writes", () => {
     for (const c of live) {
       const game = c.game();
       const write = fanOut(null, game, { now: FIXED_NOW, storedRev: 0 }).find((w) => w.docId === docIdOf(c.viewer(game)));
-      expect(write, c.name).toBeDefined();
-      expect([c.name, viewFixtureDoc(c)]).toEqual([c.name, write?.doc]);
+      if (write === undefined) throw new Error(`${c.name}: fanOut wrote no doc for ${docIdOf(c.viewer(game))}`);
+      expect(viewFixtureDoc(c)).toEqual(write.doc);
     }
   });
 
@@ -70,7 +71,7 @@ describe("#31 the envelope compared with what the Store writes", () => {
         enabled: true,
         version: game.version,
         generatedAt: FIXED_NOW,
-        view: goldenOf(c),
+        view: goldenOf(c) as ViewDocBody["view"],
       }]);
     }
   });
