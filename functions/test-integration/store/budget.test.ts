@@ -25,6 +25,8 @@ test("I7 on 10 seated and 40 departed, the harness write count equals an indepen
   expect(r1.writes).toBe(55); // aggregate, events, ledger, 52 views
   expect(r1.writes).toBeLessThanOrEqual(75);
 
+  // The leaver holds a drafts doc, so its delete is visible to the diff (deleting a doc that does not exist is a write no diff can see).
+  await t.as(50, { type: "saveDraft", red: ["CARD-SENTINEL-50"], green: [] } as Command);
   const b2 = await snapshot(t.gameId, extra);
   const r2 = await t.as(50, { type: "leave" } as Command);
   const d2 = diff(b2, await snapshot(t.gameId, extra));

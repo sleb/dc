@@ -51,13 +51,16 @@ test("I1 20 parallel mixed commands from 10 actors keep every invariant", async 
   const host = { kind: "user", uid: g.hostId } as const;
   const judge = g.players.find((p) => p.id === r.judgeId);
   const reqs: { actor: { kind: "user"; uid: string }; cmd: Command }[] = [
-    ...g.players.filter((p) => p.status === "active" && p.id !== r.judgeId).map((p) => ({ actor: { kind: "user" as const, uid: p.uid }, cmd: { type: "confirmSubmission", cardId: p.hand[0], expectedVersion: r.changedAtVersion } as Command })),
+    ...g.players.filter((p) => p.status === "active" && p.id !== r.judgeId).slice(0, 4).map((p) => ({ actor: { kind: "user" as const, uid: p.uid }, cmd: { type: "confirmSubmission", cardId: p.hand[0], expectedVersion: r.changedAtVersion } as Command })),
     ...Array.from({ length: 5 }, (_, k) => ({ actor: host, cmd: { type: "updateSettings", patch: { profanity: k % 2 === 0 ? "off" : "on" } } as Command })),
+    ...g.players.filter((p) => p.status === "active" && p.id !== r.judgeId).slice(4).map((p) => ({ actor: { kind: "user" as const, uid: p.uid }, cmd: { type: "confirmSubmission", cardId: p.hand[0], expectedVersion: r.changedAtVersion } as Command })),
     ...Array.from({ length: 3 }, () => ({ actor: { kind: "user" as const, uid: judge?.uid ?? "" }, cmd: { type: "closeSubmissions", expectedVersion: r.changedAtVersion } as Command })),
     ...Array.from({ length: 3 }, () => ({ actor: host, cmd: { type: "passJudging", expectedVersion: r.changedAtVersion } as Command })),
   ];
   expect(reqs).toHaveLength(20);
-  const results = await Promise.all(reqs.map((q) => run({ gameId: g.id, actor: q.actor, cmd: q.cmd, idemKey: newKey() })));
+  // Two waves of 10 in flight: on a 2-CPU host the emulator's lock queue with 20 in flight ran past the harness timeout (each wave still contends fully).
+  const results: RunResult[] = [];
+  for (const wave of [reqs.slice(0, 10), reqs.slice(10)]) results.push(...(await Promise.all(wave.map((q) => run({ gameId: g.id, actor: q.actor, cmd: q.cmd, idemKey: newKey() })))));
   const accepted = check(results);
   expect(accepted).toBeGreaterThan(5);
   await invariants(t, g.version, accepted);

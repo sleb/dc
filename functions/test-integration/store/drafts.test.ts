@@ -46,7 +46,9 @@ test("I5 text-only saves touch only the drafts doc, the actor's draft region and
   const after = await snapshot(t.gameId);
   const ev = after.get(`games/${t.gameId}/events/${v + 1}`);
   expect(ev?.data["events"]).toEqual([]);
-  const views = [...after.entries()].filter(([p]) => p.includes("/views/") && p !== `games/${t.gameId}/views/${uid}`);
+  // Every view a reader can see changes (the disabled spectator doc has no view, so skip-unchanged rightly leaves it).
+  const views = [...after.entries()].filter(([p, d]) => p.includes("/views/") && p !== `games/${t.gameId}/views/${uid}` && d.data["view"] !== null);
+  expect(views.length).toBeGreaterThanOrEqual(2);
   for (const [p, d] of views) {
     expect(updateTimeOf(after, p)).not.toBe(updateTimeOf(before, p));
     const vw = d.data["view"] as { kind?: string; players?: { id: string; cardsLeft: { red: number; green: number } | null }[] } | null;

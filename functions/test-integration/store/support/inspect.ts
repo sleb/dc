@@ -38,10 +38,17 @@ export function diff(before: Snapshot, after: Snapshot): Diff {
 export const updateTimeOf = (s: Snapshot, path: string): string | undefined => s.get(path)?.updateTime;
 export const touched = (d: Diff): number => d.created.length + d.changed.length + d.deleted.length;
 
+/** JSON with object keys sorted: Firestore returns map keys in its own order, so plain JSON.stringify would differ on order alone. */
+export function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v !== null && typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`).join(",")}}`;
+  return JSON.stringify(v);
+}
+
 const withoutVersion = (view: unknown): string => {
   if (view === null || typeof view !== "object") return JSON.stringify(view);
   const { version: _v, ...rest } = view as Record<string, unknown>;
-  return JSON.stringify(rest);
+  return canonical(rest);
 };
 
 /** PJ11: what is wrong with the stored views against `makeProjector(load())`. Empty when every view is right. */

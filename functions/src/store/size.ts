@@ -8,9 +8,13 @@ export function estimateBytes(doc: unknown): number {
   return Math.ceil(1.15 * Buffer.byteLength(JSON.stringify(doc), "utf8"));
 }
 
-/** Throws AGGREGATE_TOO_LARGE above the hard limit unless the write does not grow the doc; `warn` asks the caller to log `store.size.warn` after the transaction. */
-export function guardSize(next: unknown, prev: unknown): { warn: boolean } {
+/**
+ * Throws AGGREGATE_TOO_LARGE above the hard limit unless the write does not grow the doc, or `escape` is set (endGame, the host's way out, 5.7: it
+ * changes no content but can grow by a few bytes of `version` and `store.updatedAt` digits); `warn` asks the caller to log `store.size.warn` after
+ * the transaction.
+ */
+export function guardSize(next: unknown, prev: unknown, o: { escape?: boolean } = {}): { warn: boolean } {
   const n = estimateBytes(next);
-  if (n > HARD_BYTES && n > estimateBytes(prev)) throw new StoreError("AGGREGATE_TOO_LARGE", `aggregate estimate ${n} bytes over ${HARD_BYTES}`);
+  if (n > HARD_BYTES && o.escape !== true && n > estimateBytes(prev)) throw new StoreError("AGGREGATE_TOO_LARGE", `aggregate estimate ${n} bytes over ${HARD_BYTES}`);
   return { warn: n > WARN_BYTES };
 }

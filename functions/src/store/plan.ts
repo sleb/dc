@@ -108,7 +108,7 @@ export function planCommand(r: Reads, extra: ReadonlyMap<string, Data | null>, i
     const next = a.state;
     if (next.version !== prev.version + 1) throw new StoreError("INVARIANT", `version contiguity: ${prev.version} to ${next.version} (ST4)`);
     const doc: GameDoc = { ...next, store: { schema: 1, viewsRev: PROJECTOR_REV, updatedAt: now, deleting: null } };
-    sizeWarn = guardSize(doc, r.game).warn; // ST6
+    sizeWarn = guardSize(doc, r.game, { escape: i.cmd.type === "endGame" }).warn; // ST6; endGame is always allowed (5.9)
     w.set(gamePath(i.gameId), data(doc)); // full replace: removed keys vanish
     w.create(eventPath(i.gameId, next.version), data(eventDoc(next.version, now, a, i.cmd, seed, me ?? actorPlayerId(next, i.actor))));
     for (const rec of a.roundRecords) w.create(roundPath(i.gameId, rec.round), data(RoundDocSchema.parse(toRoundDoc(rec)))); // S3: create() fails if it exists

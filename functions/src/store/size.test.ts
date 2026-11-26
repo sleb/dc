@@ -36,3 +36,16 @@ test("U6 above 900 KiB a write that does not grow is allowed (endGame, removeCar
   const same = docOf(950 * KiB);
   expect(guardSize(same, same)).toEqual({ warn: true });
 });
+
+test("U6 endGame (escape) is allowed above 900 KiB even when a few bytes of version and timestamp digits grow the doc", () => {
+  const prev = docOf(950 * KiB);
+  const next = { ...prev, updatedAt: 1_795_736_706_437 };
+  let err: unknown = null;
+  try {
+    guardSize(next, prev);
+  } catch (e) {
+    err = e;
+  }
+  expect(err instanceof StoreError && err.kind).toBe("AGGREGATE_TOO_LARGE");
+  expect(guardSize(next, prev, { escape: true })).toEqual({ warn: true });
+});
