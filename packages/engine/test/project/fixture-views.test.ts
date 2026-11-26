@@ -1,24 +1,24 @@
 // #31: the 43 committed view fixtures of LLD 7 section 11.1 and OQ11. One ViewDoc per golden cell, exported to
 // packages/contracts/fixtures/views/{state}__{viewer}.json; the writer is deterministic and prunes a stale fixture-shaped file.
-// 42 cells are proved byte-equal to their fanOut write; `departed/gone` is the one explicit doc (a gone player is not a viewer
-// target, so fanOut writes the seated player's live view for that docId). The committed files are parsed strictly (the web-side
-// loose parse is the contracts test's), and every one is scanned for leaked server-only keys and strings.
+// All 43 cells are proved byte-equal to a fanOut write: 42 from `fanOut(null, …)`; `departed/gone` through the LOBBY leave
+// transition that deletes the player record (a gone player is not a viewer target, so the null-prev write at that docId is the
+// seated player's live view). The committed files are parsed strictly (the web-side loose parse is the contracts test's), and
+// every one is scanned for leaked server-only keys and strings.
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { VIEW_SCHEMA, ViewDocSchema } from "@dc/contracts";
+import { ViewDocSchema } from "@dc/contracts";
 import { PROJECTOR_REV, VIEW_REGION_FIELDS, docIdOf, fanOut } from "../../src/project";
-import type { ViewDocBody } from "../../src/project/fanout";
-import { CELLS, goldenOf } from "./cells";
+import { CELLS } from "./cells";
 import { writeViewFixtures } from "./export-views";
-import { EXPLICIT_ONLY_CELL, FIXED_NOW, VIEW_FIXTURES_DIR, fixtureFileName, fixtureViews, viewFixtureDoc } from "./fixture-views";
+import { FIXED_NOW, TRANSITION_ONLY_CELL, VIEW_FIXTURES_DIR, fixtureFileName, fixtureViews, viewFixtureDoc } from "./fixture-views";
 
 const ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
-const fanOutProven = CELLS.filter((c) => c.name !== EXPLICIT_ONLY_CELL);
-const explicit = CELLS.filter((c) => c.name === EXPLICIT_ONLY_CELL);
+const fanOutProven = CELLS.filter((c) => c.name !== TRANSITION_ONLY_CELL);
+const transitionOnly = CELLS.filter((c) => c.name === TRANSITION_ONLY_CELL);
 const expectedNames = (): string[] => fixtureViews().map((f) => f.fileName).sort();
 const committed = (): string[] => (existsSync(VIEW_FIXTURES_DIR) ? readdirSync(VIEW_FIXTURES_DIR).sort() : []);
 const bytesOf = (doc: unknown): string => `${JSON.stringify(doc, null, 2)}\n`;
@@ -28,7 +28,7 @@ describe("#31 the exported view fixture set", () => {
     const fixtures = fixtureViews();
     expect(CELLS.length).toBe(43);
     expect(fanOutProven.length).toBe(42);
-    expect(explicit.map((c) => c.name)).toEqual([EXPLICIT_ONLY_CELL]);
+    expect(transitionOnly.map((c) => c.name)).toEqual([TRANSITION_ONLY_CELL]);
     expect(fixtures.length).toBe(43);
     expect(fixtures.map((f) => f.name).sort()).toEqual(CELLS.map((c) => c.name).sort());
     expect(new Set(fixtures.map((f) => f.fileName)).size).toBe(43);
@@ -53,7 +53,7 @@ describe("#31 the exported view fixture set", () => {
 });
 
 describe("#31 the envelope compared with what the Store writes", () => {
-  test("every cell except departed/gone deep-equals the matching fanOut write, found by docIdOf", () => {
+  test("42 cells deep-equal the matching fanOut(null, …) write, found by docIdOf", () => {
     for (const c of fanOutProven) {
       const game = c.game();
       const write = fanOut(null, game, { now: FIXED_NOW, storedRev: 0 }).find((w) => w.docId === docIdOf(c.viewer(game)));
@@ -62,22 +62,21 @@ describe("#31 the envelope compared with what the Store writes", () => {
     }
   });
 
-  test("departed/gone is the one explicit doc, with only generatedAt, viewsRev and enabled hand-set", () => {
-    const c = explicit[0];
-    if (c === undefined) throw new Error("fixture: departed/gone is missing");
-    const game = c.game();
-    expect([c.name, viewFixtureDoc(c)]).toEqual([c.name, {
-      schema: VIEW_SCHEMA,
-      viewsRev: PROJECTOR_REV,
-      gameId: game.id,
-      enabled: true,
-      version: game.version,
-      generatedAt: FIXED_NOW,
-      view: goldenOf(c) as ViewDocBody["view"],
-    }]);
-    // Why it is explicit: the departed docId is a seated player's, so fanOut writes that player's live view and never the tombstone.
-    const write = fanOut(null, game, { now: FIXED_NOW, storedRev: 0 }).find((w) => w.docId === docIdOf(c.viewer(game)));
-    expect(write?.doc.view?.kind).toBe("live");
+  test("departed/gone deep-equals the LOBBY leave transition's tombstone", () => {
+    const c = transitionOnly[0];
+    if (c === undefined) throw new Error(`fixture: ${TRANSITION_ONLY_CELL} is missing`);
+    const prev = c.game();
+    const viewer = c.viewer(prev);
+    if (viewer.kind !== "departed") throw new Error(`${c.name}: the transition-only viewer is not departed`);
+    const next = { ...prev, players: prev.players.filter((p) => p.id !== viewer.playerId) };
+    // The null-prev write is why the transition is the proof: the departed docId is the seated player's, so fanOut writes that player's live view.
+    const fromNull = fanOut(null, prev, { now: FIXED_NOW, storedRev: 0 }).find((w) => w.docId === docIdOf(viewer));
+    expect(fromNull?.doc.view?.kind).toBe("live");
+    // The LOBBY leave deletes the record (LLD 1 7.2): the vanished viewer's doc is the gone tombstone, byte-identical to the fixture at the same version.
+    const transition = fanOut(prev, next, { now: FIXED_NOW, storedRev: 0 }).find((w) => w.docId === docIdOf(viewer));
+    if (transition === undefined) throw new Error(`${c.name}: the leave transition wrote no doc for ${docIdOf(viewer)}`);
+    expect([next.version, next.players.length]).toEqual([prev.version, prev.players.length - 1]);
+    expect(transition.doc).toEqual(viewFixtureDoc(c));
   });
 });
 
