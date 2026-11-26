@@ -81,8 +81,10 @@ async function runOp(r: RunRequest): Promise<{ ok: true; outcome: unknown; attem
     const x = await execute(db(), deps, input);
     return { ok: true, outcome: x.outcome, attempts: x.attempts, writes: x.writes, seeds };
   } catch (e) {
+    // A fault thrown inside the transaction reaches here as the INVARIANT it maps to, with the fault as its cause.
+    const fault = e instanceof InjectedFault ? e : e instanceof StoreError && e.cause instanceof InjectedFault ? e.cause : null;
+    if (fault !== null) throw new HttpsError("internal", "injected fault", { kind: "FAULT", point: fault.point });
     if (e instanceof StoreError) throw new HttpsError(HTTPS_CODE[e.kind], e.kind, { kind: e.kind });
-    if (e instanceof InjectedFault) throw new HttpsError("internal", "injected fault", { kind: "FAULT", point: e.point });
     throw e;
   }
 }
@@ -101,5 +103,5 @@ export async function handleStoreHarness(data: unknown): Promise<{ ok: true; [k:
 }
 
 export const storeHarness = isEmulator()
-  ? defineCallable({ name: "storeHarness", allow: ["guest"], runtime: RT.command, handler: async ({ req }) => handleStoreHarness(req.data) })
+  ? defineCallable({ name: "storeHarness", allow: ["guest"], runtime: RT.harness, handler: async ({ req }) => handleStoreHarness(req.data) })
   : undefined;

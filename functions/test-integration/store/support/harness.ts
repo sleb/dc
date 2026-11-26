@@ -15,7 +15,7 @@ const client = initializeApp({ projectId: "demo-deepcuts", apiKey: "demo", appId
 initializeAppCheck(client, { provider: new CustomProvider({ getToken: async () => ({ token: fakeToken, expireTimeMillis: 4_102_444_800_000 }) }) });
 const fns = getFunctions(client, "us-central1");
 connectFunctionsEmulator(fns, "127.0.0.1", 5001);
-const call = httpsCallable<unknown, unknown>(fns, "storeHarness", { timeout: 120_000 });
+const call = httpsCallable<unknown, unknown>(fns, "storeHarness", { timeout: 300_000 });
 
 const adminApp: App = getApps().find((a) => a.name === "store-tests") ?? adminInit({ projectId: "demo-deepcuts" }, "store-tests");
 export const db = getFirestore(adminApp);

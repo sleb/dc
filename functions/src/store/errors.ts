@@ -5,8 +5,8 @@ import { EngineInvariantError } from "@dc/engine";
 export type StoreErrorKind = "CONTENTION" | "UNAVAILABLE" | "INVARIANT" | "AGGREGATE_TOO_LARGE" | "TOO_MANY_WRITES";
 
 export class StoreError extends Error {
-  constructor(readonly kind: StoreErrorKind, message: string) {
-    super(`${kind}: ${message}`);
+  constructor(readonly kind: StoreErrorKind, message: string, options?: { cause?: unknown }) {
+    super(`${kind}: ${message}`, options);
     this.name = "StoreError";
   }
 }
@@ -19,8 +19,9 @@ export function mapStoreError(e: unknown, attempts: number): StoreError {
   const code = (e as { code?: unknown } | null)?.code;
   const name = e instanceof Error ? e.name : typeof e;
   const what = `${name}${code === undefined ? "" : ` code ${String(code)}`}`;
-  if (code === GRPC.ABORTED || code === 409) return new StoreError("CONTENTION", `aborted after ${attempts} attempt(s) (${what})`);
-  if (code === GRPC.UNAVAILABLE || code === GRPC.DEADLINE_EXCEEDED) return new StoreError("UNAVAILABLE", `the commit may have happened (${what})`);
-  if (e instanceof EngineInvariantError) return new StoreError("INVARIANT", "engine invariant");
-  return new StoreError("INVARIANT", what);
+  const cause = { cause: e };
+  if (code === GRPC.ABORTED || code === 409) return new StoreError("CONTENTION", `aborted after ${attempts} attempt(s) (${what})`, cause);
+  if (code === GRPC.UNAVAILABLE || code === GRPC.DEADLINE_EXCEEDED) return new StoreError("UNAVAILABLE", `the commit may have happened (${what})`, cause);
+  if (e instanceof EngineInvariantError) return new StoreError("INVARIANT", "engine invariant", cause);
+  return new StoreError("INVARIANT", what, cause);
 }
