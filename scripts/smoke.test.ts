@@ -1,7 +1,10 @@
 import { join } from "node:path";
 import { expect, test } from "bun:test";
+import * as smokeModule from "./smoke";
 import { exitCodeFor, smoke } from "./smoke";
-import type { CallResult, SmokeDeps } from "./smoke";
+import type { CallResult, QueryResult, SmokeDeps } from "./smoke";
+import { QUERIES } from "../functions/src/store/queries";
+import type { DeclaredQuery } from "../functions/src/store/queries";
 
 // V5 and V6 (issue #15): the post-deploy smoke decides pass or fail, so its mapping from what staging answers to an
 // exit code is tested here without a network. Every dependency that would reach Google is injected.
@@ -20,10 +23,12 @@ type Options = {
   registerError?: Error;
   exchangeError?: Error;
   deleteTokenError?: Error;
+  /** Per query id: what the fake `runQuery` answers (default ok) or throws. */
+  queries?: Record<string, QueryResult | Error>;
 };
 
 function harness(o: Options = {}) {
-  const rec = { calls: [] as string[], registered: [] as string[], exchanges: [] as string[], tokenDeletes: 0, lines: [] as string[] };
+  const rec = { calls: [] as string[], registered: [] as string[], exchanges: [] as string[], tokenDeletes: 0, lines: [] as string[], queries: [] as string[] };
   const ok = (result: unknown): CallResult => ({ ok: true, result });
   const deps: Partial<SmokeDeps> = {
     env: o.env ?? { APPCHECK_DEBUG_TOKEN: TOKEN },
@@ -52,6 +57,12 @@ function harness(o: Options = {}) {
       if (appCheckToken !== undefined && appCheckToken !== (o.appCheckToken ?? APP_CHECK)) throw new Error(`call sent App Check token ${appCheckToken}`);
       if (name !== "ping") throw new Error(`smoke called an unexpected callable: ${name}`);
       return appCheckToken === undefined ? (o.noToken ?? { ok: false, status: 401, code: "unauthenticated" }) : (o.ping ?? ok({ ok: true, node: "v22.23.2" }));
+    },
+    runQuery: async (q: DeclaredQuery) => {
+      rec.queries.push(q.id);
+      const answer = o.queries?.[q.id];
+      if (answer instanceof Error) throw answer;
+      return answer ?? { ok: true };
     },
   };
   return { deps, rec };
@@ -214,4 +225,134 @@ test("V5 the CLI refuses to run without --project and on an unknown flag", () =>
   const unknown = at(["--project", PROJECT, "--force"]);
   expect(unknown.exitCode).toBe(2);
   expect(unknown.stderr.toString()).toContain("--force");
+});
+
+// S1 and S2 (#32): the deployed indexes. The emulator ignores composite indexes, so the smoke runs every declared
+// query (functions/src/store/queries.ts) against the deployed project; a missing index fails the deploy.
+
+test("S1 the smoke runs every declared query, once each, in declaration order, and logs each", async () => {
+  const { deps, rec } = harness();
+  expect(await smoke({ project: PROJECT, deps })).toEqual({ ok: true, reasons: [] });
+  expect(rec.queries).toEqual(QUERIES.map((q) => q.id));
+  for (const q of QUERIES) expect(rec.lines).toContain(`query ${q.id}: ok`);
+});
+
+test("S1 a missing or building index (FAILED_PRECONDITION) is a hard failure naming the query", async () => {
+  const { deps } = harness({ queries: { stuckDeletions: { ok: false, status: "FAILED_PRECONDITION", message: "The query requires an index." } } });
+  const out = await smoke({ project: PROJECT, deps });
+  expect(out.ok).toBe(false);
+  expect(out.reasons).toHaveLength(1);
+  expect(out.reasons[0]).toContain("stuckDeletions");
+  expect(out.reasons[0]).toContain("index");
+  expect(out.reasons[0]).toContain("FAILED_PRECONDITION");
+});
+
+test("S1 PERMISSION_DENIED is a distinct failure naming the likely missing role, not an index", async () => {
+  const { deps } = harness({ queries: { gamesByHost: { ok: false, status: "PERMISSION_DENIED", message: "Missing or insufficient permissions." } } });
+  const out = await smoke({ project: PROJECT, deps });
+  expect(out.ok).toBe(false);
+  expect(out.reasons).toHaveLength(1);
+  expect(out.reasons[0]).toContain("gamesByHost");
+  expect(out.reasons[0]).toContain("PERMISSION_DENIED");
+  expect(out.reasons[0]).toContain("datastore.entities.list");
+  expect(out.reasons[0]).not.toContain("missing or building index");
+});
+
+test("S1 any other error, and a thrown runQuery, fail the run too; the remaining queries still run", async () => {
+  const { deps, rec } = harness({ queries: { waitingOn: { ok: false, status: "UNAVAILABLE", message: "try later" }, seatBySecret: new Error("network down") } });
+  const out = await smoke({ project: PROJECT, deps });
+  expect(out.ok).toBe(false);
+  expect(out.reasons).toHaveLength(2);
+  expect(out.reasons.join(" ")).toContain("waitingOn");
+  expect(out.reasons.join(" ")).toContain("UNAVAILABLE");
+  expect(out.reasons.join(" ")).toContain("seatBySecret");
+  expect(out.reasons.join(" ")).toContain("network down");
+  expect(rec.queries).toEqual(QUERIES.map((q) => q.id));
+});
+
+test("S1 the queries run even when the App Check part fails (they do not depend on it)", async () => {
+  const { deps, rec } = harness({ exchangeError: new Error("INVALID_DEBUG_TOKEN") });
+  const out = await smoke({ project: PROJECT, deps });
+  expect(out.ok).toBe(false);
+  expect(rec.queries).toEqual(QUERIES.map((q) => q.id));
+});
+
+// S2: the real runQuery, against a fake fetch.
+type Sent = { url: string; method: string; headers: Record<string, string>; body: Record<string, unknown> };
+const ACCESS = "access-token-sentinel-5";
+function fakeFetch(answer: { status: number; body: unknown }) {
+  const sent: Sent[] = [];
+  const f = async (url: string, init: { method: string; headers: Record<string, string>; body: string }) => {
+    sent.push({ url, method: init.method, headers: init.headers, body: JSON.parse(init.body) as Record<string, unknown> });
+    return new Response(JSON.stringify(answer.body), { status: answer.status });
+  };
+  return { sent, f };
+}
+const byId = (id: string) => {
+  const q = QUERIES.find((x) => x.id === id);
+  if (!q) throw new Error(`no query ${id}`);
+  return q;
+};
+
+test("S2 runQueryRest posts a structured query with limit 1 to the Firestore REST runQuery, bearer token in the header", async () => {
+  const { sent, f } = fakeFetch({ status: 200, body: [{ readTime: "2026-01-01T00:00:00Z" }] });
+  const run = smokeModule.runQueryRest(PROJECT, { fetch: f, token: async () => ACCESS });
+  expect(await run(byId("identityCleanup"))).toEqual({ ok: true });
+  expect(sent).toHaveLength(1);
+  expect(sent[0]?.method).toBe("POST");
+  expect(sent[0]?.url).toBe(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents:runQuery`);
+  expect(sent[0]?.headers["Authorization"]).toBe(`Bearer ${ACCESS}`);
+  expect(sent[0]?.body).toEqual({
+    structuredQuery: {
+      from: [{ collectionId: "outbox", allDescendants: true }],
+      where: {
+        compositeFilter: {
+          op: "AND",
+          filters: [
+            { fieldFilter: { field: { fieldPath: "topic" }, op: "EQUAL", value: { stringValue: "identity" } } },
+            { unaryFilter: { field: { fieldPath: "notifDoneAt" }, op: "IS_NULL" } },
+            { fieldFilter: { field: { fieldPath: "at" }, op: "LESS_THAN", value: { integerValue: "0" } } },
+          ],
+        },
+      },
+      orderBy: [{ field: { fieldPath: "at" }, direction: "ASCENDING" }],
+      limit: 1,
+    },
+  });
+});
+
+test("S2 a subcollection query goes to a probe parent document; one filter is not wrapped; no where when there is none", async () => {
+  const { sent, f } = fakeFetch({ status: 200, body: [{ readTime: "2026-01-01T00:00:00Z" }] });
+  const run = smokeModule.runQueryRest(PROJECT, { fetch: f, token: async () => ACCESS });
+  await run(byId("seatBySecret"));
+  await run(byId("roundsByNumber"));
+  expect(sent[0]?.url).toBe(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/games/smoke-probe:runQuery`);
+  expect(sent[0]?.body).toEqual({
+    structuredQuery: {
+      from: [{ collectionId: "seats", allDescendants: false }],
+      where: { fieldFilter: { field: { fieldPath: "secretHash" }, op: "EQUAL", value: { stringValue: "probe" } } },
+      limit: 1,
+    },
+  });
+  expect(sent[1]?.body).toEqual({
+    structuredQuery: { from: [{ collectionId: "rounds", allDescendants: false }], orderBy: [{ field: { fieldPath: "round" }, direction: "ASCENDING" }], limit: 1 },
+  });
+});
+
+test("S2 an API error maps to its status, and the access token never appears in what comes back", async () => {
+  const { f } = fakeFetch({ status: 400, body: { error: { code: 400, status: "FAILED_PRECONDITION", message: `The query requires an index (token ${ACCESS})` } } });
+  const run = smokeModule.runQueryRest(PROJECT, { fetch: f, token: async () => ACCESS });
+  const out = await run(byId("gamesByHost"));
+  expect(out.ok).toBe(false);
+  if (!out.ok) {
+    expect(out.status).toBe("FAILED_PRECONDITION");
+    expect(out.message).not.toContain(ACCESS);
+    expect(out.message).toContain("<redacted>");
+  }
+});
+
+test("S2 a token failure throws without a token value", async () => {
+  const { f } = fakeFetch({ status: 200, body: [] });
+  const run = smokeModule.runQueryRest(PROJECT, { fetch: f, token: async () => Promise.reject(new Error("no access token")) });
+  await expect(run(byId("gamesByHost"))).rejects.toThrow("no access token");
 });
