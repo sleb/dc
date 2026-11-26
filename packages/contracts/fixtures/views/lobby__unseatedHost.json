@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "viewsRev": 1,
+  "gameId": "gameaaaaaaaaaaaaaaaa",
+  "enabled": true,
+  "version": 4,
+  "generatedAt": 1700000000000,
+  "view": {
+    "audience": "host",
+    "kind": "live",
+    "gameId": "gameaaaaaaaaaaaaaaaa",
+    "version": 4,
+    "phase": "LOBBY",
+    "paused": false,
+    "settings": {
+      "targetOverride": null,
+      "profanity": "on",
+      "variants": {
+        "pitch": false,
+        "writeIn": false,
+        "redraw": false,
+        "peoplesChoice": false
+      },
+      "spectators": {
+        "enabled": true,
+        "vote": false
+      }
+    },
+    "target": 8,
+    "targetFrozen": false,
+    "writeCounts": null,
+    "players": [
+      {
+        "id": "p_aaaaaaab",
+        "name": "Name1",
+        "joinOrder": 1,
+        "status": "writing",
+        "isHost": false,
+        "score": 0,
+        "cardsLeft": null
+      },
+      {
+        "id": "p_aaaaaaac",
+        "name": "Name2",
+        "joinOrder": 2,
+        "status": "writing",
+        "isHost": false,
+        "score": 0,
+        "cardsLeft": null
+      }
+    ],
+    "waitingOn": [],
+    "round": null,
+    "resolved": 0,
+    "winnerId": null,
+    "awards": null,
+    "host": {
+      "roomCode": "BCDF",
+      "playability": {
+        "n": 2,
+        "target": 8,
+        "totals": {
+          "red": 0,
+          "green": 0
+        },
+        "rMin": 21,
+        "gMin": 16,
+        "meets": false
+      },
+      "writeCountsOverride": null
+    }
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "viewsRev": 1,
+  "gameId": "gameaaaaaaaaaaaaaaaa",
+  "enabled": true,
+  "version": 9,
+  "generatedAt": 1700000000000,
+  "view": {
+    "audience": "host",
+    "kind": "live",
+    "gameId": "gameaaaaaaaaaaaaaaaa",
+    "version": 9,
+    "phase": "PLAYING",
+    "paused": false,
+    "settings": {
+      "targetOverride": null,
+      "profanity": "on",
+      "variants": {
+        "pitch": false,
+        "writeIn": false,
+        "redraw": false,
+        "peoplesChoice": false
+      },
+      "spectators": {
+        "enabled": false,
+        "vote": false
+      }
+    },
+    "target": 8,
+    "targetFrozen": true,
+    "writeCounts": null,
+    "players": [
+      {
+        "id": "p_aaaaaaaa",
+        "name": "Player 0",
+        "joinOrder": 0,
+        "status": "left",
+        "isHost": true,
+        "score": 0,
+        "cardsLeft": null
+      },
+      {
+        "id": "p_aaaaaaab",
+        "name": "Player 1",
+        "joinOrder": 1,
+        "status": "active",
+        "isHost": false,
+        "score": 0,
+        "cardsLeft": null
+      },
+      {
+        "id": "p_aaaaaaac",
+        "name": "Player 2",
+        "joinOrder": 2,
+        "status": "active",
+        "isHost": false,
+        "score": 0,
+        "cardsLeft": null
+      },
+      {
+        "id": "p_aaaaaaad",
+        "name": "Player 3",
+        "joinOrder": 3,
+        "status": "active",
+        "isHost": false,
+        "score": 0,
+        "cardsLeft": null
+      }
+    ],
+    "waitingOn": [],
+    "round": {
+      "number": 1,
+      "judgeId": "p_aaaaaaab",
+      "phase": "SUBMITTING",
+      "green": {
+        "id": "c_00000000p0",
+        "text": "the green card"
+      },
+      "expected": [
+        "p_aaaaaaac",
+        "p_aaaaaaad"
+      ],
+      "submittedBy": [
+        "p_aaaaaaac"
+      ],
+      "reveal": null
+    },
+    "resolved": 0,
+    "winnerId": null,
+    "awards": null,
+    "host": {
+      "roomCode": "BCDF",
+      "playability": {
+        "n": 3,
+        "target": 8,
+        "totals": {
+          "red": 48,
+          "green": 32
+        },
+        "rMin": 28,
+        "gMin": 24,
+        "meets": true
+      },
+      "writeCountsOverride": null
+    }
+  }
+}
