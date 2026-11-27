@@ -225,13 +225,13 @@ describe("EV3 the EventDoc inputs: redactEnvelope, seed, events", () => {
     expect([more.aggregateChanged, more.events, more.redactEnvelope]).toStrictEqual([true, [], false]);
   });
 
-  test("a rejection carries no events, and an aggregateChanged:false acceptance carries none either, over whole games with junk commands", () => {
+  test("a rejection carries no events, and an aggregateChanged:false acceptance carries none except deleteGame's GameDeleted, over whole games with junk commands", () => {
     assertProperty(fc.property(fc.integer({ min: 3, max: 6 }), fc.integer(), (n, seed) => {
       const trace = runScenario(decide, lobby(true), Array.from({ length: 400 }, (_, i) => ({ kind: i % 4 === 3 ? ("junk" as const) : ("legal" as const), pick: (i * 7919 + seed) & 0xffff })), { seed, table: enumerators });
-      for (const r of trace.results) {
+      trace.results.forEach((r, i) => {
         if (!r.ok) expect(Object.keys(r)).toStrictEqual(["ok", "error"]);
-        else if (!r.value.aggregateChanged) expect(r.value.events).toStrictEqual([]);
-      }
+        else if (!r.value.aggregateChanged) expect(r.value.events).toStrictEqual(trace.commands[i]?.type === "deleteGame" ? [{ t: "GameDeleted" }] : []);
+      });
       expect(n).toBeGreaterThan(2);
     }), env());
   });

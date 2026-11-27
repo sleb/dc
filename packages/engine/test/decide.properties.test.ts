@@ -289,12 +289,12 @@ describe("G1 generator sanity", () => {
     expect(legalCommands(g, {}, fixtureEnumerators).length).toBeGreaterThan(6);
   });
 
-  test("the real enumerators are not vacuous: a LOBBY of four offers settings, joins, leaves, removals, start and end; WRITING offers drafts, joins, leaves, removals, end and a profanity patch", () => {
+  test("the real enumerators are not vacuous: a LOBBY of four offers settings, joins, leaves, removals, start, end and delete; WRITING offers drafts, joins, leaves, removals, end, delete and a profanity patch", () => {
     const lobby = buildGame({ n: 4, phase: "LOBBY", ready: [], handSize: 0, judge: 0, submitted: [], paused: false });
     const types = new Set(legalCommands(lobby, {}, enumerators).map((e) => e.cmd.type));
-    expect([...types].sort()).toEqual(["endGame", "join", "leave", "removePlayer", "startGame", "updateSettings"]);
+    expect([...types].sort()).toEqual(["deleteGame", "endGame", "join", "leave", "removePlayer", "startGame", "updateSettings"]);
     const writing = buildGame({ n: 4, phase: "WRITING", ready: [false, false, false, false], handSize: 0, judge: 0, submitted: [], paused: false });
-    expect([...new Set(legalCommands(writing, {}, enumerators).map((e) => e.cmd.type))].sort()).toEqual(["endGame", "join", "leave", "removePlayer", "saveDraft", "updateSettings"]);
+    expect([...new Set(legalCommands(writing, {}, enumerators).map((e) => e.cmd.type))].sort()).toEqual(["deleteGame", "endGame", "join", "leave", "removePlayer", "saveDraft", "updateSettings"]);
     const full = { [pid(1)]: { red: Array.from({ length: 10 }, () => "r"), green: Array.from({ length: 8 }, () => "g") } };
     expect(legalCommands(writing, full, enumerators).filter((e) => e.cmd.type === "finishWriting").map((e) => e.actor)).toEqual([seatActor(1)]);
   });
