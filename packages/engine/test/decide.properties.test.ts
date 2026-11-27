@@ -126,7 +126,7 @@ describe("X1 decide is total", () => {
 
   // The expected code per junk entry is written out from the guard ladder (5.3) and 7.1, not read off the handlers. Acceptances are not assumed away:
   // the host's updateSettings with an empty patch is legal in LOBBY, WRITING and PLAYING, and a seated player may leave in LOBBY.
-  const LOBBY_REAL = new Set(["createGame", "updateSettings", "join", "leave", "removePlayer", "startGame", "saveDraft", "finishWriting", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame", "markReminded", "removeCard"]); // independent of REGISTRY on purpose
+  const LOBBY_REAL = new Set(["createGame", "updateSettings", "join", "leave", "removePlayer", "startGame", "saveDraft", "finishWriting", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame", "deleteGame", "markReminded", "removeCard"]); // independent of REGISTRY on purpose
   /** The round commands, from the guard ladder (5.3) and 7.1: 2 actor, 3 stale, 4 phase, 5 pause, 6 role, 9 preconditions 7 expectedVersion required as an integer (the junk bases carry none, so they stop here once past 6). */
   const expectedRound = (g: Game, actor: Actor, c: Command): Rejection | "accepted" => {
     const user = actor.kind === "user" ? actor.uid : null;
@@ -180,6 +180,7 @@ describe("X1 decide is total", () => {
     const midGame = g.phase === "LOBBY" || g.phase === "WRITING" || g.phase === "PLAYING"; // #23 widened leave and removePlayer from LOBBY-only
     if (c.type === "leave") return !seated ? { code: "NOT_AUTHORIZED" } : midGame ? "accepted" : { code: "WRONG_PHASE" };
     if (c.type === "endGame") return !isHost ? { code: "NOT_AUTHORIZED" } : g.phase === "ENDED" ? { code: "WRONG_PHASE" } : "accepted";
+    if (c.type === "deleteGame") return !isHost ? { code: "NOT_AUTHORIZED" } : "accepted"; // host only, every phase (#36)
     if (c.type === "markReminded") {
       // system only; WRITING and PLAYING; the junk base names episode "writing" at generation 0, which no junk game holds (their waiting fields are unsettled), so it is a no-op
       if (actor.kind !== "system") return { code: "NOT_AUTHORIZED" };
@@ -288,12 +289,12 @@ describe("G1 generator sanity", () => {
     expect(legalCommands(g, {}, fixtureEnumerators).length).toBeGreaterThan(6);
   });
 
-  test("the real enumerators are not vacuous: a LOBBY of four offers settings, joins, leaves, removals, start and end; WRITING offers drafts, joins, leaves, removals, end and a profanity patch", () => {
+  test("the real enumerators are not vacuous: a LOBBY of four offers settings, joins, leaves, removals, start, end and delete; WRITING offers drafts, joins, leaves, removals, end, delete and a profanity patch", () => {
     const lobby = buildGame({ n: 4, phase: "LOBBY", ready: [], handSize: 0, judge: 0, submitted: [], paused: false });
     const types = new Set(legalCommands(lobby, {}, enumerators).map((e) => e.cmd.type));
-    expect([...types].sort()).toEqual(["endGame", "join", "leave", "removePlayer", "startGame", "updateSettings"]);
+    expect([...types].sort()).toEqual(["deleteGame", "endGame", "join", "leave", "removePlayer", "startGame", "updateSettings"]);
     const writing = buildGame({ n: 4, phase: "WRITING", ready: [false, false, false, false], handSize: 0, judge: 0, submitted: [], paused: false });
-    expect([...new Set(legalCommands(writing, {}, enumerators).map((e) => e.cmd.type))].sort()).toEqual(["endGame", "join", "leave", "removePlayer", "saveDraft", "updateSettings"]);
+    expect([...new Set(legalCommands(writing, {}, enumerators).map((e) => e.cmd.type))].sort()).toEqual(["deleteGame", "endGame", "join", "leave", "removePlayer", "saveDraft", "updateSettings"]);
     const full = { [pid(1)]: { red: Array.from({ length: 10 }, () => "r"), green: Array.from({ length: 8 }, () => "g") } };
     expect(legalCommands(writing, full, enumerators).filter((e) => e.cmd.type === "finishWriting").map((e) => e.actor)).toEqual([seatActor(1)]);
   });
@@ -308,7 +309,7 @@ describe("G1 generator sanity", () => {
   test("meta: every registered command in the real registry has an enumerator or an explicit exemption; createGame is the one exemption", () => {
     expect(missingEnumerators(REGISTRY, enumerators, exemptions)).toEqual([]);
     expect(Object.keys(exemptions)).toEqual(["createGame"]);
-    expect(Object.keys(enumerators).sort()).toEqual(["closeSubmissions", "confirmSubmission", "endGame", "finishWriting", "join", "leave", "markReminded", "passJudging", "pickWinner", "removeCard", "removePlayer", "saveDraft", "startGame", "updateSettings"]);
+    expect(Object.keys(enumerators).sort()).toEqual(["closeSubmissions", "confirmSubmission", "deleteGame", "endGame", "finishWriting", "join", "leave", "markReminded", "passJudging", "pickWinner", "removeCard", "removePlayer", "saveDraft", "startGame", "updateSettings"]);
   });
 
   test("meta: a registered lobby command with neither an enumerator nor an exemption fails the check (test the test)", () => {

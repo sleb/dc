@@ -476,6 +476,7 @@ export const purgeSeats: IdentityPort["purgeSeats"] = async ({ gameId, uids }) =
 
 - **Which uids (C-SEATS).** The `identity` stage passes the UNION of `job.seatUids` (`players[].uid` minus `hostId`, so removed or departed non-LOBBY players, whose records stay, are included) and every uid read from `games/{g}/seats/*`. LOBBY leavers' player records are deleted (LLD 1), so only their `seats/*` docs (revoked, with a disabled tombstone Auth user) identify them; the `seats` collection survives until the `history` stage, so the union catches them and their disabled users are purged too. Deleting a user also invalidates its refresh tokens, so no separate revoke is needed. The seat docs themselves go with the `history` stage, after this one.
 - At the 50-join cap (LLD 3 open question 8) one call suffices; the loop makes the 1000 limit irrelevant. Resumable: a failed stage reruns the whole call, and a second run deletes nothing.
+- **As built (#36).** The Store side landed: `IdentityPort` and the `identity` stage that passes the union, with the emulator harness recording fake (`delete.test.ts` I32) and the host's own `seats/*` row proving the exclusion. The real `purgeSeats` above, its chunking, failure handling and ID9 remain #43; no Auth deletion happens in this step.
 
 ### 6.4 Seat and host summary
 
@@ -503,8 +504,8 @@ export const purgeSeats: IdentityPort["purgeSeats"] = async ({ gameId, uids }) =
 ### 8.1 Format and allocation (coordination with LLD 3 6.1)
 
 - Alphabet `BCDFGHJKLMNPQRSTVWXZ`, length 4, 160,000 codes, normalized to upper case, whitespace stripped. Allocation, collision retry and one-live-game-per-code are LLD 3's (ST8). Identity adds only validation and lookup.
-- **Lookup (`resolveCode`).** One `get` of `roomCodes/{code}` through `findByRoomCode`. It returns `gameId` only when the doc exists **and** `now - createdAt <= CODE_WINDOW_MS` (72 h, a function param). Past the window the doc stays until release (LLD 3 does not TTL it) but lookups ignore it; the host shares the link instead (the UI should say so). Late joiners days later use the invite link, which has no expiry. A host-triggered code refresh would need a Store change (open question 5).
-- **Invite.** `inviteUrl = {APP_ORIGIN}/g/{gameId}`. The same path with `#k=` is a rejoin link. The client dispatches on the fragment: `k` present means `rejoin`, a stored session means open the game, neither means show the join form for this `gameId`.
+- **Lookup (`resolveCode`).** One `get` of `roomCodes/{code}` through `findByRoomCode`. It returns `gameId` only when the doc exists **and** `now - createdAt <= CODE_WINDOW_MS` (72 h, a function param). As built (#34): the Store's `findByRoomCode(db, code)` normalizes and validates the code with `RoomCodeSchema` and returns `{gameId, createdAt}` (or null) for a code that exists, applying no window; `resolveCode` compares `createdAt` with `CODE_WINDOW_MS` itself, so no Store change was needed. Past the window the doc stays until release (LLD 3 does not TTL it) but lookups ignore it; the host shares the link instead (the UI should say so). Late joiners days later use the invite link, which has no expiry. A host-triggered code refresh would need a Store change (open question 5).
+- **Invite.** `inviteUrl = {APP_ORIGIN}/g/{gameId}`. The same path with `#k=` is a rejoin link. The client dispatches on the fragment: `k` present means `rejoin`, a stored session means open the game, neither means show the join form for this `gameId`. The `resolveCode`, `lobbyInfo` and `joinGame` callables are #42 (4.5 Player join).
 
 ### 8.2 `lobbyInfo`
 

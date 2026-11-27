@@ -2,15 +2,15 @@ import { describe, expect, test } from "bun:test";
 import type { Command, RoundDoc } from "@dc/contracts";
 import { RoundDocSchema } from "@dc/contracts";
 import { DRAFT_REGION_FIELDS, PROJECTOR_REV, VIEW_REGION_FIELDS, decide, toRoundDoc, viewersOf } from "@dc/engine";
-import type { Accepted, Actor, Game } from "@dc/engine";
+import type { Actor, Game } from "@dc/engine";
 import { Timestamp } from "firebase-admin/firestore";
 import { StoreError } from "./errors";
 import { idemId } from "./idem";
 import { extraReadPaths, planCommand } from "./plan";
 import type { Plan, PlanDeps, Reads } from "./plan";
-import { draftPath, eventPath, gamePath, idemPath, outboxPath, roomCodePath, roundPath, viewPath } from "./refs";
+import { deletionPath, draftPath, eventPath, gamePath, idemPath, outboxPath, roomCodePath, roundPath, viewPath } from "./refs";
 import { MemGame, pid, withRepeatedHistory } from "./test-support";
-import type { CommandInput, GameDoc, IdemDoc } from "./types";
+import type { CommandInput, DeletionJob, GameDoc, IdemDoc } from "./types";
 import { MAX_WRITES, increment } from "./writeset";
 import type { DocWrite } from "./writeset";
 
@@ -375,14 +375,104 @@ describe("P5 the write budget (LLD 3 section 5.7)", () => {
   });
 });
 
-describe("P6 deleteGame is reserved for #36", () => {
-  test("an Accepted with deleteGame throws INVARIANT, so no half-built phase 0 can commit", () => {
+describe("P6 phase 0: the deleting marker, the owned code delete and the job", () => {
+  const m = MemGame.create().joinAll(3);
+  const host = userOf(m.game.hostId);
+  const owned = { [roomCodePath(m.game.roomCode)]: { gameId: m.game.id, createdAt: 1 } };
+
+  test("owned code: update the aggregate, delete roomCodes/{code}, create deletions/{id}; deleting outcome, no ledger, no events, no version bump", () => {
+    const p = plan({ game: docOf(m.game), idem: null }, input(m.game, host, { type: "deleteGame" } as Command), owned);
+    expect(p.outcome).toEqual({ kind: "deleting" });
+    expect(p.writes).toHaveLength(3);
+    expect(p.paths).toEqual([roomCodePath(m.game.roomCode)]);
+    const w = byPath(p.writes);
+    const agg = w.get(gamePath(m.game.id));
+    expect(agg?.op).toBe("update");
+    if (agg?.op === "update") {
+      expect(agg.data).toEqual({ "store.deleting": { at: NOW, by: m.game.hostId }, "store.updatedAt": NOW });
+    }
+    expect(w.get(roomCodePath(m.game.roomCode))?.op).toBe("delete");
+    const job = w.get(deletionPath(m.game.id));
+    expect(job?.op).toBe("create");
+    if (job?.op === "create") {
+      const expected: DeletionJob = {
+        gameId: m.game.id,
+        hostId: m.game.hostId,
+        requestedAt: NOW,
+        status: "running",
+        stagesDone: [],
+        seatUids: m.game.players.map((p) => p.uid).filter((u) => u !== m.game.hostId),
+        heartbeatAt: NOW,
+        attempts: 0,
+      };
+      expect(job.data).toEqual({ ...expected } as Record<string, unknown>);
+    }
+    expect(p.writes.some((x) => x.path.includes("/events/") || x.path.includes("/idem/"))).toBe(false);
+    expect(JSON.stringify(p.writes)).not.toContain(`"version":${m.game.version + 1}`);
+  });
+
+  test("a missing code doc or one owned by another game plans 2 writes and no delete", () => {
+    for (const store of [{}, { [roomCodePath(m.game.roomCode)]: { gameId: "another-game", createdAt: 1 } }]) {
+      const p = plan({ game: docOf(m.game), idem: null }, input(m.game, host, { type: "deleteGame" } as Command), store);
+      expect(p.outcome).toEqual({ kind: "deleting" });
+      expect(p.writes).toHaveLength(2);
+      expect(byPath(p.writes).get(roomCodePath(m.game.roomCode))).toBeUndefined();
+    }
+  });
+});
+
+describe("P7 deleting games stop before decide; no extra reads and no writes", () => {
+  test("deleteGame on a game already store.deleting is NOT_FOUND even with a ledger hit", () => {
     const m = MemGame.create().joinAll(3);
-    const fake: PlanDeps = { ...DEPS, decide: (s, c, x) => {
-      const r = decide(s, { type: "endGame" } as Command, x);
-      return r.ok ? { ok: true, value: { ...r.value, deleteGame: true } as Accepted } : r;
-    } };
-    expect(kindOf(() => plan({ game: docOf(m.game), idem: null }, input(m.game, userOf(m.game.hostId), { type: "endGame" } as Command), {}, fake))).toBe("INVARIANT");
+    const deleting = docOf(m.game, PROJECTOR_REV, { at: 1, by: m.game.hostId });
+    const idem: IdemDoc = { at: 1, expiresAt: Timestamp.fromMillis(2), commandType: "deleteGame", version: m.game.version };
+    const p = plan({ game: deleting, idem }, input(m.game, userOf(m.game.hostId), { type: "deleteGame" } as Command), { [roomCodePath(m.game.roomCode)]: { gameId: m.game.id } });
+    expect(p.outcome).toEqual({ kind: "rejected", rejection: { code: "NOT_FOUND" }, version: 0 });
+    expect(p.paths).toEqual([]);
+    expect(p.writes).toEqual([]);
+  });
+});
+
+describe("P8 seatUids and the missing size guard", () => {
+  test("seatUids holds every player uid except the host, including departed players", () => {
+    const m = MemGame.create().joinAll(4);
+    const g = {
+      ...m.game,
+      players: m.game.players.map((p) => (p.id === pid(1) ? { ...p, status: "left" as const } : p.id === pid(2) ? { ...p, status: "removed" as const } : p)),
+    };
+    const p = plan({ game: docOf(g), idem: null }, input(g, userOf(g.hostId), { type: "deleteGame" } as Command), { [roomCodePath(g.roomCode)]: { gameId: g.id } });
+    const job = byPath(p.writes).get(deletionPath(g.id));
+    if (job?.op !== "create") throw new Error("no job");
+    expect(job.data["seatUids"]).toEqual(g.players.map((x) => x.uid).filter((u) => u !== g.hostId));
+    expect(job.data["seatUids"]).toContain(m.uidOf(1));
+    expect(job.data["seatUids"]).not.toContain(g.hostId);
+  });
+
+  test("an oversize aggregate still plans phase 0: the state is not rewritten, so no size guard applies", () => {
+    const m = MemGame.create().joinAll(3);
+    const big = { ...m.game, cards: { c_big: { kind: "red" as const, text: "x".repeat(950_000) } } };
+    const p = plan({ game: docOf(big), idem: null }, input(big, userOf(big.hostId), { type: "deleteGame" } as Command), { [roomCodePath(big.roomCode)]: { gameId: big.id } });
+    expect(p.outcome).toEqual({ kind: "deleting" });
+    expect(p.writes).toHaveLength(3);
+  });
+});
+
+describe("P9 extra reads ask for roomCodes only for deleteGame", () => {
+  test("deleteGame asks for roomCodes/{prev.roomCode}; other commands do not", () => {
+    const m = MemGame.create().joinAll(3);
+    const host = userOf(m.game.hostId);
+    expect(extraReadPaths({ game: docOf(m.game), idem: null }, input(m.game, host, { type: "deleteGame" } as Command))).toEqual([roomCodePath(m.game.roomCode)]);
+    expect(extraReadPaths({ game: docOf(m.game), idem: null }, input(m.game, host, { type: "updateSettings", patch: {} } as Command))).toEqual([]);
+  });
+
+  test("a missing, deleting or replayed first read stops before any room-code read", () => {
+    const m = MemGame.create().joinAll(3);
+    const host = userOf(m.game.hostId);
+    const del = { type: "deleteGame" } as Command;
+    expect(extraReadPaths({ game: null, idem: null }, input(m.game, host, del))).toEqual([]);
+    expect(extraReadPaths({ game: docOf(m.game, PROJECTOR_REV, { at: 1, by: m.game.hostId }), idem: null }, input(m.game, host, del))).toEqual([]);
+    const idem: IdemDoc = { at: 1, expiresAt: Timestamp.fromMillis(2), commandType: "deleteGame", version: 1 };
+    expect(extraReadPaths({ game: docOf(m.game), idem }, input(m.game, host, del))).toEqual([]);
   });
 });
 

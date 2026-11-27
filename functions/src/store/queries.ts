@@ -94,6 +94,15 @@ export const QUERIES: readonly DeclaredQuery[] = [
     source: "LLD 3 section 6.4 stuck-job sweep",
   },
   {
+    id: "hostIdemByGame",
+    collectionGroup: "idem",
+    scope: "COLLECTION_GROUP",
+    parent: "",
+    where: [{ field: "gameId", op: "==", value: "probe" }],
+    orderBy: [],
+    source: "LLD 3 section 6.4 cascade stage hostIdem",
+  },
+  {
     id: "pushSubsByGame",
     collectionGroup: "pushSubs",
     scope: "COLLECTION",

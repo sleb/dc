@@ -149,7 +149,7 @@ describe("EV1 exact ordered events per registered command (LLD 1 section 7.2), i
   });
 
   test("every command in the real registry has an EV1 row here (a new command must add one)", () => {
-    expect(Object.keys(REGISTRY).sort()).toStrictEqual(["closeSubmissions", "confirmSubmission", "createGame", "endGame", "finishWriting", "join", "leave", "markReminded", "passJudging", "pickWinner", "removeCard", "removePlayer", "saveDraft", "startGame", "updateSettings"]);
+    expect(Object.keys(REGISTRY).sort()).toStrictEqual(["closeSubmissions", "confirmSubmission", "createGame", "deleteGame", "endGame", "finishWriting", "join", "leave", "markReminded", "passJudging", "pickWinner", "removeCard", "removePlayer", "saveDraft", "startGame", "updateSettings"]);
   });
 
   test("settle's PausedChanged rides with the command that caused it, and cancels when there is no net change", () => {
@@ -169,7 +169,7 @@ describe("EV2 the catalog equals LLD 1 section 11; deferred tags have no emitter
     PlayStarted: true, PlayerActivated: true, RoundOpened: true, SubmissionConfirmed: true, HandRedrawn: true, SubmissionsClosed: true, JudgeChanged: true, RoundVoided: true,
     WinnerPicked: true, VoteCast: true, CardRemoved: true, GameFinished: true, GameEnded: true, GameDeleted: true, PausedChanged: true,
   };
-  const DEFERRED = ["DeckImported", "HandRedrawn", "VoteCast", "GameDeleted"];
+  const DEFERRED = ["DeckImported", "HandRedrawn", "VoteCast"];
   const src = (): string => [...new Glob("**/*.ts").scanSync(join(import.meta.dir, "../src"))].filter((f) => !f.endsWith(".test.ts"))
     .filter((f) => f !== "types.ts").map((f) => readFileSync(join(import.meta.dir, "../src", f), "utf8")).join("\n");
 
@@ -183,16 +183,20 @@ describe("EV2 the catalog equals LLD 1 section 11; deferred tags have no emitter
     expect([...section.matchAll(/\{ t: "(\w+)"/g)].map((m) => m[1]).sort()).toStrictEqual(declared);
   });
 
-  test("DeckImported (M9), HandRedrawn and VoteCast (M7) and GameDeleted (M3) are in the union but nothing emits them yet", () => {
+  test("DeckImported (M9), HandRedrawn and VoteCast (M7) are in the union but nothing emits them yet; GameDeleted is emitted since #36", () => {
     const code = src();
     for (const t of DEFERRED) expect(code).not.toContain(`t: "${t}"`);
     for (const t of Object.keys(CATALOG).filter((k) => !DEFERRED.includes(k))) expect(code).toContain(`t: "${t}"`);
   });
 
+  // GameDeleted is emitted by the real deleteGame row and asserted exactly in D1 (`delete-game.test.ts`); the scenario
+  // drivers pick only named types, so they never issue it. It is not seeded into `seen`: that would make this loop
+  // unable to fail for it.
+  const DIRECT = new Set(["GameDeleted"]);
   test("over seeded games every non-deferred tag is emitted at least once and no deferred tag ever is", () => {
-    const seen = new Set<string>(["GameCreated", "SettingsUpdated"]); // the driven games start from a lobby that createGame and updateSettings built; both are in EV1
+    const seen = new Set<string>(["GameCreated", "SettingsUpdated"]); // the driven games start from a lobby that createGame and updateSettings built
     for (let seed = 1; seed <= 60; seed++) for (const a of accepts(play(3 + (seed % 5), seed, true))) for (const e of a.events) seen.add(e.t);
-    for (const t of Object.keys(CATALOG).filter((k) => !DEFERRED.includes(k))) expect(seen.has(t) ? t : `missing ${t}`).toBe(t);
+    for (const t of Object.keys(CATALOG).filter((k) => !DEFERRED.includes(k) && !DIRECT.has(k))) expect(seen.has(t) ? t : `missing ${t}`).toBe(t);
     for (const t of DEFERRED) expect(seen.has(t)).toBe(false);
   }, 600_000);
 });
@@ -225,13 +229,13 @@ describe("EV3 the EventDoc inputs: redactEnvelope, seed, events", () => {
     expect([more.aggregateChanged, more.events, more.redactEnvelope]).toStrictEqual([true, [], false]);
   });
 
-  test("a rejection carries no events, and an aggregateChanged:false acceptance carries none either, over whole games with junk commands", () => {
+  test("a rejection carries no events, and an aggregateChanged:false acceptance carries none except deleteGame's GameDeleted, over whole games with junk commands", () => {
     assertProperty(fc.property(fc.integer({ min: 3, max: 6 }), fc.integer(), (n, seed) => {
       const trace = runScenario(decide, lobby(true), Array.from({ length: 400 }, (_, i) => ({ kind: i % 4 === 3 ? ("junk" as const) : ("legal" as const), pick: (i * 7919 + seed) & 0xffff })), { seed, table: enumerators });
-      for (const r of trace.results) {
+      trace.results.forEach((r, i) => {
         if (!r.ok) expect(Object.keys(r)).toStrictEqual(["ok", "error"]);
-        else if (!r.value.aggregateChanged) expect(r.value.events).toStrictEqual([]);
-      }
+        else if (!r.value.aggregateChanged) expect(r.value.events).toStrictEqual(trace.commands[i]?.type === "deleteGame" ? [{ t: "GameDeleted" }] : []);
+      });
       expect(n).toBeGreaterThan(2);
     }), env());
   });

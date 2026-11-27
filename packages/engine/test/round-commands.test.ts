@@ -385,7 +385,7 @@ describe("E15 FINISHED is terminal (8.8)", () => {
       seen.add(c.type);
       const who = c.type === "join" ? userActor(seatUidOf(GAME_ID, pid(9))) : actor; // join is for the seat uid of its playerId
       const r = decide(deepFreeze(structuredClone(finished)), c, ctxFor({ actor: who }));
-      if (c.type === "endGame") { expect(r.ok).toBe(true); continue; } // E15: endGame is the one accepted command (#23); castVote and deleteGame are not registered yet
+      if (c.type === "endGame" || c.type === "deleteGame") { expect(r.ok).toBe(true); continue; } // E15: endGame (#23) and deleteGame (#36); castVote is not registered until M7
       expect(r).toStrictEqual({ ok: false, error: { code: "WRONG_PHASE" } });
     }
     expect([...seen].sort()).toEqual(Object.keys(REGISTRY).sort());

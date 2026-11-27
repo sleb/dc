@@ -1,6 +1,8 @@
 // Test-local seeding (#33, ruling 2): a game built in Bun with the real Engine and written with the Admin SDK in the shape the Store writes
-// (aggregate with `store`, every view doc from a creation fan-out, the room code). No production code path writes it; #34 replaces this with the
-// real createGame. From the seed on, the suites drive the game only through the harness.
+// (aggregate with `store`, every view doc from a creation fan-out, the room code). Fresh lobbies now come from the real createGame (#34) via
+// Table.lobby; this module is for states advanced in Bun before they are seeded. A seeded game has no `events/1` doc and no host ledger under
+// `hosts/{uid}/idem`, both of which createGame writes; #37's fixtures replace this seeding. From the seed on, the suites drive the game only
+// through the harness.
 import { randomBytes } from "node:crypto";
 import { PROJECTOR_REV, decide, fanOut, makeRng } from "@dc/engine";
 import type { Game, GameDrafts } from "@dc/engine";

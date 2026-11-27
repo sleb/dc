@@ -54,6 +54,14 @@ export function servingIndex(q: DeclaredQuery, indexes: Composite[]): Composite 
 
 const fieldsOf = (q: DeclaredQuery) => [...new Set([...q.where.map((w) => w.field), ...q.orderBy.map((o) => o.field)])].filter((f) => f !== DOCUMENT_ID);
 
+/** A collection-group query with one equality field and no order is served by an enabled collection-group single-field index. */
+export function cgSingleField(q: DeclaredQuery, overrides: Override[]): boolean {
+  const fields = fieldsOf(q);
+  if (q.scope !== "COLLECTION_GROUP" || fields.length !== 1 || q.orderBy.length > 0) return false;
+  const field = fields[0];
+  return overrides.some((o) => o.collectionGroup === q.collectionGroup && o.fieldPath === field && (o.indexes ?? []).some((i) => i.queryScope === "COLLECTION_GROUP"));
+}
+
 /** The `indexes: []` overrides that cover a queried field (the field itself or a parent map). */
 export function exemptionsHit(q: DeclaredQuery, overrides: Override[]): string[] {
   return overrides
@@ -79,7 +87,8 @@ describe("the registry", () => {
 describe("Q1 every declared query is served", () => {
   for (const q of QUERIES) {
     test(q.id, () => {
-      expect({ query: q.id, servedBy: servingIndex(q, config.indexes) === null ? "nothing" : "an index" }).toEqual({ query: q.id, servedBy: "an index" });
+      const served = servingIndex(q, config.indexes) !== null || cgSingleField(q, config.fieldOverrides);
+      expect({ query: q.id, servedBy: served ? "an index" : "nothing" }).toEqual({ query: q.id, servedBy: "an index" });
     });
   }
 });
@@ -102,10 +111,13 @@ describe("the matcher, on planted input", () => {
   const base: DeclaredQuery = { id: "t", collectionGroup: "c", scope: "COLLECTION", parent: "", where: [], orderBy: [], source: "test" };
   const composite = (...fields: [string, string][]): Composite => ({ collectionGroup: "c", queryScope: "COLLECTION", fields: fields.map(([fieldPath, order]) => ({ fieldPath, order })) });
 
-  test("one field is automatic at COLLECTION scope, not at COLLECTION_GROUP scope", () => {
+  test("one field is automatic at COLLECTION scope, not at COLLECTION_GROUP scope unless an override enables it", () => {
     const q = { ...base, where: [{ field: "a", op: "==" as const, value: 1 }] };
     expect(servingIndex(q, [])).toBe("automatic");
     expect(servingIndex({ ...q, scope: "COLLECTION_GROUP" }, [])).toBeNull();
+    const cg = { ...q, scope: "COLLECTION_GROUP" as const };
+    expect(cgSingleField(cg, [{ collectionGroup: "c", fieldPath: "a", indexes: [] }])).toBe(false);
+    expect(cgSingleField(cg, [{ collectionGroup: "c", fieldPath: "a", indexes: [{ order: "ASCENDING", queryScope: "COLLECTION_GROUP" }] }])).toBe(true);
   });
 
   test("equality fields go first in any order; the tail must match in order and direction", () => {

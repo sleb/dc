@@ -18,3 +18,68 @@ for (const value of [undefined, "false", "1", "TRUE"]) {
     expect((err as HttpsError).code).toBe("failed-precondition");
   });
 }
+
+// H2 (#34): the gate precedes op dispatch, so the new ops are refused with the same code rather than reaching the store.
+for (const request of [
+  { op: "createGame", hostId: "host-1", hostName: "NAME-SENTINEL-host", idemKey: "idem-1" },
+  { op: "findByRoomCode", code: "BCDF" },
+]) {
+  test(`H2 ${request.op} is refused with failed-precondition when the gate is off`, async () => {
+    delete process.env["FUNCTIONS_EMULATOR"];
+    const err = await handleStoreHarness(request).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpsError);
+    expect((err as HttpsError).code).toBe("failed-precondition");
+  });
+}
+
+// H2 (#35): the two new ops are behind the same gate, and with it on they are dispatched and validated before any Firestore read.
+for (const request of [
+  { op: "rebuildViews", gameId: "gaaaaaaaaaaaaaaaaaaa", now: 1_000 },
+  { op: "listWaitingOn", now: 1_000 },
+  { op: "runDeletion", gameId: "gaaaaaaaaaaaaaaaaaaa", now: 1_000 },
+]) {
+  test(`H2 ${request.op} is refused with failed-precondition when the gate is off`, async () => {
+    delete process.env["FUNCTIONS_EMULATOR"];
+    const err = await handleStoreHarness(request).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpsError);
+    expect((err as HttpsError).code).toBe("failed-precondition");
+  });
+
+  test(`H2 ${request.op} is dispatched (not "unknown op") and validated when the gate is on`, async () => {
+    process.env["FUNCTIONS_EMULATOR"] = "true";
+    const err = await handleStoreHarness({ op: request.op }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpsError);
+    expect((err as HttpsError).code).toBe("invalid-argument");
+    expect((err as HttpsError).message).toContain(request.op);
+  });
+}
+
+// H2 (#36 review): runDeletion's own arguments are checked before any Firestore read, like rebuildViews and listWaitingOn.
+for (const request of [
+  { op: "runDeletion", gameId: "gaaaaaaaaaaaaaaaaaaa", now: "soon" },
+  { op: "runDeletion", gameId: "gaaaaaaaaaaaaaaaaaaa", now: 1_000, captureLog: "yes" },
+]) {
+  test(`H2 runDeletion rejects ${JSON.stringify(request)} with invalid-argument`, async () => {
+    process.env["FUNCTIONS_EMULATOR"] = "true";
+    const err = await handleStoreHarness(request).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpsError);
+    expect((err as HttpsError).code).toBe("invalid-argument");
+    expect((err as HttpsError).message).toContain("runDeletion");
+  });
+}
+
+// H2 (#36 cross-step review): listWaitingOn's optional paging arguments are validated before any Firestore read.
+for (const request of [
+  { op: "listWaitingOn", now: 1_000, limit: 0 },
+  { op: "listWaitingOn", now: 1_000, limit: 1.5 },
+  { op: "listWaitingOn", now: 1_000, after: { dueAt: "soon", gameId: "gaaaaaaaaaaaaaaaaaaa" } },
+  { op: "listWaitingOn", now: 1_000, after: { dueAt: 1, gameId: 2 } },
+]) {
+  test(`H2 listWaitingOn rejects ${JSON.stringify(request)} with invalid-argument`, async () => {
+    process.env["FUNCTIONS_EMULATOR"] = "true";
+    const err = await handleStoreHarness(request).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpsError);
+    expect((err as HttpsError).code).toBe("invalid-argument");
+    expect((err as HttpsError).message).toContain("listWaitingOn");
+  });
+}

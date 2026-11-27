@@ -2,7 +2,7 @@
 // retries a callback error whose numeric `code` is retryable (ABORTED, UNAVAILABLE, ...), and a StoreError must never be retried that way.
 import { EngineInvariantError } from "@dc/engine";
 
-export type StoreErrorKind = "CONTENTION" | "UNAVAILABLE" | "INVARIANT" | "AGGREGATE_TOO_LARGE" | "TOO_MANY_WRITES";
+export type StoreErrorKind = "CONTENTION" | "UNAVAILABLE" | "INVARIANT" | "AGGREGATE_TOO_LARGE" | "TOO_MANY_WRITES" | "ROOM_CODES_EXHAUSTED";
 
 export class StoreError extends Error {
   constructor(readonly kind: StoreErrorKind, message: string, options?: { cause?: unknown }) {
