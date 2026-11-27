@@ -61,11 +61,9 @@ test("I1 20 parallel mixed commands from 10 actors keep every invariant", async 
   // transactions contending on the one aggregate lock, and every invariant is checked on the final state. What no longer races: wave 2's
   // closeSubmissions and passJudging (and its last four confirms) against wave 1's first five confirms and its five updateSettings.
   const results: RunResult[] = [];
-  for (const wave of [reqs.slice(0, 10), reqs.slice(10)]) {
-    const got = await Promise.all(wave.map((q) => run({ gameId: g.id, actor: q.actor, cmd: q.cmd, idemKey: newKey() })));
-    expect(Math.max(...got.map((x) => x.attempts))).toBeGreaterThan(1); // each wave contends on its own
-    results.push(...got);
-  }
+  for (const wave of [reqs.slice(0, 10), reqs.slice(10)]) results.push(...(await Promise.all(wave.map((q) => run({ gameId: g.id, actor: q.actor, cmd: q.cmd, idemKey: newKey() })))));
+  // At least one retry across the test. Each wave retried on its own on a 2-CPU host, but that is not asserted: CPU count and timing differ on CI runners.
+  expect(Math.max(...results.map((x) => x.attempts))).toBeGreaterThan(1);
   const accepted = check(results);
   expect(accepted).toBeGreaterThan(5);
   await invariants(t, g.version, accepted);
