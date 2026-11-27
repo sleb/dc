@@ -8,7 +8,7 @@ import type { App } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import type { Command } from "@dc/contracts";
 import type { Actor, Game } from "@dc/engine";
-import type { CreateOutcome, RoomCodeDoc } from "../../../src/store";
+import type { CreateOutcome, RebuildResult, RoomCodeDoc, WaitingPage } from "../../../src/store";
 
 const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const fakeToken = `${b64({ alg: "none", typ: "JWT" })}.${b64({ app_id: "demo-app", sub: "demo-app", iss: "demo", aud: ["demo"], exp: 4_102_444_800 })}.x`;
@@ -80,6 +80,24 @@ export async function createError(req: CreateRequest): Promise<{ code: string; k
 export async function findRoomCode(code: string): Promise<RoomCodeDoc | null> {
   const res = await call({ op: "findByRoomCode", code });
   return (res.data as { code: RoomCodeDoc | null }).code;
+}
+
+/** rebuildViews (#35): the Store repair path through the emulator-only harness. */
+export async function rebuildViews(gameId: string, now: number): Promise<RebuildResult> {
+  const res = await call({ op: "rebuildViews", gameId, now });
+  return (res.data as { result: RebuildResult }).result;
+}
+
+export interface WaitingPageRequest {
+  now: number;
+  limit?: number;
+  after?: WaitingPage["next"];
+}
+
+/** listWaitingOn (#35): one page of the registry's `waitingOn` query. */
+export async function listWaitingOn(req: WaitingPageRequest): Promise<WaitingPage> {
+  const res = await call({ op: "listWaitingOn", ...req });
+  return (res.data as { page: WaitingPage }).page;
 }
 
 /** The harness error a failed call carries: the HttpsError code and, for a StoreError, its kind. */
