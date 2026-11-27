@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { TTL_GROUPS } from "./wait-indexes";
 
 // V3 (issue #15) and I1 to I3 (#32): the file `firebase deploy --only firestore` uploads is LLD 3 section 4: the four
-// composite indexes, the 17 field exemptions and the six TTL overrides, set equality in each case. The TTL group list
+// composite indexes, the 17 field exemptions, the one enabled collection-group single-field index (#36) and the six TTL
+// overrides, set equality in each case. The TTL group list
 // has one source (`TTL_GROUPS` in wait-indexes.ts, which is what waits for them) and one other copy, in
 // verify-staging.sh, which cannot import TypeScript: the last test here keeps the two from drifting apart. That every
 // declared query is served by these indexes is `functions/src/store/queries.test.ts`.

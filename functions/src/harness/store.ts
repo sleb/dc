@@ -196,6 +196,8 @@ export async function handleStoreHarness(data: unknown): Promise<{ ok: true; [k:
   }
   if (req.op === "listWaitingOn") {
     if (typeof req.now !== "number") bad("listWaitingOn needs now");
+    if (req.limit !== undefined && (!Number.isInteger(req.limit) || req.limit <= 0)) bad("listWaitingOn needs a positive integer limit");
+    if (req.after !== undefined && (typeof req.after !== "object" || req.after === null || typeof req.after.dueAt !== "number" || typeof req.after.gameId !== "string")) bad("listWaitingOn needs after {dueAt: number, gameId: string}");
     return { ok: true, page: await listWaitingOn(db(), { now: req.now, ...(req.limit === undefined ? {} : { limit: req.limit }), ...(req.after === undefined ? {} : { after: req.after }) }) };
   }
   if (req.op === "runDeletion") return deletionOp(req);
