@@ -279,7 +279,6 @@ LLD 0 P10's CI step ("collections named in `firestore.rules` must have a denial 
     { "collectionGroup": "drafts", "fieldPath": "red",     "indexes": [] },
     { "collectionGroup": "drafts", "fieldPath": "green",   "indexes": [] },
     { "collectionGroup": "idem",   "fieldPath": "meta",    "indexes": [] },
-    { "collectionGroup": "idem",   "fieldPath": "gameId",  "indexes": [ { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" } ] },
     { "collectionGroup": "idem",   "fieldPath": "expiresAt", "ttl": true, "indexes": [ { "order": "ASCENDING", "queryScope": "COLLECTION" } ] },
     { "collectionGroup": "outbox", "fieldPath": "expiresAt", "ttl": true, "indexes": [ { "order": "ASCENDING", "queryScope": "COLLECTION" } ] },
     { "collectionGroup": "notifLog",   "fieldPath": "expiresAt", "ttl": true, "indexes": [ { "order": "ASCENDING", "queryScope": "COLLECTION" } ] },

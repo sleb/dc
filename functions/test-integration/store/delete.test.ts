@@ -116,7 +116,7 @@ interface Inventory {
   job: { status: string; stagesDone: string[]; expiresAt: number } | null;
   decks: string[];
   hostIdem: string[];
-  crossHostIdem: Record<string, unknown> | null;
+  crossHostIdem: string | null;
   other: { code: boolean; push: boolean; join: boolean };
 }
 
@@ -133,7 +133,7 @@ async function inventory(c: Cascade): Promise<Inventory> {
     job: jd === undefined ? null : { status: String(jd["status"]), stagesDone: (jd["stagesDone"] as string[]).slice().sort(), expiresAt: (jd["expiresAt"] as Timestamp).toMillis() },
     decks: (await db.collection(`hosts/${c.game.hostId}/decks`).get()).docs.map((d) => d.id).sort(),
     hostIdem: (await db.collection(`hosts/${c.game.hostId}/idem`).get()).docs.map((d) => (d.id === c.otherHostIdemId ? "other" : d.id === c.hostIdemId ? "deleted" : d.id)).sort(),
-    crossHostIdem: (await db.doc(`hosts/${c.crossHostId}/idem/${c.crossHostLedgerId}`).get()).data() ?? null,
+    crossHostIdem: (await db.doc(`hosts/${c.crossHostId}/idem/${c.crossHostLedgerId}`).get()).get("gameId") ?? null,
     other: {
       code: (await db.doc("roomCodes/ZZZZ").get()).exists,
       push: (await db.doc("pushSubs/other-push").get()).exists,
@@ -246,7 +246,7 @@ describe("I37 the host ledger scan pages past 400 rows", () => {
     expect((await phase0(t, c)).outcome).toEqual({ kind: "deleting" });
     expect((await runDeletion(c.game.id, { now: NOW })).result.kind).toBe("done");
 
-    expect((await db.collection(`hosts/${c.game.hostId}/idem`).where("gameId", "==", c.game.id).get()).empty).toBe(true);
+    expect((await db.collection(`hosts/${c.game.hostId}/idem`).where("gameId", "==", c.game.id).get()).size).toBe(0);
     expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`).get()).exists).toBe(true);
   }, 120_000);
 });

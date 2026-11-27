@@ -6,6 +6,9 @@
 // Consumers (`listWaitingOn`, the deletion cascade and sweep, LLD 4's rejoin lookup, LLD 5's `listGamesByHost`, LLD 6's
 // redrives, LLD 7's history listener) build their queries from these entries rather than redeclaring them, so a new
 // query cannot ship without an index check. Adding a query here is how a later step asks for an index.
+//
+// The one index-free read is deliberately absent: the cascade's `hostIdem` stage scans `hosts/{hostUid}/idem` as a plain
+// collection ordered by document id (delete.ts, #82), which needs no field index, so there is nothing here to declare.
 
 export type QueryScope = "COLLECTION" | "COLLECTION_GROUP";
 export type WhereOp = "==" | "<" | "<=" | ">" | ">=";
@@ -92,15 +95,6 @@ export const QUERIES: readonly DeclaredQuery[] = [
     ],
     orderBy: [],
     source: "LLD 3 section 6.4 stuck-job sweep",
-  },
-  {
-    id: "hostIdemByGame",
-    collectionGroup: "idem",
-    scope: "COLLECTION_GROUP",
-    parent: "",
-    where: [{ field: "gameId", op: "==", value: "probe" }],
-    orderBy: [],
-    source: "LLD 3 section 6.4 cascade stage hostIdem",
   },
   {
     id: "pushSubsByGame",

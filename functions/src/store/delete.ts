@@ -2,13 +2,13 @@
 // clients lose the views first and the aggregate survives as the resume marker until the last stage; each stage commits
 // its progress, and every stage is idempotent so a crash at either boundary resumes. The deployed trigger, the real
 // identity port and the hourly redrive are #42/M6; here the emulator-only harness op is the caller.
-import type { Firestore, Query } from "firebase-admin/firestore";
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import type { DocumentSnapshot, Firestore, Query } from "firebase-admin/firestore";
+import { FieldPath, FieldValue, Timestamp } from "firebase-admin/firestore";
 import type { GameId, Uid } from "@dc/contracts";
 import type { Game } from "@dc/engine";
 import { log } from "../log";
 import type { LogFields } from "../log";
-import { deletionPath, gamePath } from "./refs";
+import { deletionPath, gamePath, hostIdemCollectionPath } from "./refs";
 import { registryQuery } from "./registry-query";
 import type { DeletionDeps, DeletionJob, DeletionResult, DeletionStage } from "./types";
 import { DELETION_STAGES } from "./types";
@@ -65,6 +65,33 @@ async function deleteWhere(db: Firestore, query: Query): Promise<void> {
 }
 
 /**
+ * Deletes the host's `createGame` ledger rows that name one game (ST9). The read is a plain collection scan of
+ * `hosts/{hostId}/idem` in `__name__` order, PAGE documents at a time, filtered in code: a collection-group query on
+ * `idem.gameId` needed an enabled single-field index, and `wait-indexes` cannot observe one (LLD 0 P16), so a fresh deploy
+ * could race the cascade against it (#82). The cursor is the last document *read*, never a count or offset, so deleting a
+ * page cannot skip rows; one 400-delete batch per page stays under the 500-write commit limit. A second pass is a no-op.
+ */
+async function deleteHostLedger(db: Firestore, hostId: Uid, gameId: GameId): Promise<void> {
+  const PAGE = 400;
+  const collection = db.collection(hostIdemCollectionPath(hostId)).orderBy(FieldPath.documentId());
+  let after: DocumentSnapshot | undefined;
+  for (;;) {
+    const page = await (after === undefined ? collection : collection.startAfter(after)).limit(PAGE).get();
+    if (page.empty) return;
+    const batch = db.batch();
+    let deletes = 0;
+    for (const doc of page.docs) {
+      if (doc.get("gameId") !== gameId) continue;
+      batch.delete(doc.ref);
+      deletes++;
+    }
+    if (deletes > 0) await batch.commit();
+    if (page.size < PAGE) return;
+    after = page.docs[page.docs.length - 1];
+  }
+}
+
+/**
  * One deletion run (LLD 3 section 6.4): skip the stages already recorded, commit progress after each, then mark the job
  * `done` with a 7-day `expiresAt`. A missing or done job is a no-op. A stale running job logs `deletion.stuck` before it
  * resumes. `attempts` counts invocations, not stages.
@@ -84,6 +111,7 @@ export async function runDeletion(db: Firestore, deps: DeletionDeps, gameId: Gam
   job = { ...job, attempts: job.attempts + 1, heartbeatAt: now };
 
   const game = db.doc(gamePath(gameId));
+  const hostId = job.hostId;
   const stages: Record<DeletionStage, () => Promise<void>> = {
     views: () => db.recursiveDelete(game.collection("views")),
     drafts: () => db.recursiveDelete(game.collection("drafts")),
@@ -94,9 +122,9 @@ export async function runDeletion(db: Firestore, deps: DeletionDeps, gameId: Gam
     },
     push: () => deleteWhere(db, registryQuery(db, "pushSubsByGame", { values: { gameId } })),
     joinIdem: () => deleteWhere(db, registryQuery(db, "joinIdemByGame", { values: { gameId } })),
-    // The host's createGame ledger carries gameId + roomCode; leaving it would replay a deleted game (ST9). The
-    // collection-group query names only the host rows (a game's own idem rows have no gameId field; history removes them).
-    hostIdem: () => deleteWhere(db, registryQuery(db, "hostIdemByGame", { values: { gameId } })),
+    // The host's createGame ledger carries gameId + roomCode; leaving it would replay a deleted game (ST9). The plain
+    // `hosts/{hostId}/idem` scan needs no field index, unlike the collection-group query it replaces (#82).
+    hostIdem: () => deleteHostLedger(db, hostId, gameId),
     history: () => Promise.all(HISTORY_COLLECTIONS.map((c) => db.recursiveDelete(game.collection(c)))).then(() => undefined),
     aggregate: () => game.delete().then(() => undefined),
   };
