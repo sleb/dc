@@ -89,7 +89,7 @@ export async function rebuildViews(gameId: string, now: number): Promise<Rebuild
 }
 
 /** runDeletion (#36): the emulator-only cascade runner with a recording fake identity port. */
-export type DeletionStage = "views" | "drafts" | "identity" | "push" | "joinIdem" | "history" | "aggregate";
+export type DeletionStage = "views" | "drafts" | "identity" | "push" | "joinIdem" | "hostIdem" | "history" | "aggregate";
 export interface DeletionResultLike { kind: "done" | "noop"; reason?: "missing" | "done"; stagesRun: DeletionStage[]; stuck: boolean }
 export interface PurgeCall { gameId: string; uids: string[]; requested: number; deleted: number }
 export interface DeletionRun {

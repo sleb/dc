@@ -49,9 +49,14 @@ test("I1 the composite indexes are exactly the four of LLD 3 section 4 (set equa
 });
 
 test("I2 the field exemptions are exactly the 17 of LLD 3 section 4, each with indexes: [] and no ttl", async () => {
-  const exemptions = ((await readFile()).fieldOverrides ?? []).filter((o) => o.ttl !== true);
+  const exemptions = ((await readFile()).fieldOverrides ?? []).filter((o) => o.ttl !== true && (o.indexes?.length ?? 0) === 0);
   expect(exemptions.map(key).sort()).toEqual([...EXEMPTIONS].sort());
   for (const o of exemptions) expect(o).toEqual({ collectionGroup: o.collectionGroup, fieldPath: o.fieldPath, indexes: [] });
+});
+
+test("I2b the one enabled collection-group single-field index is idem.gameId", async () => {
+  const enabled = ((await readFile()).fieldOverrides ?? []).filter((o) => o.ttl !== true && (o.indexes?.length ?? 0) > 0);
+  expect(enabled).toEqual([{ collectionGroup: "idem", fieldPath: "gameId", indexes: [{ order: "ASCENDING", queryScope: "COLLECTION_GROUP" }] }]);
 });
 
 test("V3 exactly one TTL fieldOverride per TTL group, set equality in both directions", async () => {

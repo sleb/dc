@@ -94,6 +94,9 @@ export async function runDeletion(db: Firestore, deps: DeletionDeps, gameId: Gam
     },
     push: () => deleteWhere(db, registryQuery(db, "pushSubsByGame", { values: { gameId } })),
     joinIdem: () => deleteWhere(db, registryQuery(db, "joinIdemByGame", { values: { gameId } })),
+    // The host's createGame ledger carries gameId + roomCode; leaving it would replay a deleted game (ST9). The
+    // collection-group query names only the host rows (a game's own idem rows have no gameId field; history removes them).
+    hostIdem: () => deleteWhere(db, registryQuery(db, "hostIdemByGame", { values: { gameId } })),
     history: () => Promise.all(HISTORY_COLLECTIONS.map((c) => db.recursiveDelete(game.collection(c)))).then(() => undefined),
     aggregate: () => game.delete().then(() => undefined),
   };

@@ -73,7 +73,7 @@ export type CommandOutcome =
   | { kind: "deleting" };
 
 /** The ordered cascade stages (LLD 3 section 6.4). The aggregate is last: it is the resume marker. */
-export const DELETION_STAGES = ["views", "drafts", "identity", "push", "joinIdem", "history", "aggregate"] as const;
+export const DELETION_STAGES = ["views", "drafts", "identity", "push", "joinIdem", "hostIdem", "history", "aggregate"] as const;
 export type DeletionStage = (typeof DELETION_STAGES)[number];
 
 /** `deletions/{gameId}` (LLD 3 section 2.3): the job survives the aggregate so an interrupted delete can resume. */

@@ -130,7 +130,7 @@ async function inventory(c: Cascade): Promise<Inventory> {
     joinIdem: (await db.collection("joinIdem").where("gameId", "==", c.game.id).get()).docs.map((d) => d.id).sort(),
     job: jd === undefined ? null : { status: String(jd["status"]), stagesDone: (jd["stagesDone"] as string[]).slice().sort(), expiresAt: (jd["expiresAt"] as Timestamp).toMillis() },
     decks: (await db.collection(`hosts/${c.game.hostId}/decks`).get()).docs.map((d) => d.id).sort(),
-    hostIdem: (await db.collection(`hosts/${c.game.hostId}/idem`).get()).docs.map((d) => d.id).sort(),
+    hostIdem: (await db.collection(`hosts/${c.game.hostId}/idem`).get()).docs.map((d) => (d.id === c.otherHostIdemId ? "other" : d.id === c.hostIdemId ? "deleted" : d.id)).sort(),
     other: {
       code: (await db.doc("roomCodes/ZZZZ").get()).exists,
       push: (await db.doc("pushSubs/other-push").get()).exists,
@@ -153,7 +153,7 @@ beforeAll(async () => {
 }, 120_000);
 
 describe("I31 after done the game is gone, the job keeps its 7 days, hosts decks survive", () => {
-  test("no game documents, roomCodes/pushSubs/joinIdem/notifLog rows; job done; decks and idem untouched; another game survives", async () => {
+  test("no game documents, roomCodes/pushSubs/joinIdem/notifLog rows; job done; the deleted ledger is gone, the other game's ledger and decks survive", async () => {
     const c = buildCascade({ hostId: "host-i31" });
     const t = await setup(c);
     const deckBefore = (await db.doc(`hosts/${c.game.hostId}/decks/${c.deckId}`).get()).data();
