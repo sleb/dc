@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { TTL_GROUPS } from "./wait-indexes";
 
 // V3 (issue #15) and I1 to I3 (#32): the file `firebase deploy --only firestore` uploads is LLD 3 section 4: the four
-// composite indexes, the 17 field exemptions, the one enabled collection-group single-field index (#36) and the six TTL
+// composite indexes, the 17 field exemptions, no enabled single-field index (#82) and the six TTL
 // overrides, set equality in each case. The TTL group list
 // has one source (`TTL_GROUPS` in wait-indexes.ts, which is what waits for them) and one other copy, in
 // verify-staging.sh, which cannot import TypeScript: the last test here keeps the two from drifting apart. That every
@@ -55,9 +55,11 @@ test("I2 the field exemptions are exactly the 17 of LLD 3 section 4, each with i
   for (const o of exemptions) expect(o).toEqual({ collectionGroup: o.collectionGroup, fieldPath: o.fieldPath, indexes: [] });
 });
 
-test("I2b the one enabled collection-group single-field index is idem.gameId", async () => {
-  const enabled = ((await readFile()).fieldOverrides ?? []).filter((o) => o.ttl !== true && (o.indexes?.length ?? 0) > 0);
-  expect(enabled).toEqual([{ collectionGroup: "idem", fieldPath: "gameId", indexes: [{ order: "ASCENDING", queryScope: "COLLECTION_GROUP" }] }]);
+test("I2c no fieldOverride enables a single-field index, and idem.gameId is absent (#82)", async () => {
+  const overrides = (await readFile()).fieldOverrides ?? [];
+  const enabled = overrides.filter((o) => o.ttl !== true && (o.indexes?.length ?? 0) > 0);
+  expect(enabled).toEqual([]);
+  expect(overrides.map(key)).not.toContain("idem.gameId");
 });
 
 test("V3 exactly one TTL fieldOverride per TTL group, set equality in both directions", async () => {

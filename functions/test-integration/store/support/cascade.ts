@@ -29,6 +29,9 @@ export interface Cascade {
   hostIdemKey: string;
   /** A second host ledger naming another game; it must survive. */
   otherHostIdemId: string;
+  /** A crafted ledger row under a host who does not own the game, naming it; the cascade leaves it alone (#82). */
+  crossHostId: string;
+  crossHostLedgerId: string;
 }
 
 /**
@@ -65,6 +68,8 @@ export function buildCascade(o: { gameId?: string; roomCode?: string; hostId?: s
     hostIdemId: idemId({ kind: "user", uid: hostId }, hostIdemKey),
     hostIdemKey,
     otherHostIdemId: idemId({ kind: "user", uid: hostId }, `other-key-${gameId}`),
+    crossHostId: `host-cross-${gameId}`,
+    crossHostLedgerId: idemId({ kind: "user", uid: `host-cross-${gameId}` }, `cross-key-${gameId}`),
   };
 }
 
@@ -101,6 +106,8 @@ export async function seedCascade(db: Firestore, c: Cascade, o: { now?: number }
   batch.set(db.doc(`hosts/${c.game.hostId}/decks/${c.deckId}`), { name: "Deck", red: ["DECK-SENTINEL-red"], green: ["DECK-SENTINEL-green"], createdAt: now, updatedAt: now });
   batch.set(db.doc(`hosts/${c.game.hostId}/idem/${c.hostIdemId}`), { at: now, expiresAt, commandType: "createGame", version: 1, gameId: c.game.id, roomCode: c.game.roomCode });
   batch.set(db.doc(`hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`), { at: now, expiresAt, commandType: "createGame", version: 1, gameId: "another-game", roomCode: otherCode });
+  // A crafted row under another host naming this game: no writer produces it, and the cascade reads only the host's own ledger (#82).
+  batch.set(db.doc(`hosts/${c.crossHostId}/idem/${c.crossHostLedgerId}`), { at: now, expiresAt, commandType: "createGame", version: 1, gameId: c.game.id, roomCode: c.game.roomCode });
   batch.set(db.doc(`pushSubs/${otherPushSubId}`), { gameId: "another-game", uid: "another-uid", token: "OTHER-PUSH-SENTINEL" });
   batch.set(db.doc(`joinIdem/${otherJoinIdemId}`), { gameId: "another-game", playerId: pid(6), uid: "another-uid", createdAt: now, expiresAt });
   batch.set(db.doc(`roomCodes/${otherCode}`), { gameId: "another-game", createdAt: now });

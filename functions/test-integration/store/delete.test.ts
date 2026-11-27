@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { Command } from "@dc/contracts";
-import type { Timestamp } from "firebase-admin/firestore";
+import { Timestamp } from "firebase-admin/firestore";
 import { buildCascade, seedCascade } from "./support/cascade";
 import type { Cascade } from "./support/cascade";
 import { Table } from "./support/drive";
@@ -8,9 +8,9 @@ import { clear, create, db, runDeletion, runDeletionError } from "./support/harn
 import { diff, snapshot } from "./support/inspect";
 import { newKey } from "./support/seed";
 
-// I28-I35 (LLD 3 sections 6.4 and 10.3, S5, ST8, ST9, ST16): phase 0, the ordered resumable cascade, the identity
-// union, replay/commands during deletion, room-code ownership and the stuck-job line. The runner is the emulator-only
-// harness op; the deployed trigger, the real purgeSeats and the hourly redrive are #42/M6.
+// I28-I38 (LLD 3 sections 6.4 and 10.3, S5, ST8, ST9, ST16): phase 0, the ordered resumable cascade, the identity
+// union, replay/commands during deletion, room-code ownership, the stuck-job line and the host-ledger keyset scan. The
+// runner is the emulator-only harness op; the deployed trigger, the real purgeSeats and the hourly redrive are #43/M6.
 const NOW = 5_000_000;
 const HOUR = 3_600_000;
 const TTL = 7 * 86_400_000;
@@ -30,6 +30,7 @@ const extraPaths = (c: Cascade): string[] => [
   `hosts/${c.game.hostId}/decks/${c.deckId}`,
   `hosts/${c.game.hostId}/idem/${c.hostIdemId}`,
   `hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`,
+  `hosts/${c.crossHostId}/idem/${c.crossHostLedgerId}`,
 ];
 
 async function setup(c: Cascade): Promise<Table> {
@@ -115,6 +116,7 @@ interface Inventory {
   job: { status: string; stagesDone: string[]; expiresAt: number } | null;
   decks: string[];
   hostIdem: string[];
+  crossHostIdem: string | null;
   other: { code: boolean; push: boolean; join: boolean };
 }
 
@@ -131,6 +133,7 @@ async function inventory(c: Cascade): Promise<Inventory> {
     job: jd === undefined ? null : { status: String(jd["status"]), stagesDone: (jd["stagesDone"] as string[]).slice().sort(), expiresAt: (jd["expiresAt"] as Timestamp).toMillis() },
     decks: (await db.collection(`hosts/${c.game.hostId}/decks`).get()).docs.map((d) => d.id).sort(),
     hostIdem: (await db.collection(`hosts/${c.game.hostId}/idem`).get()).docs.map((d) => (d.id === c.otherHostIdemId ? "other" : d.id === c.hostIdemId ? "deleted" : d.id)).sort(),
+    crossHostIdem: (await db.doc(`hosts/${c.crossHostId}/idem/${c.crossHostLedgerId}`).get()).get("gameId") ?? null,
     other: {
       code: (await db.doc("roomCodes/ZZZZ").get()).exists,
       push: (await db.doc("pushSubs/other-push").get()).exists,
@@ -207,6 +210,68 @@ describe("I31 after done the game is gone, the job keeps its 7 days, hosts decks
     expect(created.outcome.replay).toBe(false);
     expect(created.outcome.gameId).not.toBe(c.game.id);
   }, 120_000);
+});
+
+describe("I36 the hostIdem stage reads only the host's ledger", () => {
+  test("this game's row is gone, the same host's other-game row is byte-equal, and a row under another host naming the game survives", async () => {
+    const c = buildCascade({ hostId: "host-i36" });
+    const t = await setup(c);
+    const otherBefore = (await db.doc(`hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`).get()).data();
+    const crossPath = `hosts/${c.crossHostId}/idem/${c.crossHostLedgerId}`;
+    const crossBefore = (await db.doc(crossPath).get()).data();
+    expect(crossBefore?.["gameId"]).toBe(c.game.id);
+
+    expect((await phase0(t, c)).outcome).toEqual({ kind: "deleting" });
+    expect((await runDeletion(c.game.id, { now: NOW })).result.kind).toBe("done");
+
+    expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.hostIdemId}`).get()).exists).toBe(false);
+    expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`).get()).data()).toEqual(otherBefore);
+    expect((await db.doc(crossPath).get()).data()).toEqual(crossBefore);
+  }, 120_000);
+});
+
+describe("I37 the host ledger scan removes 501 rows across two keyset pages", () => {
+  test("501 rows naming the deleted game are removed across two keyset pages", async () => {
+    const c = buildCascade({ hostId: "host-i37" });
+    const t = await setup(c);
+    const row = { at: c.game.createdAt, expiresAt: Timestamp.fromMillis(c.game.createdAt + TTL), commandType: "createGame", version: 1, gameId: c.game.id, roomCode: c.game.roomCode };
+    for (let start = 0; start < 500; start += 250) {
+      const batch = db.batch();
+      for (let i = start; i < start + 250; i++) batch.set(db.doc(`hosts/${c.game.hostId}/idem/scan-${i}`), row);
+      await batch.commit();
+    }
+    // 500 seeded plus the fixture's one: two keyset pages. Each page's batch is DELETION_PAGE (400) writes, under the
+    // 500-write commit limit by construction; the emulator does not enforce that limit (`delete.test.ts` asserts it).
+    expect((await db.collection(`hosts/${c.game.hostId}/idem`).where("gameId", "==", c.game.id).get()).size).toBe(501);
+
+    expect((await phase0(t, c)).outcome).toEqual({ kind: "deleting" });
+    expect((await runDeletion(c.game.id, { now: NOW })).result.kind).toBe("done");
+
+    expect((await db.collection(`hosts/${c.game.hostId}/idem`).where("gameId", "==", c.game.id).get()).size).toBe(0);
+    expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`).get()).exists).toBe(true);
+  }, 120_000);
+});
+
+describe("I38 the host ledger cursor advances past a full page that deletes nothing", () => {
+  test("400 rows naming another game fill page 1; the matching row after them is still removed", async () => {
+    const c = buildCascade({ hostId: "host-i38" });
+    const t = await setup(c);
+    const batch = db.batch();
+    // `!` sorts before every base64url idem hash, so page 1 is exactly these 400 rows and none names the deleted game.
+    for (let i = 0; i < 400; i++)
+      batch.set(db.doc(`hosts/${c.game.hostId}/idem/!${String(i).padStart(3, "0")}`), { at: 1, commandType: "createGame", version: 1, gameId: "another-game", roomCode: "ZZZZ" });
+    const matching = `hosts/${c.game.hostId}/idem/zzz-matching`;
+    batch.set(db.doc(matching), { at: c.game.createdAt, expiresAt: Timestamp.fromMillis(c.game.createdAt + TTL), commandType: "createGame", version: 1, gameId: c.game.id, roomCode: c.game.roomCode });
+    await batch.commit();
+
+    expect((await phase0(t, c)).outcome).toEqual({ kind: "deleting" });
+    // Without `startAfter`, page 1 deletes nothing and the loop re-reads it until this timeout.
+    expect((await runDeletion(c.game.id, { now: NOW })).result.kind).toBe("done");
+
+    expect((await db.doc(matching).get()).exists).toBe(false);
+    expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.hostIdemId}`).get()).exists).toBe(false);
+    expect((await db.collection(`hosts/${c.game.hostId}/idem`).where("gameId", "==", "another-game").get()).size).toBe(401); // the 400 plus the fixture's other-game row
+  }, 20_000);
 });
 
 describe("I32 the identity stage purges exactly the non-host union", () => {
