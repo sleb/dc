@@ -476,6 +476,7 @@ export const purgeSeats: IdentityPort["purgeSeats"] = async ({ gameId, uids }) =
 
 - **Which uids (C-SEATS).** The `identity` stage passes the UNION of `job.seatUids` (`players[].uid` minus `hostId`, so removed or departed non-LOBBY players, whose records stay, are included) and every uid read from `games/{g}/seats/*`. LOBBY leavers' player records are deleted (LLD 1), so only their `seats/*` docs (revoked, with a disabled tombstone Auth user) identify them; the `seats` collection survives until the `history` stage, so the union catches them and their disabled users are purged too. Deleting a user also invalidates its refresh tokens, so no separate revoke is needed. The seat docs themselves go with the `history` stage, after this one.
 - At the 50-join cap (LLD 3 open question 8) one call suffices; the loop makes the 1000 limit irrelevant. Resumable: a failed stage reruns the whole call, and a second run deletes nothing.
+- **As built (#36).** The Store side landed: `IdentityPort` and the `identity` stage that passes the union, with the emulator harness recording fake (`delete.test.ts` I32) and the host's own `seats/*` row proving the exclusion. The real `purgeSeats` above, its chunking, failure handling and ID9 remain #42; no Auth deletion happens in this step.
 
 ### 6.4 Seat and host summary
 
