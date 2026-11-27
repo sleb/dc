@@ -309,7 +309,7 @@ describe("G1 generator sanity", () => {
   test("meta: every registered command in the real registry has an enumerator or an explicit exemption; createGame is the one exemption", () => {
     expect(missingEnumerators(REGISTRY, enumerators, exemptions)).toEqual([]);
     expect(Object.keys(exemptions)).toEqual(["createGame"]);
-    expect(Object.keys(enumerators).sort()).toEqual(["closeSubmissions", "confirmSubmission", "endGame", "finishWriting", "join", "leave", "markReminded", "passJudging", "pickWinner", "removeCard", "removePlayer", "saveDraft", "startGame", "updateSettings"]);
+    expect(Object.keys(enumerators).sort()).toEqual(["closeSubmissions", "confirmSubmission", "deleteGame", "endGame", "finishWriting", "join", "leave", "markReminded", "passJudging", "pickWinner", "removeCard", "removePlayer", "saveDraft", "startGame", "updateSettings"]);
   });
 
   test("meta: a registered lobby command with neither an enumerator nor an exemption fails the check (test the test)", () => {

@@ -402,7 +402,7 @@ describe("P6 phase 0: the deleting marker, the owned code delete and the job", (
     const job = w.get(deletionPath(m.game.id));
     expect(job?.op).toBe("create");
     if (job?.op === "create") {
-      const expected: DeletionJobLike = {
+      const expected: Record<string, unknown> & DeletionJobLike = {
         gameId: m.game.id,
         hostId: m.game.hostId,
         requestedAt: NOW,
