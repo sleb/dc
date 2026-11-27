@@ -71,6 +71,11 @@ export function exemptionsHit(q: DeclaredQuery, overrides: Override[]): string[]
 }
 
 describe("the registry", () => {
+  test("Q4 the host ledger read is not a declared query", () => {
+    expect({ idem: QUERIES.filter((q) => q.collectionGroup === "idem").map((q) => q.id) }).toEqual({ idem: [] });
+    expect({ hostIdemByGame: QUERIES.some((q) => q.id === "hostIdemByGame") }).toEqual({ hostIdemByGame: false });
+  });
+
   test("query ids are unique and every query names where it is specified", () => {
     expect(new Set(QUERIES.map((q) => q.id)).size).toBe(QUERIES.length);
     for (const q of QUERIES) expect(q.source).not.toBe("");

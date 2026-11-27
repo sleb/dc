@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { Command } from "@dc/contracts";
-import type { Timestamp } from "firebase-admin/firestore";
+import { Timestamp } from "firebase-admin/firestore";
 import { buildCascade, seedCascade } from "./support/cascade";
 import type { Cascade } from "./support/cascade";
 import { Table } from "./support/drive";
@@ -30,6 +30,7 @@ const extraPaths = (c: Cascade): string[] => [
   `hosts/${c.game.hostId}/decks/${c.deckId}`,
   `hosts/${c.game.hostId}/idem/${c.hostIdemId}`,
   `hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`,
+  `hosts/${c.crossHostId}/idem/${c.crossHostLedgerId}`,
 ];
 
 async function setup(c: Cascade): Promise<Table> {
@@ -115,6 +116,7 @@ interface Inventory {
   job: { status: string; stagesDone: string[]; expiresAt: number } | null;
   decks: string[];
   hostIdem: string[];
+  crossHostIdem: Record<string, unknown> | null;
   other: { code: boolean; push: boolean; join: boolean };
 }
 
@@ -131,6 +133,7 @@ async function inventory(c: Cascade): Promise<Inventory> {
     job: jd === undefined ? null : { status: String(jd["status"]), stagesDone: (jd["stagesDone"] as string[]).slice().sort(), expiresAt: (jd["expiresAt"] as Timestamp).toMillis() },
     decks: (await db.collection(`hosts/${c.game.hostId}/decks`).get()).docs.map((d) => d.id).sort(),
     hostIdem: (await db.collection(`hosts/${c.game.hostId}/idem`).get()).docs.map((d) => (d.id === c.otherHostIdemId ? "other" : d.id === c.hostIdemId ? "deleted" : d.id)).sort(),
+    crossHostIdem: (await db.doc(`hosts/${c.crossHostId}/idem/${c.crossHostLedgerId}`).get()).data() ?? null,
     other: {
       code: (await db.doc("roomCodes/ZZZZ").get()).exists,
       push: (await db.doc("pushSubs/other-push").get()).exists,
@@ -206,6 +209,45 @@ describe("I31 after done the game is gone, the job keeps its 7 days, hosts decks
     if (created.outcome.kind !== "accepted") return;
     expect(created.outcome.replay).toBe(false);
     expect(created.outcome.gameId).not.toBe(c.game.id);
+  }, 120_000);
+});
+
+describe("I36 the hostIdem stage reads only the host's ledger", () => {
+  test("this game's row is gone, the same host's other-game row is byte-equal, and a row under another host naming the game survives", async () => {
+    const c = buildCascade({ hostId: "host-i36" });
+    const t = await setup(c);
+    const otherBefore = (await db.doc(`hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`).get()).data();
+    const crossPath = `hosts/${c.crossHostId}/idem/${c.crossHostLedgerId}`;
+    const crossBefore = (await db.doc(crossPath).get()).data();
+    expect(crossBefore?.["gameId"]).toBe(c.game.id);
+
+    expect((await phase0(t, c)).outcome).toEqual({ kind: "deleting" });
+    expect((await runDeletion(c.game.id, { now: NOW })).result.kind).toBe("done");
+
+    expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.hostIdemId}`).get()).exists).toBe(false);
+    expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`).get()).data()).toEqual(otherBefore);
+    expect((await db.doc(crossPath).get()).data()).toEqual(crossBefore);
+  }, 120_000);
+});
+
+describe("I37 the host ledger scan pages past 400 rows", () => {
+  test("501 rows naming the deleted game are all removed, one batch per page", async () => {
+    const c = buildCascade({ hostId: "host-i37" });
+    const t = await setup(c);
+    const row = { at: c.game.createdAt, expiresAt: Timestamp.fromMillis(c.game.createdAt + TTL), commandType: "createGame", version: 1, gameId: c.game.id, roomCode: c.game.roomCode };
+    for (let start = 0; start < 500; start += 250) {
+      const batch = db.batch();
+      for (let i = start; i < start + 250; i++) batch.set(db.doc(`hosts/${c.game.hostId}/idem/scan-${i}`), row);
+      await batch.commit();
+    }
+    // 500 seeded plus the fixture's one: two keyset pages, and a single uncapped read plus one commit would exceed 500 writes.
+    expect((await db.collection(`hosts/${c.game.hostId}/idem`).where("gameId", "==", c.game.id).get()).size).toBe(501);
+
+    expect((await phase0(t, c)).outcome).toEqual({ kind: "deleting" });
+    expect((await runDeletion(c.game.id, { now: NOW })).result.kind).toBe("done");
+
+    expect((await db.collection(`hosts/${c.game.hostId}/idem`).where("gameId", "==", c.game.id).get()).empty).toBe(true);
+    expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`).get()).exists).toBe(true);
   }, 120_000);
 });
 
