@@ -55,6 +55,8 @@ export const enumerators: Record<string, Enumerator> = {
   },
   // endGame: the host, from LOBBY, WRITING, PLAYING or FINISHED (7.1).
   endGame: (g) => (g.phase === "LOBBY" || g.phase === "WRITING" || g.phase === "PLAYING" || g.phase === "FINISHED" ? [{ actor: { kind: "user", uid: g.hostId }, cmd: { type: "endGame" } as Command }] : []),
+  // deleteGame: the host, in every phase including ENDED (7.1, 7.3); the Store deletes the data.
+  deleteGame: (g) => [{ actor: { kind: "user", uid: g.hostId }, cmd: { type: "deleteGame" } as Command }],
   // startGame: the host, from a LOBBY of at least three seated players with no imported deck (a new deck is always playable; gameplay.md "Starting a game").
   startGame: (g) => (g.phase === "LOBBY" && g.players.filter((p) => p.status === "writing").length >= 3 && Object.keys(g.cards).length === 0 ? [{ actor: { kind: "user", uid: g.hostId }, cmd: { type: "startGame" } as Command }] : []),
   // saveDraft: a player who has not finished writing, in WRITING or (a late joiner) in PLAYING: the full target, half of it, and a text-only rewrite of the saved counts.
