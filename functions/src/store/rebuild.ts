@@ -29,17 +29,19 @@ export type RebuildResult =
 const dataOf = (s: DocumentSnapshot): GameDoc | null => (s.exists ? (s.data() as GameDoc) : null);
 
 /**
- * The pure half: a missing aggregate or a `store.deleting` one writes nothing; otherwise the aggregate's rev and every `viewersOf` doc. `storedRev: 0`
- * never equals `PROJECTOR_REV`, so the fan-out rewrites every doc; `from = null` means no viewer can be departing, so no `clearDraft`.
+ * The pure half: a missing aggregate or a `store.deleting` one writes nothing; otherwise the aggregate's rev and every `viewersOf` doc. It takes the
+ * caller's `gameId` and writes `gamePath(gameId)` (like `planCommand`), so the read and write paths are the same by construction rather than trusting
+ * the stored `id` field. `storedRev: 0` never equals `PROJECTOR_REV`, so the fan-out rewrites every doc; `from = null` means no viewer can be
+ * departing, so no `clearDraft`.
  */
-export function planRebuild(doc: GameDoc | null, o: { now: number }): RebuildPlan {
+export function planRebuild(gameId: GameId, doc: GameDoc | null, o: { now: number }): RebuildPlan {
   if (doc === null) return { kind: "missing", writes: [] };
   if (doc.store.deleting !== null) return { kind: "deleting", writes: [] };
   const { prev } = splitStore(doc);
   const w = new WriteSet({ max: MAX_WRITES });
-  w.update(gamePath(doc.id), { "store.viewsRev": PROJECTOR_REV, "store.updatedAt": o.now });
-  for (const x of planViews(doc.id, null, prev, { now: o.now, storedRev: 0 })) w.apply(x);
-  return { kind: "rebuilt", gameId: doc.id, version: prev.version, viewsRev: PROJECTOR_REV, writes: w.writes() };
+  w.update(gamePath(gameId), { "store.viewsRev": PROJECTOR_REV, "store.updatedAt": o.now });
+  for (const x of planViews(gameId, null, prev, { now: o.now, storedRev: 0 })) w.apply(x);
+  return { kind: "rebuilt", gameId, version: prev.version, viewsRev: PROJECTOR_REV, writes: w.writes() };
 }
 
 /** The shell: one transaction, the aggregate read inside it, the planned writes and a typed result. Failures are thrown as `StoreError` (5.8). */
@@ -48,7 +50,7 @@ export async function rebuildViews(db: Firestore, gameId: GameId, o: { now: numb
   try {
     return await db.runTransaction(async (tx) => {
       attempts++;
-      const plan = planRebuild(dataOf(await tx.get(db.doc(gamePath(gameId)))), o);
+      const plan = planRebuild(gameId, dataOf(await tx.get(db.doc(gamePath(gameId)))), o);
       if (plan.kind !== "rebuilt") return { kind: plan.kind };
       applyWrites(tx, db, plan.writes);
       return { kind: "rebuilt", gameId: plan.gameId, version: plan.version, viewsRev: plan.viewsRev, writes: plan.writes.length };

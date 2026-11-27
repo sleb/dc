@@ -17,17 +17,17 @@ const docFor = (m: MemGame, store: Partial<GameDoc["store"]> = {}): GameDoc => (
 const noDraftFields = (w: DocWrite): boolean => w.op !== "merge" || !w.fields.some((f) => f === "draft" || f === "draftSeq");
 
 test("U11 planRebuild: a missing or deleting aggregate plans no write", () => {
-  expect(planRebuild(null, { now: 5 })).toEqual({ kind: "missing", writes: [] });
+  expect(planRebuild("gCaller", null, { now: 5 })).toEqual({ kind: "missing", writes: [] });
   const m = MemGame.create().joinAll(3);
   const deleting = docFor(m, { deleting: { at: 3, by: m.game.hostId } });
-  expect(planRebuild(deleting, { now: 5 })).toEqual({ kind: "deleting", writes: [] });
+  expect(planRebuild(m.game.id, deleting, { now: 5 })).toEqual({ kind: "deleting", writes: [] });
 });
 
 test("U11 planRebuild: one aggregate update plus one view merge per viewer, at the unchanged version", () => {
   const m = MemGame.create().joinAll(4);
   const doc = docFor(m, { viewsRev: 1 });
   const now = 9_000;
-  const plan = planRebuild(doc, { now });
+  const plan = planRebuild(m.game.id, doc, { now });
   expect(plan.kind).toBe("rebuilt");
   if (plan.kind !== "rebuilt") return;
   expect(plan).toMatchObject({ gameId: m.game.id, version: m.game.version, viewsRev: PROJECTOR_REV });
@@ -51,10 +51,22 @@ test("U11 planRebuild: one aggregate update plus one view merge per viewer, at t
   for (const w of plan.writes) expect(w.path).not.toMatch(/\/(events|idem|outbox|drafts)\//);
 });
 
+test("U11 planRebuild writes and reports the caller's gameId, never the stored id field", () => {
+  const m = MemGame.create().joinAll(3);
+  const doc = { ...docFor(m, { viewsRev: 1 }), id: "gStoredElsewhere0001" };
+  const plan = planRebuild(m.game.id, doc, { now: 11 });
+  expect(plan.kind).toBe("rebuilt");
+  if (plan.kind !== "rebuilt") return;
+  expect(plan.gameId).toBe(m.game.id);
+  const paths = plan.writes.map((w) => w.path);
+  expect(paths.every((p) => p === `games/${m.game.id}` || p.startsWith(`games/${m.game.id}/`))).toBe(true);
+  expect(JSON.stringify(paths)).not.toContain("gStoredElsewhere0001");
+});
+
 test("U12 the rebuild is unconditional: the current rev still plans every write, and no write carries the draft region", () => {
   const m = MemGame.create().joinAll(3);
   const current = docFor(m, { viewsRev: PROJECTOR_REV });
-  const plan = planRebuild(current, { now: 7 });
+  const plan = planRebuild(m.game.id, current, { now: 7 });
   expect(plan.kind).toBe("rebuilt");
   if (plan.kind !== "rebuilt") return;
   expect(plan.writes).toHaveLength(1 + viewersOf(m.game).length);
@@ -93,17 +105,19 @@ function fakeDb(path: string, doc: GameDoc | null) {
   return { db: db as never, applied, options };
 }
 
-test("U13 rebuildViews: one transaction with MAX_ATTEMPTS, exactly the planned writes, a typed result", async () => {
+test("U13 rebuildViews: one transaction with MAX_ATTEMPTS, exactly the planned writes, a typed result, all at the caller's gameId", async () => {
   const m = MemGame.create().joinAll(3);
-  const doc = docFor(m, { viewsRev: 1 });
+  // The stored id disagrees with the caller's gameId: the shell reads and writes the caller's path and reports it.
+  const doc = { ...docFor(m, { viewsRev: 1 }), id: "gStoredElsewhere0001" };
   const now = 12_000;
-  const expected = planRebuild(doc, { now });
+  const expected = planRebuild(m.game.id, doc, { now });
   if (expected.kind !== "rebuilt") throw new Error("expected a rebuild plan");
   const { db, applied, options } = fakeDb(`games/${m.game.id}`, doc);
   const result = await rebuildViews(db, m.game.id, { now });
   expect(options).toEqual([{ maxAttempts: MAX_ATTEMPTS }]);
   expect(result).toEqual({ kind: "rebuilt", gameId: m.game.id, version: m.game.version, viewsRev: PROJECTOR_REV, writes: expected.writes.length });
   expect(applied).toEqual(expected.writes.map((w) => `${w.op} ${w.path}`));
+  expect(applied.every((p) => !p.includes("gStoredElsewhere0001"))).toBe(true);
 });
 
 test("U13 rebuildViews: a missing aggregate returns missing and writes nothing", async () => {

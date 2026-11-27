@@ -192,7 +192,7 @@ test("I25 the upgrade path: a text-only saveDraft and then rebuildViews both reb
 }, 240_000);
 
 test("I26 a parallel rebuildViews and count-changing saveDraft both land: version +1, contiguous events, views equal the projection", async () => {
-  const t = await Table.lobby(3);
+  const t = await Table.lobby(3, { settings: { spectators: { enabled: true, vote: false } } });
   await t.host({ type: "startGame" } as Command);
   await t.as(1, { type: "saveDraft", ...(await t.fullDraft(1)) } as Command);
   const start = await t.state();
@@ -210,6 +210,8 @@ test("I26 a parallel rebuildViews and count-changing saveDraft both land: versio
   expect(await eventVersions(t.gameId)).toEqual(Array.from({ length: end.version }, (_, i) => i + 1));
   expect(await viewProblems(t.gameId)).toEqual([]);
   for (const target of viewersOf(end)) {
-    expect((await db.doc(`games/${t.gameId}/views/${target.docId}`).get()).get("viewsRev")).toBe(PROJECTOR_REV);
+    const snap = await db.doc(`games/${t.gameId}/views/${target.docId}`).get();
+    expect(snap.get("viewsRev")).toBe(PROJECTOR_REV);
+    expect(snap.get("version")).toBe(end.version);
   }
 }, 240_000);
