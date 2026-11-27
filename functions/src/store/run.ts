@@ -3,7 +3,9 @@
 // Logging happens after the transaction.
 import type { DocumentSnapshot, Firestore } from "firebase-admin/firestore";
 import { log } from "../log";
+import type { LogFields } from "../log";
 import { StoreError, mapStoreError } from "./errors";
+import { publicCommandType } from "./events";
 import { idemId } from "./idem";
 import { extraReadPaths, planCommand } from "./plan";
 import type { Plan } from "./plan";
@@ -56,7 +58,7 @@ export async function execute(db: Firestore, d: Deps, i: CommandInput): Promise<
     attempts,
     latencyMs: Date.now() - t0,
   });
-  if (sizeWarn) log({ event: "store.size.warn", gameId: i.gameId, commandType: i.cmd.type, ...(outcome.kind === "accepted" ? { version: outcome.version } : {}) });
+  if (sizeWarn) log({ event: "store.size.warn", gameId: i.gameId, commandType: publicCommandType(i.cmd), ...(outcome.kind === "accepted" ? { version: outcome.version } : {}) });
   d.faults?.fire("afterCommit", attempts);
   return { outcome, attempts, writes: writes.length };
 }
@@ -68,11 +70,17 @@ export async function runCommand(db: Firestore, d: Deps, i: CommandInput): Promi
 
 interface LogLine { outcome: "ok" | "rejected" | "error"; reason?: string; version?: number; replay?: boolean; attempts: number; latencyMs: number }
 
-/** `command.done` / `command.rejected`, and `txn.retry` when the transaction ran more than once (LLD 0 section 9). Ids, codes and counts only. */
+/** `command.done` / `command.rejected`, and `txn.retry` when the transaction ran more than once (LLD 0 section 9). Ids, codes and counts only; the command type is the public one (K-A). */
+export function commandLogLines(i: CommandInput, l: LogLine): LogFields[] {
+  const commandType = publicCommandType(i.cmd);
+  const lines: LogFields[] = [{ event: l.outcome === "rejected" ? "command.rejected" : "command.done", gameId: i.gameId, commandType, ...l }];
+  if (l.attempts > 1) lines.push({ event: "txn.retry", gameId: i.gameId, commandType, attempts: l.attempts });
+  return lines;
+}
+
 function logCommand(i: CommandInput, l: LogLine): void {
   try {
-    log({ event: l.outcome === "rejected" ? "command.rejected" : "command.done", gameId: i.gameId, commandType: i.cmd.type, ...l });
-    if (l.attempts > 1) log({ event: "txn.retry", gameId: i.gameId, commandType: i.cmd.type, attempts: l.attempts });
+    for (const line of commandLogLines(i, l)) log(line);
   } catch {
     // Logging must never change the result of a command.
   }

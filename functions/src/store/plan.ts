@@ -8,7 +8,7 @@ import { DRAFT_REGION_FIELDS, PROJECTOR_REV, VIEW_REGION_FIELDS, actorRole, deci
 import type { Actor, Draft, Game, GameDrafts } from "@dc/engine";
 import { Timestamp } from "firebase-admin/firestore";
 import { StoreError } from "./errors";
-import { eventDoc } from "./events";
+import { eventDoc, publicCommandType } from "./events";
 import { idemId } from "./idem";
 import { buildOutbox } from "./outbox";
 import { redact, roundsContaining } from "./redact";
@@ -150,7 +150,7 @@ export function planCommand(r: Reads, extra: ReadonlyMap<string, Data | null>, i
   }
 
   const mySeq = readMine && !a.aggregateChanged && a.draftChanges.some((c) => c.playerId === me) ? seq : undefined; // only a draft-only save's absolute seq is returned
-  const idem: IdemDoc = { at: now, expiresAt: Timestamp.fromMillis(now + IDEM_TTL_MS), commandType: i.cmd.type, version: a.state.version, ...(mySeq === undefined ? {} : { draftSeq: mySeq }), ...(i.meta === undefined ? {} : { meta: i.meta as Json }) };
+  const idem: IdemDoc = { at: now, expiresAt: Timestamp.fromMillis(now + IDEM_TTL_MS), commandType: publicCommandType(i.cmd), version: a.state.version, ...(mySeq === undefined ? {} : { draftSeq: mySeq }), ...(i.meta === undefined ? {} : { meta: i.meta as Json }) };
   w.create(idemPath(i.gameId, idemId(i.actor, i.idemKey)), data(idem));
   return {
     outcome: { kind: "accepted", version: a.state.version, view: viewFor(a.state, i.actor), ...(mySeq === undefined ? {} : { draftSeq: mySeq }), replay: false },

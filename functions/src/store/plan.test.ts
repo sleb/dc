@@ -385,3 +385,21 @@ describe("P6 deleteGame is reserved for #36", () => {
     expect(kindOf(() => plan({ game: docOf(m.game), idem: null }, input(m.game, userOf(m.game.hostId), { type: "endGame" } as Command), {}, fake))).toBe("INVARIANT");
   });
 });
+
+describe("K-A: the ledger records the public command type (review 4714480063)", () => {
+  test("an accepted writeIn's ledger row and events doc both say confirmSubmission", () => {
+    const m = MemGame.playing(3);
+    const r = m.game.round;
+    if (r === null) throw new Error("round");
+    const p = m.game.players.find((x) => x.status === "active" && x.id !== r.judgeId);
+    if (p === undefined) throw new Error("player");
+    // writeIn is not registered until M7: a fake decide accepts it as the hand play it must look like.
+    const fake: PlanDeps = { ...DEPS, decide: (s, _c, x) => decide(s, { type: "confirmSubmission", cardId: p.hand[0], expectedVersion: r.changedAtVersion } as Command, x) };
+    const out = plan({ game: docOf(m.game), idem: null }, input(m.game, userOf(p.uid), { type: "writeIn", text: "CARD-SENTINEL-wi", expectedVersion: r.changedAtVersion } as Command), {}, fake);
+    const idem = out.writes.find((w) => w.path.includes("/idem/"));
+    expect(idem?.op === "create" ? idem.data["commandType"] : null).toBe("confirmSubmission");
+    const ev = out.writes.find((w) => w.path.includes("/events/"));
+    expect(ev?.op === "create" ? ev.data["commandType"] : null).toBe("confirmSubmission");
+    expect(JSON.stringify(out.writes.filter((w) => !w.path.includes("/views/") && !w.path.endsWith(m.game.id)))).not.toContain("writeIn");
+  });
+});
