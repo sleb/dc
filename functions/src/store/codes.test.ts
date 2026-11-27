@@ -45,6 +45,7 @@ describe("U2 no modulo bias", () => {
         counts[pos]?.set(c, (counts[pos]?.get(c) ?? 0) + 1);
       }
     }
+    const expected = 20_000 / CODE_ALPHABET.length;
     for (const position of counts) {
       expect(position.size).toBe(CODE_ALPHABET.length);
       for (const letter of CODE_ALPHABET) {
@@ -52,6 +53,10 @@ describe("U2 no modulo bias", () => {
         expect(n).toBeGreaterThanOrEqual(850);
         expect(n).toBeLessThanOrEqual(1_150);
       }
+      // The ±15% band cannot see a 20-value modulo bias: it moves 16 letters from 4.69% to 5.08% (8.3% relative), still inside the band. A
+      // chi-square over the same counts does: unbiased counts land near 19 (19 df), the bias near 61, so the 0.1% bound at 43.8 separates them.
+      const chiSquare = CODE_ALPHABET.split("").reduce((sum, letter) => sum + ((position.get(letter) ?? 0) - expected) ** 2 / expected, 0);
+      expect(chiSquare).toBeLessThan(43.8);
     }
     // Expected collisions at 20,000 draws over 160,000 codes are about 1,200; well under 1,600 means no shrunken space.
     expect(20_000 - codes.size).toBeLessThan(1_600);
