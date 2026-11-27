@@ -27,14 +27,17 @@ export async function execute(db: Firestore, d: Deps, i: CommandInput): Promise<
   const gameRef = db.doc(gamePath(i.gameId));
   const idemRef = db.doc(idemPath(i.gameId, idemId(i.actor, i.idemKey)));
   let attempts = 0;
+  // Diagnostics only, overwritten on every attempt and never read by the outcome: the aggregate version the last attempt loaded, for the error log line (5.8, ST2 as amended in 5.9).
+  let loadedVersion: number | undefined;
   let result: { plan: Plan } | null = null;
   try {
     result = await db.runTransaction(async (tx) => {
-      attempts++; // the only closure mutation (ST2)
+      attempts++; // with loadedVersion, the only closure mutations, both diagnostics (ST2)
       // ---------- 1. READS: every read before the first write ----------
       const [gSnap, iSnap] = await tx.getAll(gameRef, idemRef);
       if (gSnap === undefined || iSnap === undefined) throw new StoreError("INVARIANT", "getAll returned fewer snapshots than refs");
       const reads = { game: dataOf(gSnap) as GameDoc | null, idem: dataOf(iSnap) as IdemDoc | null };
+      loadedVersion = reads.game?.version;
       const paths = extraReadPaths(reads, i);
       const extra = new Map<string, Record<string, unknown> | null>();
       if (paths.length > 0) for (const s of await tx.getAll(...paths.map((p) => db.doc(p)))) extra.set(s.ref.path, dataOf(s));
@@ -46,7 +49,7 @@ export async function execute(db: Firestore, d: Deps, i: CommandInput): Promise<
     }, { maxAttempts: MAX_ATTEMPTS });
   } catch (e) {
     const err = mapStoreError(e, attempts);
-    logCommand(i, { outcome: "error", reason: err.kind, attempts, latencyMs: Date.now() - t0 });
+    logCommand(i, { outcome: "error", reason: err.kind, ...(loadedVersion === undefined ? {} : { version: loadedVersion }), attempts, latencyMs: Date.now() - t0 });
     throw err;
   }
   const { outcome, writes, sizeWarn } = result.plan;
