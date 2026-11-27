@@ -8,12 +8,21 @@
 // refused, the message says which permission is missing and how to supply a token instead. No token value is ever
 // printed or written. Exit codes: 0 pass, 1 fail, 2 usage.
 //
+// It also runs every declared Firestore query (`functions/src/store/queries.ts`, LLD 3 section 4) with `limit 1`
+// against the deployed database through the REST `runQuery`, as the ambient credential (the deployer in CI). The
+// emulator ignores composite indexes, so this is where a missing one is caught: `FAILED_PRECONDITION` fails the run
+// naming the query, and `PERMISSION_DENIED` is reported separately, as a missing role on the caller, not an index.
+//
 // Custom-token signing is not checked here: that probe (`diag`) was removed in #15 after it passed on staging, and the
 // extended sign-in probe (epoch claim, disabled user, `deleteUsers`) belongs to the identity step, LLD 4 section 13.
 
 import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { QUERIES } from "../functions/src/store/queries";
+import type { DeclaredQuery } from "../functions/src/store/queries";
+import { makeGcloud } from "./gcloud";
+import { accessToken } from "./ops-apply";
 
 const REGION = "us-central1";
 const APPCHECK_API = "https://firebaseappcheck.googleapis.com/v1";
@@ -25,6 +34,9 @@ const TOKENLESS_CODES = new Set(["unauthenticated", "failed-precondition"]);
 /** What a callable answered: its result, or the callable's error status (lowercased) and the HTTP status. */
 export type CallResult = { ok: true; result: unknown } | { ok: false; status: number; code: string };
 
+/** What one declared query answered: ok, or the Firestore API error status (`FAILED_PRECONDITION`) and message. */
+export type QueryResult = { ok: true } | { ok: false; status: string; message: string };
+
 /** Every outward-facing effect, injected so the decision logic is tested without a network. */
 export interface SmokeDeps {
   env: Record<string, string | undefined>;
@@ -34,6 +46,8 @@ export interface SmokeDeps {
   registerDebugToken: (token: string) => Promise<() => Promise<void>>;
   /** Exchanges a debug token for a real App Check token (the JWT the callables verify). */
   exchangeDebugToken: (debugToken: string) => Promise<string>;
+  /** Runs one declared query (limit 1) against the deployed database. */
+  runQuery: (q: DeclaredQuery) => Promise<QueryResult>;
   log: (line: string) => void;
 }
 
@@ -72,6 +86,27 @@ async function checkPing(d: SmokeDeps, appCheckToken: string, reasons: string[])
   else d.log(`no App Check token: rejected (${noToken.code})`);
 }
 
+/** The likely missing permission when the caller may not query; granting it is the project owner's call. */
+const QUERY_PERMISSION = "datastore.entities.list (for example roles/datastore.viewer)";
+
+async function checkQueries(d: SmokeDeps, reasons: string[]): Promise<void> {
+  for (const q of QUERIES) {
+    let r: QueryResult;
+    try {
+      r = await d.runQuery(q);
+    } catch (e) {
+      reasons.push(`query ${q.id} could not run: ${message(e)}`);
+      continue;
+    }
+    if (r.ok) d.log(`query ${q.id}: ok`);
+    else if (r.status === "FAILED_PRECONDITION")
+      reasons.push(`query ${q.id}: missing or building index (FAILED_PRECONDITION): ${r.message}. firestore.indexes.json must declare it and wait-indexes must see it READY`);
+    else if (r.status === "PERMISSION_DENIED")
+      reasons.push(`query ${q.id}: PERMISSION_DENIED for the smoke's credential, so the index was not checked; the caller likely lacks ${QUERY_PERMISSION} on the project: ${r.message}`);
+    else reasons.push(`query ${q.id} failed: ${r.status} ${r.message}`.trim());
+  }
+}
+
 export async function smoke(o: SmokeOptions): Promise<SmokeOutcome> {
   const d: SmokeDeps = { ...realDeps(o.project), ...o.deps };
   const reasons: string[] = [];
@@ -104,6 +139,8 @@ export async function smoke(o: SmokeOptions): Promise<SmokeOutcome> {
 
   try {
     if (reasons.length === 0) await checkPing(d, appCheckToken, reasons);
+    // Independent of App Check (server credentials bypass it), so the queries run whatever the ping found.
+    await checkQueries(d, reasons);
   } finally {
     if (release) {
       try {
@@ -230,6 +267,64 @@ function registerDebugToken(project: string): SmokeDeps["registerDebugToken"] {
   };
 }
 
+const FIRESTORE_API = "https://firestore.googleapis.com/v1";
+const PROBE_ID = "smoke-probe";
+const OPS: Record<DeclaredQuery["where"][number]["op"], string> = { "==": "EQUAL", "<": "LESS_THAN", "<=": "LESS_THAN_OR_EQUAL", ">": "GREATER_THAN", ">=": "GREATER_THAN_OR_EQUAL" };
+
+const valueOf = (v: string | number): Record<string, string> =>
+  typeof v === "string" ? { stringValue: v } : Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: String(v) };
+
+/** A declared query as a Firestore REST `StructuredQuery` with `limit 1`. */
+export function structuredQuery(q: DeclaredQuery): Record<string, unknown> {
+  const filters = q.where.map((w) => {
+    if (w.value === null) {
+      // Only `== null` has a REST form (IS_NULL); anything else would run a different query from the one checked.
+      if (w.op !== "==") throw new Error(`query ${q.id}: ${w.field} ${w.op} null has no Firestore filter; only == null is allowed`);
+      return { unaryFilter: { field: { fieldPath: w.field }, op: "IS_NULL" } };
+    }
+    return { fieldFilter: { field: { fieldPath: w.field }, op: OPS[w.op], value: valueOf(w.value) } };
+  });
+  return {
+    from: [{ collectionId: q.collectionGroup, allDescendants: q.scope === "COLLECTION_GROUP" }],
+    ...(filters.length === 0 ? {} : { where: filters.length === 1 ? filters[0] : { compositeFilter: { op: "AND", filters } } }),
+    ...(q.orderBy.length === 0 ? {} : { orderBy: q.orderBy.map((o) => ({ field: { fieldPath: o.field }, direction: o.direction })) }),
+    limit: 1,
+  };
+}
+
+type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body: string }) => Promise<Response>;
+
+/**
+ * The real `runQuery`: the Firestore REST `documents:runQuery` (under a probe parent document for a subcollection
+ * query), as the ambient credential. The access token stays in memory; any error text is redacted of it.
+ */
+export function runQueryRest(project: string, io: { fetch: Fetch; token: () => Promise<string> }): SmokeDeps["runQuery"] {
+  let cached: Promise<string> | undefined;
+  return async (q) => {
+    cached ??= io.token();
+    const token = await cached;
+    const parent = q.parent === "" ? "" : `/${q.parent.replaceAll("{}", PROBE_ID)}`;
+    const url = `${FIRESTORE_API}/projects/${project}/databases/(default)/documents${parent}:runQuery`;
+    const res = await io.fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ structuredQuery: structuredQuery(q) }),
+    });
+    if (res.ok) return { ok: true };
+    const text = await res.text();
+    let error: Record<string, unknown> = {};
+    try {
+      // runQuery answers an error as an object, or as a one-element array of { error } on a streamed failure.
+      const parsed: unknown = JSON.parse(text);
+      error = objectOf(objectOf(Array.isArray(parsed) ? parsed[0] : parsed)["error"]);
+    } catch {
+      error = {};
+    }
+    const status = stringOf(error["status"]) || `HTTP_${res.status}`;
+    return { ok: false, status, message: redact(stringOf(error["message"]) || text.slice(0, 200), token) };
+  };
+}
+
 /** The public web config for `project` (Firebase web API key), from the committed `apps/web/.env.<mode>` files. */
 async function webApiKey(project: string): Promise<string> {
   const dir = join(ROOT, "apps/web");
@@ -253,6 +348,7 @@ export function realDeps(project: string): SmokeDeps {
     mintToken: () => randomUUID(),
     registerDebugToken: registerDebugToken(project),
     exchangeDebugToken: exchangeDebugToken(project),
+    runQuery: runQueryRest(project, { fetch: (url, init) => fetch(url, init), token: () => accessToken(makeGcloud(process.env)) }),
     log: (line) => console.log(line),
   };
 }

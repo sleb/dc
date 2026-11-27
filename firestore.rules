@@ -1,10 +1,47 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Deny-all until #32. Clients never read or write Firestore directly: views and the session docs come from
-    // callables, with Firestore App Check enforcement as the second lock (LLD 0 section 2, LLD 3 section 3).
-    match /{document=**} {
+
+    function signedIn() { return request.auth != null; }
+
+    match /games/{gameId} {
+      // The aggregate and every private subcollection (drafts, events, outbox, idem, seats, notifLog)
+      // are server-only: no rule below re-opens them.
       allow read, write: if false;
+
+      // Resolved rounds only (PJ13). Readable by any signed-in user who knows the game id; see 3.2.
+      match /rounds/{n} {
+        allow get, list: if signedIn();
+        allow write: if false;
+      }
+
+      // One projected, already-redacted view per viewer (LLD 2). Single-document reads only.
+      // Seat uids (`seat:{gameId}:{playerId}`) must also present the seat's current epoch as the `ep` claim (K-B),
+      // so a session redeemed from a pre-reissue custom token cannot read. Host uids and spectators carry no `ep`.
+      match /views/{uid} {
+        allow get: if signedIn() && request.auth.uid == uid && uid != 'spectator'
+                   && (!uid.matches('^seat:.*')
+                       || request.auth.token.ep == get(/databases/$(database)/documents/games/$(gameId)/seats/$(uid.split(':')[2])).data.epoch);
+        allow list, write: if false;
+      }
+
+      // The shared spectator view. `enabled` mirrors settings.spectators.enabled; a missing doc denies.
+      match /views/spectator {
+        allow get: if signedIn() && resource.data.enabled == true;
+        allow list, write: if false;
+      }
     }
+
+    // A host reads only their own saved decks. The profile and the createGame ledger stay server-only.
+    match /hosts/{hostUid} {
+      allow read, write: if false;
+      match /decks/{deckId} {
+        allow get, list: if signedIn() && request.auth.uid == hostUid;
+        allow write: if false;
+      }
+    }
+
+    // roomCodes, joinIdem, pushSubs, rateLimits, deletions, hosts/*/idem, and anything unlisted.
+    match /{document=**} { allow read, write: if false; }
   }
 }

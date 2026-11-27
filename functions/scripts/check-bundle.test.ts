@@ -4,14 +4,19 @@ import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeRoot, tmp } from "./fixtures";
 
-/** A root whose dist holds the given bundle, with the given exports.json names. */
-async function withBundle(bundle: string, names: string[] = []): Promise<string> {
+/** A root whose dist holds the given bundle, with the given exports.json names (and exports.emulator.json names, and extra files, when given). */
+async function withBundle(bundle: string, names: string[] = [], emulatorNames?: string[], extra: Record<string, string> = {}): Promise<string> {
   return makeRoot({
     "dist/index.cjs": bundle,
     "dist/package.json": JSON.stringify({ dependencies: { "firebase-admin": "1.2.3", "firebase-functions": "4.5.6" } }),
     "exports.json": JSON.stringify(names),
+    ...(emulatorNames === undefined ? {} : { "exports.emulator.json": JSON.stringify(emulatorNames) }),
+    ...extra,
   });
 }
+
+/** A bundle whose `storeHarness` is a function only under the Functions emulator, the way src/harness/store.ts gates it. */
+const GATED = 'exports.ping = () => 1;\nexports.storeHarness = process.env.FUNCTIONS_EMULATOR === "true" ? () => 2 : undefined;\n';
 
 const GOOD = 'const fs = require("node:fs");\nconst os = require("os");\nexports.ping = () => [fs, os];\n';
 
@@ -96,5 +101,47 @@ describe("check-bundle", () => {
     await chmod(join(dir, "node"), 0o755);
     const problems = await checkBundle(await withBundle(GOOD, ["ping"]), { node: join(dir, "node") });
     expect(problems.join("\n")).toMatch(/Node 22.*20\.1\.0/);
+  });
+
+  // H1 (#33, LLD 0 P7 and P9 as amended): the bundle is loaded twice, under the default environment and with FUNCTIONS_EMULATOR=true. The deployed export
+  // list is exports.json alone; exports.emulator.json names the emulator-only functions, which must be absent (undefined) outside the emulator.
+  test("H1 an emulator-only export passes: absent by default, present under FUNCTIONS_EMULATOR=true", async () => {
+    expect(await checkBundle(await withBundle(GATED, ["ping"], ["storeHarness"]))).toEqual([]);
+  });
+
+  test("H1 an emulator-only name exported outside the emulator fails (it would deploy)", async () => {
+    const always = "exports.ping = () => 1;\nexports.storeHarness = () => 2;\n";
+    const problems = await checkBundle(await withBundle(always, ["ping"], ["storeHarness"]));
+    expect(problems.join("\n")).toMatch(/storeHarness.*outside the emulator/);
+  });
+
+  test("H1 an emulator-only name the emulator bundle does not export fails", async () => {
+    const problems = await checkBundle(await withBundle("exports.ping = () => 1;\n", ["ping"], ["storeHarness"]));
+    expect(problems.join("\n")).toMatch(/exports\.emulator\.json lists "storeHarness".*not exported under the emulator/);
+  });
+
+  test("H1 an export that appears only under the emulator and is in neither list fails", async () => {
+    const problems = await checkBundle(await withBundle(GATED, ["ping"], []));
+    expect(problems.join("\n")).toMatch(/storeHarness.*under the emulator.*not in exports\.json or exports\.emulator\.json/);
+  });
+
+  test("H1 a name in both lists fails", async () => {
+    const problems = await checkBundle(await withBundle(GATED, ["ping", "storeHarness"], ["storeHarness"]));
+    expect(problems.join("\n")).toMatch(/storeHarness.*both exports\.json and exports\.emulator\.json/);
+  });
+
+  test("H1 a functions .env file that sets FUNCTIONS_EMULATOR fails (deploy discovery would see the gate open)", async () => {
+    for (const file of [".env", ".env.deepcuts-staging", ".env.local", "dist/.env"]) {
+      const problems = await checkBundle(await withBundle(GATED, ["ping"], ["storeHarness"], { [file]: "A=1\nFUNCTIONS_EMULATOR=true\n" }));
+      expect(problems.join("\n")).toContain(`${file} sets FUNCTIONS_EMULATOR`);
+    }
+  });
+
+  test("H1 the real lists: exports.emulator.json is exactly storeHarness, disjoint from exports.json", async () => {
+    const root = join(import.meta.dir, "..");
+    const emulator = JSON.parse(await Bun.file(join(root, "exports.emulator.json")).text()) as string[];
+    const deployed = JSON.parse(await Bun.file(join(root, "exports.json")).text()) as string[];
+    expect(emulator).toEqual(["storeHarness"]);
+    expect(deployed.filter((n) => emulator.includes(n))).toEqual([]);
   });
 });

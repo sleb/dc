@@ -26,12 +26,22 @@ export const RT = {
     maxInstances: 3,
     concurrency: 80,
   },
+  /** The emulator-only store harness (#33, never deployed): the command shape with room for contention backoff (8 attempts) in the integration suites. */
+  harness: {
+    memory: "256MiB",
+    cpu: 1,
+    timeoutSeconds: 300,
+    minInstances: 0,
+    maxInstances: 3,
+    concurrency: 80,
+  },
 } as const;
+export type RuntimeShape = (typeof RT)[keyof typeof RT];
 
 export interface CallableSpec<O extends { ok: boolean }> {
   name: string;
   allow: readonly PrincipalKind[]; // explicit, no default (API1); "guest" lets a request without auth through
-  runtime: typeof RT.command;
+  runtime: RuntimeShape;
   handler: (c: { req: CallableRequest }) => Promise<O>;
 }
 

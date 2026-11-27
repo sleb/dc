@@ -21,13 +21,13 @@ Produces `functions/dist`, which is what `firebase.json` deploys (`source: funct
 bun scripts/check-bundle.ts
 ```
 
-Fails unless `dist/index.cjs` has no `bun:`, `Bun.` or `@dc/`, every `require`, `__require` and dynamic `import` target is a Node builtin or a `dist` dependency, and the bundle loads under Node and exports exactly the names in `exports.json` (in both directions). Add a function's name to `exports.json` in the same change that exports it. It runs `node` (must be major 22) from `PATH` with a minimal environment; to prove the bundle needs no Bun, run it with Bun removed from `PATH` (CI does, #16).
+Fails unless `dist/index.cjs` has no `bun:`, `Bun.` or `@dc/`, every `require`, `__require` and dynamic `import` target is a Node builtin or a `dist` dependency, and the bundle loads under Node and exports exactly the names in `exports.json` (in both directions). Add a function's name to `exports.json` in the same change that exports it. The bundle is loaded a second time with `FUNCTIONS_EMULATOR=true`, as the Functions emulator loads it: there it must export `exports.json` plus `exports.emulator.json`, the emulator-only names (`storeHarness`), which must be `undefined` (and so neither exported nor deployed) outside the emulator. No `.env*` file may set `FUNCTIONS_EMULATOR` (LLD 0 section 4, #33). It runs `node` (must be major 22) from `PATH` with a minimal environment; to prove the bundle needs no Bun, run it with Bun removed from `PATH` (CI does, #16).
 
 ## Callables
 
 `src/api/callable.ts` is the only module that imports `onCall`. `defineCallable({ name, allow, runtime, handler })` builds a callable with region `us-central1`, service account `fn-runtime@` (the project-relative form the CLI resolves to `fn-runtime@<projectId>.iam.gserviceaccount.com`; a bare name is rejected at deploy time, #15), `enforceAppCheck: true`, `consumeAppCheckToken: false` and the given runtime shape (`RT.command`: 256MiB, cpu 1, concurrency 80, `minInstances` from the `COMMAND_MIN_INSTANCES` param, default 0), records it in `REGISTRY`, checks that the request is authenticated unless `allow` has `guest`, and logs one `api.done` line (`src/log.ts`, the typed logger). A handler that throws anything other than an `HttpsError` reaches the client as `internal` with a fixed message. This is the minimal wrapper of issue #12; #38 completes the pipeline (LLD 5 section 4).
 
-Every export in `src/index.ts` is also listed in `exports.json`. Current exports (one throwaway probe, kept until the real callables arrive):
+Every export in `src/index.ts` is also listed in `exports.json`, except the emulator-only `storeHarness` (`exports.emulator.json`). Current deployed exports (one throwaway probe, kept until the real callables arrive):
 
 - `ping` returns `{ ok: true, node }` (`node` is `process.version`).
 
@@ -36,6 +36,14 @@ The `diag` probe (a custom token for uid `seat:probe:probe`) was removed in #15 
 - `firebase-functions` initializes its own *named* admin app (`__FIREBASE_FUNCTIONS_SDK__`), so `getApps().length === 0` is false in a deployed function even when there is no default app. Test for the default app (`getApps().some((app) => app.name === "[DEFAULT]")`) before calling `getAuth()` and friends.
 - A new region's first deploy needs an Artifact Registry cleanup policy; see `scripts/README.md`.
 
+## Store (`src/store/`)
+
+The Game Store of LLD 3 (#33): `runCommand(db, deps, input)` runs one command as one Firestore transaction, `load(db, gameId)` reads the aggregate. `run.ts` is a thin shell (step-1 reads, then the pure planner `planCommand` in `plan.ts`, then the `WriteSet`'s writes buffered on the transaction); the helpers are `idem.ts` (ledger ids), `writeset.ts` (one write per document, the 5.2a merge rules, `MAX_WRITES`), `outbox.ts`, `events.ts`, `redact.ts`, `size.ts` and `errors.ts` (`StoreError`, `mapStoreError`). `queries.ts` (#32) is the registry of every production query. `test-support.ts` is an in-memory driver over `decide` for tests only. Production `Deps` (clock, CSPRNG seeds and card ids) are `src/deps.ts`; the lazy default Admin app is `src/firebase.ts`.
+
+## The emulator-only store harness
+
+`src/harness/store.ts` exports the `storeHarness` callable only under the Functions emulator (`FUNCTIONS_EMULATOR === "true"`) and refuses in its handler otherwise. It takes the actor from the request, a per-request `now`, per-attempt `seeds`, `faults` (`throwAt` a point, or ABORTED on listed attempts) and a test recipe for `extraWrites`, and returns `{ outcome, attempts, writes, seeds }`, or `{ loaded }` for `op: "load"`. A `StoreError` reaches the client as an `HttpsError` with `details.kind`. It is the route the store suites (`test-integration/store/`) use until the real callables exist (#40); it is never deployed (`check-bundle`).
+
 ## Tests
 
 ```sh
@@ -43,7 +51,7 @@ bun test functions/src functions/scripts   # unit and build-script tests
 bun run test:integration                   # from the repo root
 ```
 
-`bun test functions` alone also picks up `test-integration/`, which needs the emulators; use the paths above. `test:integration` rebuilds `dist`, starts the Auth, Firestore and Functions emulators (`firebase emulators:exec`; the Firestore emulator needs Java) and runs `test-integration/` against the Node bundle. The emulator does not verify App Check tokens but rejects a call with none, so the tests send a well-formed unsigned token; enforcement itself is proven only by the staging smoke test. `firestore.test.ts` writes and reads one document with the Admin SDK; real collections come with #32.
+`bun test functions` alone also picks up `test-integration/`, which needs the emulators; use the paths above. `test:integration` rebuilds `dist`, starts the Auth, Firestore and Functions emulators (`firebase emulators:exec`; the Firestore emulator needs Java) and runs `test-integration/` against the Node bundle. The emulator does not verify App Check tokens but rejects a call with none, so the tests send a well-formed unsigned token; enforcement itself is proven only by the staging smoke test. `firestore.test.ts` writes and reads one document with the Admin SDK. `test-integration/store/` holds the LLD 3 section 10.3 suites: they seed a game with the Admin SDK (`support/seed.ts`, test-local until #34's createGame), drive it only through `storeHarness`, and check documents independently (`support/inspect.ts`: snapshots with update times, the diff that is the oracle for the harness's write count, the PJ11 view check). `bun run test:integration` runs them all; one file: `bun run build:functions && firebase emulators:exec --only auth,firestore,functions --project demo-deepcuts 'bun test functions/test-integration/store/drafts.test.ts'`.
 
 ### Build script tests
 
