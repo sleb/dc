@@ -14,7 +14,7 @@ const docFor = (m: MemGame, store: Partial<GameDoc["store"]> = {}): GameDoc => (
   store: { schema: 1, viewsRev: PROJECTOR_REV, updatedAt: 1_000, deleting: null, ...store },
 });
 
-const noDraftFields = (w: DocWrite): boolean => w.op === "merge" && !w.fields.some((f) => f === "draft" || f === "draftSeq");
+const noDraftFields = (w: DocWrite): boolean => w.op !== "merge" || !w.fields.some((f) => f === "draft" || f === "draftSeq");
 
 test("U11 planRebuild: a missing or deleting aggregate plans no write", () => {
   expect(planRebuild(null, { now: 5 })).toEqual({ kind: "missing", writes: [] });
@@ -79,7 +79,7 @@ function fakeDb(path: string, doc: GameDoc | null) {
   const tx: FakeTx = {
     get: async (ref) => ({ exists: doc !== null && ref.path === path, data: () => doc, ref }),
     create: (ref) => void applied.push(`create ${ref.path}`),
-    set: (ref) => void applied.push(`set ${ref.path}`),
+    set: (ref, _data, options) => void applied.push(`${options === undefined ? "set" : "merge"} ${ref.path}`),
     update: (ref) => void applied.push(`update ${ref.path}`),
     delete: (ref) => void applied.push(`delete ${ref.path}`),
   };
