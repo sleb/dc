@@ -105,7 +105,8 @@ test("I23 rebuildViews writes the aggregate's rev and every viewer's doc at the 
     const p = `games/${t.gameId}/views/${target.docId}`;
     expect(after.has(p)).toBe(true);
     expect(after.get(p)?.data["viewsRev"]).toBe(PROJECTOR_REV);
-    expect(after.get(p)?.data["version"]).toBe(before.get(p)?.data["version"]); // the unchanged version
+    // The rebuild writes the unchanged aggregate version; a disabled spectator doc may have been left at an older envelope by skip-unchanged.
+    expect(after.get(p)?.data["version"]).toBe(start.version);
   }
   expect(await viewProblems(t.gameId)).toEqual([]);
 
