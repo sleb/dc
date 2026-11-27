@@ -8,9 +8,9 @@ import { clear, create, db, runDeletion, runDeletionError } from "./support/harn
 import { diff, snapshot } from "./support/inspect";
 import { newKey } from "./support/seed";
 
-// I28-I35 (LLD 3 sections 6.4 and 10.3, S5, ST8, ST9, ST16): phase 0, the ordered resumable cascade, the identity
-// union, replay/commands during deletion, room-code ownership and the stuck-job line. The runner is the emulator-only
-// harness op; the deployed trigger, the real purgeSeats and the hourly redrive are #42/M6.
+// I28-I38 (LLD 3 sections 6.4 and 10.3, S5, ST8, ST9, ST16): phase 0, the ordered resumable cascade, the identity
+// union, replay/commands during deletion, room-code ownership, the stuck-job line and the host-ledger keyset scan. The
+// runner is the emulator-only harness op; the deployed trigger, the real purgeSeats and the hourly redrive are #43/M6.
 const NOW = 5_000_000;
 const HOUR = 3_600_000;
 const TTL = 7 * 86_400_000;
@@ -230,8 +230,8 @@ describe("I36 the hostIdem stage reads only the host's ledger", () => {
   }, 120_000);
 });
 
-describe("I37 the host ledger scan pages past 400 rows", () => {
-  test("501 rows naming the deleted game are all removed, one batch per page", async () => {
+describe("I37 the host ledger scan removes 501 rows across two keyset pages", () => {
+  test("501 rows naming the deleted game are removed across two keyset pages", async () => {
     const c = buildCascade({ hostId: "host-i37" });
     const t = await setup(c);
     const row = { at: c.game.createdAt, expiresAt: Timestamp.fromMillis(c.game.createdAt + TTL), commandType: "createGame", version: 1, gameId: c.game.id, roomCode: c.game.roomCode };
@@ -240,7 +240,8 @@ describe("I37 the host ledger scan pages past 400 rows", () => {
       for (let i = start; i < start + 250; i++) batch.set(db.doc(`hosts/${c.game.hostId}/idem/scan-${i}`), row);
       await batch.commit();
     }
-    // 500 seeded plus the fixture's one: two keyset pages, and a single uncapped read plus one commit would exceed 500 writes.
+    // 500 seeded plus the fixture's one: two keyset pages. Each page's batch is DELETION_PAGE (400) writes, under the
+    // 500-write commit limit by construction; the emulator does not enforce that limit (`delete.test.ts` asserts it).
     expect((await db.collection(`hosts/${c.game.hostId}/idem`).where("gameId", "==", c.game.id).get()).size).toBe(501);
 
     expect((await phase0(t, c)).outcome).toEqual({ kind: "deleting" });
@@ -249,6 +250,28 @@ describe("I37 the host ledger scan pages past 400 rows", () => {
     expect((await db.collection(`hosts/${c.game.hostId}/idem`).where("gameId", "==", c.game.id).get()).size).toBe(0);
     expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`).get()).exists).toBe(true);
   }, 120_000);
+});
+
+describe("I38 the host ledger cursor advances past a full page that deletes nothing", () => {
+  test("400 rows naming another game fill page 1; the matching row after them is still removed", async () => {
+    const c = buildCascade({ hostId: "host-i38" });
+    const t = await setup(c);
+    const batch = db.batch();
+    // `!` sorts before every base64url idem hash, so page 1 is exactly these 400 rows and none names the deleted game.
+    for (let i = 0; i < 400; i++)
+      batch.set(db.doc(`hosts/${c.game.hostId}/idem/!${String(i).padStart(3, "0")}`), { at: 1, commandType: "createGame", version: 1, gameId: "another-game", roomCode: "ZZZZ" });
+    const matching = `hosts/${c.game.hostId}/idem/zzz-matching`;
+    batch.set(db.doc(matching), { at: c.game.createdAt, expiresAt: Timestamp.fromMillis(c.game.createdAt + TTL), commandType: "createGame", version: 1, gameId: c.game.id, roomCode: c.game.roomCode });
+    await batch.commit();
+
+    expect((await phase0(t, c)).outcome).toEqual({ kind: "deleting" });
+    // Without `startAfter`, page 1 deletes nothing and the loop re-reads it until this timeout.
+    expect((await runDeletion(c.game.id, { now: NOW })).result.kind).toBe("done");
+
+    expect((await db.doc(matching).get()).exists).toBe(false);
+    expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.hostIdemId}`).get()).exists).toBe(false);
+    expect((await db.collection(`hosts/${c.game.hostId}/idem`).where("gameId", "==", "another-game").get()).size).toBe(401); // the 400 plus the fixture's other-game row
+  }, 20_000);
 });
 
 describe("I32 the identity stage purges exactly the non-host union", () => {

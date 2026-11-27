@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DELETION_STAGES, isStuck, identityUids, newDeletionJob, stuckLine } from "./delete";
+import { DELETION_PAGE, DELETION_STAGES, isStuck, identityUids, newDeletionJob, stuckLine } from "./delete";
 import { MemGame, pid } from "./test-support";
 import type { DeletionJob } from "./types";
 
@@ -34,6 +34,14 @@ describe("U5 newDeletionJob", () => {
 describe("U5 DELETION_STAGES", () => {
   test("hostIdem runs before history; the aggregate stays last", () => {
     expect([...DELETION_STAGES]).toEqual(["views", "drafts", "identity", "push", "joinIdem", "hostIdem", "history", "aggregate"]);
+  });
+});
+
+describe("U5 DELETION_PAGE", () => {
+  test("one page of deletes stays within Firestore's 500-write commit limit", () => {
+    // The emulator accepts an oversized batch, so the bound is asserted here rather than observed by the integration suite.
+    expect(DELETION_PAGE).toBeGreaterThan(0);
+    expect(DELETION_PAGE).toBeLessThanOrEqual(500);
   });
 });
 

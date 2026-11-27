@@ -89,7 +89,7 @@ export interface DeletionJob {
   expiresAt?: Timestamp;
 }
 
-/** The Identity half of the cascade (LLD 4 section 6.3). #42 supplies the real Auth implementation. */
+/** The Identity half of the cascade (LLD 4 section 6.3). #43 supplies the real Auth implementation. */
 export interface IdentityPort {
   purgeSeats(i: { gameId: GameId; uids: Uid[] }): Promise<{ requested: number; deleted: number }>;
 }
