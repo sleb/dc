@@ -83,6 +83,8 @@ export async function seedCascade(db: Firestore, c: Cascade, o: { now?: number }
   const expiresAt = Timestamp.fromMillis(now + 7 * 86_400_000);
   const batch = db.batch();
   batch.set(db.doc(`games/${c.game.id}/seats/${pid(7)}`), { uid: c.loobyLeaverUid, secretHash: "SEAT-SENTINEL-hash", createdAt: now, epoch: 0, notBefore: 0, firstSignInAt: null, revokedAt: null });
+  // The host has a seat row too in the real Identity write; the identity stage must still never purge the host's Auth account.
+  batch.set(db.doc(`games/${c.game.id}/seats/${pid(0)}`), { uid: c.game.hostId, secretHash: "SEAT-SENTINEL-host", createdAt: now, epoch: 0, notBefore: 0, firstSignInAt: null, revokedAt: null });
   batch.set(db.doc(`pushSubs/${c.pushSubId}`), { gameId: c.game.id, uid: c.lateUid, token: "PUSH-SENTINEL" });
   batch.set(db.doc(`joinIdem/${c.joinIdemId}`), { gameId: c.game.id, playerId: pid(5), uid: c.lateUid, createdAt: now, expiresAt });
   batch.set(db.doc(`games/${c.game.id}/notifLog/${c.notifLogId}`), { gameId: c.game.id, uid: c.game.hostId, at: now, title: "NOTIF-SENTINEL" });
