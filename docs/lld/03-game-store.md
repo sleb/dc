@@ -321,7 +321,7 @@ export async function runCommand(db: Firestore, d: Deps, i: CommandInput): Promi
   let attempts = 0;
   try {
     return await db.runTransaction(async (tx): Promise<CommandOutcome> => {
-      attempts++;                                            // the only closure mutation allowed (ST2)
+      attempts++;                                            // with the diagnostic loadedVersion (5.9), the only closure mutations allowed (ST2)
 
       // ---------- 1. READS: every read happens before the first write ----------
       const [gSnap, iSnap] = await tx.getAll(gameRef, idemRef);
@@ -732,7 +732,7 @@ export async function listWaitingOn(db: Firestore, o: { now: number; limit?: num
 | # | Invariant | Mechanism and tests |
 |---|---|---|
 | **ST1** | One command is one atomic commit: aggregate, drafts, round docs, events, outbox, ledger, view docs, room-code changes and Identity's `extraWrites` all commit together or not at all. | Single `runTransaction`; crash tests |
-| **ST2** | The transaction callback is re-executable: it performs no external side effect and mutates no state outside `attempts`; the committing attempt's `now` (and, where stored, seed) are the recorded ones; ids come from `ctx.mintId()`. | Lint rule on `functions/src/store/` (no `fetch`, Auth, FCM, logger-with-metric, `Math.random`); forced-abort test |
+| **ST2** | The transaction callback is re-executable: it performs no external side effect and mutates no state outside `attempts` and the diagnostic `loadedVersion` (5.9: overwritten every attempt, never read by the outcome); the committing attempt's `now` (and, where stored, seed) are the recorded ones; ids come from `ctx.mintId()`. | Lint rule on `functions/src/store/` (no `fetch`, Auth, FCM, logger-with-metric, `Math.random`); forced-abort test |
 | **ST3** | A given `(actor, idemKey)` is applied at most once; replay returns the original `version`, applies nothing, and survives concurrency; only accepted commands are recorded. | Ledger doc created in the commit; replay and same-key race tests |
 | **ST4** | Aggregate `version` is contiguous (+1 per aggregate-changing command); exactly one `events` doc per committed version (`events` may be `[]`), so event versions equal aggregate versions with no gaps; versions never decrease. | Assertion before write; `create()`; contention test |
 | **ST5** | Every committed aggregate version has all its viewers' docs written in the same commit (`viewersOf(next)` complete, PJ11/PJ12); a view doc that fails the strict schema aborts the command (PJ2). | Fan-out in `runCommand`; contention and `viewsStale` tests |
