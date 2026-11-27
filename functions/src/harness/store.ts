@@ -3,15 +3,16 @@
 // it; `firebase deploy` discovery and the deployed runtime do not), listed in exports.emulator.json, and re-gated in the handler. `check-bundle`
 // proves it is absent from the deployed export list. It takes the actor from the request, so it must never deploy.
 //
-// Per request, also emulator-gated: `now` (the clock), `seeds` (the shuffle seed of attempt k is seeds[k-1]), `faults` (`throwAt` a point, or an
-// ABORTED on the listed attempts), and a named test recipe for `extraWrites`. It reports the attempts, the distinct documents written and the seed
-// of every attempt.
+// Per request, also emulator-gated: `now` (the clock), `seeds` (for `run`, the shuffle seed of attempt k is seeds[k-1]; for `createGame`, the k-th
+// `newSeed()` call), `faults` (`throwAt` a point, or an ABORTED on the listed attempts), and a named test recipe for `extraWrites`. It reports the
+// attempts, the distinct documents written and the seed of every attempt.
+import type { Settings } from "@dc/contracts";
 import { HttpsError } from "firebase-functions/v2/https";
 import { RT, defineCallable } from "../api/callable";
 import { newCardId } from "../deps";
 import { db } from "../firebase";
-import { StoreError, execute, load } from "../store";
-import type { CommandInput, Deps, DocWrite, FaultHooks, FaultPoint, Json } from "../store";
+import { StoreError, execute, executeCreate, findByRoomCode, load } from "../store";
+import type { CommandInput, CreateInput, Deps, DocWrite, FaultHooks, FaultPoint, Json } from "../store";
 
 const isEmulator = (): boolean => process.env["FUNCTIONS_EMULATOR"] === "true";
 
@@ -25,8 +26,10 @@ class InjectedFault extends Error {
 interface Faults { throwAt?: FaultPoint; abortAttempts?: number[] }
 interface RunRequest { op: "run"; gameId: string; cmd: CommandInput["cmd"]; actor: CommandInput["actor"]; idemKey: string; meta?: Json; extraWrites?: { recipe: "testSeat"; keyHash: string }; now?: number; seeds?: string[]; faults?: Faults }
 interface LoadRequest { op: "load"; gameId: string }
+interface CreateRequest { op: "createGame"; hostId: string; hostName: string; settings?: Partial<Settings>; idemKey: string; now?: number; seeds?: string[] }
+interface FindRequest { op: "findByRoomCode"; code: string }
 
-const HTTPS_CODE = { CONTENTION: "aborted", UNAVAILABLE: "unavailable", INVARIANT: "internal", AGGREGATE_TOO_LARGE: "resource-exhausted", TOO_MANY_WRITES: "resource-exhausted" } as const;
+export const HTTPS_CODE = { CONTENTION: "aborted", UNAVAILABLE: "unavailable", INVARIANT: "internal", AGGREGATE_TOO_LARGE: "resource-exhausted", TOO_MANY_WRITES: "resource-exhausted", ROOM_CODES_EXHAUSTED: "resource-exhausted" } as const;
 
 function bad(what: string): never {
   throw new HttpsError("invalid-argument", `storeHarness: ${what}`);
@@ -89,16 +92,50 @@ async function runOp(r: RunRequest): Promise<{ ok: true; outcome: unknown; attem
   }
 }
 
+async function createOp(r: CreateRequest): Promise<{ ok: true; outcome: unknown; attempts: number; seeds: string[] }> {
+  if (typeof r.hostId !== "string" || typeof r.hostName !== "string" || typeof r.idemKey !== "string") bad("createGame needs hostId, hostName and idemKey");
+  const seeds: string[] = [];
+  const at = r.now ?? Date.now();
+  const input: CreateInput = {
+    hostId: r.hostId,
+    hostName: r.hostName,
+    idemKey: r.idemKey,
+    ...(r.settings === undefined ? {} : { settings: r.settings }),
+  };
+  // The k-th `newSeed()` call is seeds[k]; production draws the code seed then the decide seed once per attempt.
+  const deps: Deps = {
+    clock: () => r.now ?? Date.now(),
+    newSeed: () => {
+      const s = r.seeds?.[seeds.length] ?? `harness-create-${at}-${seeds.length}-${newCardId()}`;
+      seeds.push(s);
+      return s;
+    },
+    mintId: newCardId,
+  };
+  try {
+    const x = await executeCreate(db(), deps, input);
+    return { ok: true, outcome: x.outcome, attempts: x.attempts, seeds };
+  } catch (e) {
+    if (e instanceof StoreError) throw new HttpsError(HTTPS_CODE[e.kind], e.kind, { kind: e.kind });
+    throw e;
+  }
+}
+
 /** The handler, exported for the H2 unit test. Refuses outside the emulator even if reached. */
 export async function handleStoreHarness(data: unknown): Promise<{ ok: true; [k: string]: unknown }> {
   if (!isEmulator()) throw new HttpsError("failed-precondition", "storeHarness runs only in the Functions emulator");
-  const req = data as RunRequest | LoadRequest | null;
+  const req = data as RunRequest | LoadRequest | CreateRequest | FindRequest | null;
   if (req === null || typeof req !== "object") bad("no request");
   if (req.op === "load") {
     if (typeof req.gameId !== "string") bad("load needs gameId");
     return { ok: true, loaded: await load(db(), req.gameId) };
   }
   if (req.op === "run") return runOp(req);
+  if (req.op === "createGame") return createOp(req);
+  if (req.op === "findByRoomCode") {
+    if (typeof req.code !== "string") bad("findByRoomCode needs code");
+    return { ok: true, code: await findByRoomCode(db(), req.code) };
+  }
   return bad("unknown op");
 }
 

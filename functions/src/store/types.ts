@@ -16,6 +16,10 @@ export interface GameDoc extends Game { store: StoreMeta }
 
 export interface DraftDoc { red: string[]; green: string[]; seq: number; updatedAt: number }
 export interface IdemDoc { at: number; expiresAt: Timestamp; commandType: string; version: number; draftSeq?: number; meta?: Json }
+/** `hosts/{hostUid}/idem/{hash}` for createGame (LLD 3 sections 2.3 and 6.1, #34): `IdemDoc` plus the ids a replay returns. */
+export interface CreateLedgerDoc extends IdemDoc { commandType: "createGame"; version: 1; gameId: GameId; roomCode: string }
+/** `roomCodes/{code}` (LLD 3 sections 2.3 and 6.1, #34): one live game per code (ST8). */
+export interface RoomCodeDoc { gameId: GameId; createdAt: number }
 export interface EventDoc { version: number; at: number; commandType: Command["type"]; events: DomainEvent[]; seed?: string; actorPlayerId?: PlayerId }
 
 export type ReminderEvent = { t: "Reminder"; episode: string; episodeGen: number; dueAt: number; waitingOn: PlayerId[] };

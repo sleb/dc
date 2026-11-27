@@ -1,7 +1,9 @@
 // Document paths (LLD 3 section 2.1). Pure strings, so the planner needs no Firestore handle.
-import type { GameId, PlayerId } from "@dc/contracts";
+import type { GameId, PlayerId, Uid } from "@dc/contracts";
 
 export const gamePath = (g: GameId): string => `games/${g}`;
+/** createGame has no game to hold its ledger, so it lives under the host (LLD 3 section 6.1). */
+export const hostIdemPath = (hostUid: Uid, id: string): string => `hosts/${hostUid}/idem/${id}`;
 export const idemPath = (g: GameId, id: string): string => `games/${g}/idem/${id}`;
 export const draftPath = (g: GameId, p: PlayerId): string => `games/${g}/drafts/${p}`;
 export const roundPath = (g: GameId, n: number): string => `games/${g}/rounds/${n}`;

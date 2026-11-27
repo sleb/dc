@@ -1,6 +1,11 @@
 // The Store's public surface (LLD 3, #33). createGame (#34), rebuildViews and listWaitingOn (#35) and the deletion cascade (#36) build on these.
+export { createGame, CREATE_ATTEMPTS, CodeTaken, executeCreate, planCreate } from "./create";
+export type { CreateAttempt, CreateExecution, CreateInput, CreateOutcome, CreatePlan, CreatePlanDeps, CreateReads } from "./create";
+export { ROOM_CODE_ALPHABET, playerIdFromSeed, roomCodeFromSeed } from "./codes";
+export type { ByteSource } from "./codes";
 export { StoreError, mapStoreError } from "./errors";
 export type { StoreErrorKind } from "./errors";
+export { findByRoomCode } from "./find";
 export { eventDoc } from "./events";
 export { idemId } from "./idem";
 export { load } from "./load";
@@ -12,6 +17,6 @@ export * as paths from "./refs";
 export { MAX_ATTEMPTS, execute, runCommand } from "./run";
 export type { Execution } from "./run";
 export { HARD_BYTES, WARN_BYTES, estimateBytes, guardSize } from "./size";
-export type { CommandInput, CommandOutcome, Deps, DraftDoc, EventDoc, FaultHooks, FaultPoint, GameDoc, IdemDoc, Json, OutboxRow, StoreMeta } from "./types";
+export type { CommandInput, CommandOutcome, CreateLedgerDoc, Deps, DraftDoc, EventDoc, FaultHooks, FaultPoint, GameDoc, IdemDoc, Json, OutboxRow, RoomCodeDoc, StoreMeta } from "./types";
 export { MAX_WRITES, WriteSet, applyWrites, increment } from "./writeset";
 export type { DocWrite } from "./writeset";
