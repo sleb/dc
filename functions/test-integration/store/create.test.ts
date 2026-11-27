@@ -90,13 +90,14 @@ test("I17 createGame commits exactly six documents and the aggregate, views, cod
 
 test("I18 seven forced collisions then success on the eighth code; eight collisions exhaust with nothing written", async () => {
   const hostId = newHost();
-  const codes = Array.from({ length: 8 }, (_, i) => roomCodeFromSeed(`i18-${i}`));
+  const seeds = Array.from({ length: 8 }, (_, i) => `i18-${i}`);
+  const codes = seeds.map((seed) => roomCodeFromSeed(seed));
   expect(new Set(codes).size).toBe(8);
   const seeded = (i: number): string => `gI18Seed${String(i).padStart(12, "0")}`;
   for (let i = 0; i < 7; i++) await db.doc(`roomCodes/${codes[i]}`).set({ gameId: seeded(i), createdAt: 1 });
   for (let i = 0; i < 7; i++) expect((await db.doc(`roomCodes/${codes[i]}`).get()).get("gameId")).toBe(seeded(i));
 
-  const result = await create({ hostId, hostName: HOST_NAME, idemKey: newKey(), seeds: createSeeds(codes) });
+  const result = await create({ hostId, hostName: HOST_NAME, idemKey: newKey(), seeds: createSeeds(seeds) });
   const out = accepted(result.outcome);
   expect(out.roomCode).toBe(codes[7] as string);
   expect(result.attempts).toBe(8);
@@ -114,12 +115,13 @@ test("I18 seven forced collisions then success on the eighth code; eight collisi
 
   // Eight occupied codes: resource-exhausted, and an empty diff.
   const hostId2 = newHost();
-  const codes2 = Array.from({ length: 8 }, (_, i) => roomCodeFromSeed(`i18-exhaust-${i}`));
+  const seeds2 = Array.from({ length: 8 }, (_, i) => `i18-exhaust-${i}`);
+  const codes2 = seeds2.map((seed) => roomCodeFromSeed(seed));
   for (let i = 0; i < 8; i++) await db.doc(`roomCodes/${codes2[i]}`).set({ gameId: seeded(i), createdAt: 1 });
   const gamesBefore = await count("games");
   const codesBefore = await count("roomCodes");
-  const err = await createError({ hostId: hostId2, hostName: HOST_NAME, idemKey: newKey(), seeds: createSeeds(codes2) });
-  expect(err).toEqual({ code: "resource-exhausted", kind: "ROOM_CODES_EXHAUSTED" });
+  const err = await createError({ hostId: hostId2, hostName: HOST_NAME, idemKey: newKey(), seeds: createSeeds(seeds2) });
+  expect(err).toEqual({ code: "functions/resource-exhausted", kind: "ROOM_CODES_EXHAUSTED" });
   expect(await count("games")).toBe(gamesBefore);
   expect(await count("roomCodes")).toBe(codesBefore);
   expect(await count(`hosts/${hostId2}/idem`)).toBe(0);
