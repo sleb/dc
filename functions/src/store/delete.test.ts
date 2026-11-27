@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isStuck, identityUids, newDeletionJob, stuckLine } from "./delete";
+import { DELETION_STAGES, isStuck, identityUids, newDeletionJob, stuckLine } from "./delete";
 import { MemGame, pid } from "./test-support";
 import type { DeletionJob } from "./types";
 
@@ -28,6 +28,12 @@ describe("U5 newDeletionJob", () => {
     expect(job.seatUids).toContain(m.uidOf(1));
     expect(job.seatUids).not.toContain(game.hostId);
     expect(job.gameId).not.toBe(game.id); // the caller id, not the stored aggregate id
+  });
+});
+
+describe("U5 DELETION_STAGES", () => {
+  test("hostIdem runs before history; the aggregate stays last", () => {
+    expect([...DELETION_STAGES]).toEqual(["views", "drafts", "identity", "push", "joinIdem", "hostIdem", "history", "aggregate"]);
   });
 });
 

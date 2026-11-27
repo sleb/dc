@@ -1,11 +1,13 @@
 // The deleteGame cascade fixture (#36, LLD 3 sections 6.4 and 10.3): 4 seated players, one resolved round, a late
 // joiner's saved draft, a LOBBY leaver (no player record, only a seeded `seats/*` row) and a non-LOBBY departure whose
 // uid survives only in `seatUids`. The documentation shapes of pushSubs, joinIdem, notifLog, seats, hosts decks and
-// hosts idem are seeded here because their real writers are #42/M6; the cascade must still remove/exclude them.
+// hosts idem are seeded here because their real writers are #41/#42/#43/M6; the cascade must still remove the ones that
+// name the game and leave the other game's rows alone.
 import type { Firestore } from "firebase-admin/firestore";
 import { Timestamp } from "firebase-admin/firestore";
 import type { Command } from "@dc/contracts";
 import type { Game, GameDrafts } from "@dc/engine";
+import { idemId } from "../../../src/store";
 import { MemGame, pid } from "../../../src/store/test-support";
 import { newGameId, newRoomCode, seatUid } from "./seed";
 import { seedGame } from "./seed";
@@ -22,7 +24,11 @@ export interface Cascade {
   joinIdemId: string;
   notifLogId: string;
   deckId: string;
+  /** The host's createGame ledger for this game; the cascade must remove it (ST9). */
   hostIdemId: string;
+  hostIdemKey: string;
+  /** A second host ledger naming another game; it must survive. */
+  otherHostIdemId: string;
 }
 
 /**
@@ -44,6 +50,7 @@ export function buildCascade(o: { gameId?: string; roomCode?: string; hostId?: s
   m.as(1, { type: "leave" } as Command); // a non-LOBBY departure: kept in players[], so its uid is in seatUids
   const loobyLeaverUid = seatUid(gameId, pid(7));
   const seatUids = m.game.players.map((p) => p.uid).filter((u) => u !== hostId);
+  const hostIdemKey = `create-key-${gameId}`;
   return {
     game: m.game,
     drafts: m.drafts,
@@ -55,7 +62,9 @@ export function buildCascade(o: { gameId?: string; roomCode?: string; hostId?: s
     joinIdemId: `join-${gameId}`,
     notifLogId: `notif-${gameId}`,
     deckId: `deck-${gameId}`,
-    hostIdemId: `hidem-${gameId}`,
+    hostIdemId: idemId({ kind: "user", uid: hostId }, hostIdemKey),
+    hostIdemKey,
+    otherHostIdemId: idemId({ kind: "user", uid: hostId }, `other-key-${gameId}`),
   };
 }
 
@@ -69,6 +78,7 @@ export interface CascadeExtras {
   notifLogId: string;
   deckId: string;
   hostIdemId: string;
+  otherHostIdemId: string;
   otherPushSubId: string;
   otherJoinIdemId: string;
 }
@@ -89,7 +99,8 @@ export async function seedCascade(db: Firestore, c: Cascade, o: { now?: number }
   batch.set(db.doc(`joinIdem/${c.joinIdemId}`), { gameId: c.game.id, playerId: pid(5), uid: c.lateUid, createdAt: now, expiresAt });
   batch.set(db.doc(`games/${c.game.id}/notifLog/${c.notifLogId}`), { gameId: c.game.id, uid: c.game.hostId, at: now, title: "NOTIF-SENTINEL" });
   batch.set(db.doc(`hosts/${c.game.hostId}/decks/${c.deckId}`), { name: "Deck", red: ["DECK-SENTINEL-red"], green: ["DECK-SENTINEL-green"], createdAt: now, updatedAt: now });
-  batch.set(db.doc(`hosts/${c.game.hostId}/idem/${c.hostIdemId}`), { at: now, expiresAt, commandType: "createGame", version: 1, gameId: "another-game", roomCode: otherCode });
+  batch.set(db.doc(`hosts/${c.game.hostId}/idem/${c.hostIdemId}`), { at: now, expiresAt, commandType: "createGame", version: 1, gameId: c.game.id, roomCode: c.game.roomCode });
+  batch.set(db.doc(`hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`), { at: now, expiresAt, commandType: "createGame", version: 1, gameId: "another-game", roomCode: otherCode });
   batch.set(db.doc(`pushSubs/${otherPushSubId}`), { gameId: "another-game", uid: "another-uid", token: "OTHER-PUSH-SENTINEL" });
   batch.set(db.doc(`joinIdem/${otherJoinIdemId}`), { gameId: "another-game", playerId: pid(6), uid: "another-uid", createdAt: now, expiresAt });
   batch.set(db.doc(`roomCodes/${otherCode}`), { gameId: "another-game", createdAt: now });
@@ -104,6 +115,7 @@ export async function seedCascade(db: Firestore, c: Cascade, o: { now?: number }
     notifLogId: c.notifLogId,
     deckId: c.deckId,
     hostIdemId: c.hostIdemId,
+    otherHostIdemId: c.otherHostIdemId,
     otherPushSubId,
     otherJoinIdemId,
   };

@@ -4,7 +4,7 @@ import type { Timestamp } from "firebase-admin/firestore";
 import { buildCascade, seedCascade } from "./support/cascade";
 import type { Cascade } from "./support/cascade";
 import { Table } from "./support/drive";
-import { clear, db, runDeletion, runDeletionError } from "./support/harness";
+import { clear, create, db, runDeletion, runDeletionError } from "./support/harness";
 import { diff, snapshot } from "./support/inspect";
 import { newKey } from "./support/seed";
 
@@ -14,7 +14,7 @@ import { newKey } from "./support/seed";
 const NOW = 5_000_000;
 const HOUR = 3_600_000;
 const TTL = 7 * 86_400_000;
-const STAGES = ["views", "drafts", "identity", "push", "joinIdem", "history", "aggregate"] as const;
+const STAGES = ["views", "drafts", "identity", "push", "joinIdem", "hostIdem", "history", "aggregate"] as const;
 
 beforeAll(clear);
 
@@ -29,6 +29,7 @@ const extraPaths = (c: Cascade): string[] => [
   "joinIdem/other-join",
   `hosts/${c.game.hostId}/decks/${c.deckId}`,
   `hosts/${c.game.hostId}/idem/${c.hostIdemId}`,
+  `hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`,
 ];
 
 async function setup(c: Cascade): Promise<Table> {
@@ -156,7 +157,7 @@ describe("I31 after done the game is gone, the job keeps its 7 days, hosts decks
     const c = buildCascade({ hostId: "host-i31" });
     const t = await setup(c);
     const deckBefore = (await db.doc(`hosts/${c.game.hostId}/decks/${c.deckId}`).get()).data();
-    const idemBefore = (await db.doc(`hosts/${c.game.hostId}/idem/${c.hostIdemId}`).get()).data();
+    const otherIdemBefore = (await db.doc(`hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`).get()).data();
     expect((await phase0(t, c)).outcome).toEqual({ kind: "deleting" });
     const r = await runDeletion(c.game.id, { now: NOW });
     expect(r.result.kind).toBe("done");
@@ -175,7 +176,8 @@ describe("I31 after done the game is gone, the job keeps its 7 days, hosts decks
     expect((job?.["expiresAt"] as Timestamp).toMillis()).toBe(NOW + TTL);
 
     expect((await db.doc(`hosts/${c.game.hostId}/decks/${c.deckId}`).get()).data()).toEqual(deckBefore);
-    expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.hostIdemId}`).get()).data()).toEqual(idemBefore);
+    expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.hostIdemId}`).get()).exists).toBe(false); // the deleted game's createGame ledger is gone (ST9)
+    expect((await db.doc(`hosts/${c.game.hostId}/idem/${c.otherHostIdemId}`).get()).data()).toEqual(otherIdemBefore);
     expect((await db.doc("pushSubs/other-push").get()).exists).toBe(true);
     expect((await db.doc("joinIdem/other-join").get()).exists).toBe(true);
     expect((await db.doc("roomCodes/ZZZZ").get()).get("gameId")).toBe("another-game");
@@ -192,6 +194,18 @@ describe("I31 after done the game is gone, the job keeps its 7 days, hosts decks
     expect((await runDeletion(c.game.id, { now: NOW })).result.kind).toBe("done");
     expect((await db.collection("pushSubs").where("gameId", "==", c.game.id).get()).empty).toBe(true);
     expect((await db.doc("pushSubs/other-push").get()).exists).toBe(true);
+  }, 120_000);
+
+  test("a same-key createGame after the cascade creates a new game, not a replay of the deleted one", async () => {
+    const c = buildCascade({ hostId: "host-i31-replay" });
+    const t = await setup(c);
+    expect((await phase0(t, c)).outcome).toEqual({ kind: "deleting" });
+    expect((await runDeletion(c.game.id, { now: NOW })).result.kind).toBe("done");
+    const created = await create({ hostId: c.game.hostId, hostName: "NAME-SENTINEL-replay", idemKey: c.hostIdemKey, seeds: ["i36-replay-code", "i36-replay-decide"] });
+    expect(created.outcome.kind).toBe("accepted");
+    if (created.outcome.kind !== "accepted") return;
+    expect(created.outcome.replay).toBe(false);
+    expect(created.outcome.gameId).not.toBe(c.game.id);
   }, 120_000);
 });
 
