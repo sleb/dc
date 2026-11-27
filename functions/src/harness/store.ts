@@ -11,8 +11,9 @@ import { HttpsError } from "firebase-functions/v2/https";
 import { RT, defineCallable } from "../api/callable";
 import { newCardId } from "../deps";
 import { db } from "../firebase";
-import { StoreError, execute, executeCreate, findByRoomCode, listWaitingOn, load, rebuildViews } from "../store";
-import type { CommandInput, CreateInput, Deps, DocWrite, FaultHooks, FaultPoint, Json } from "../store";
+import { DELETION_STAGES, StoreError, execute, executeCreate, findByRoomCode, listWaitingOn, load, rebuildViews, runDeletion } from "../store";
+import type { CommandInput, CreateInput, DeletionDeps, DeletionStage, Deps, DocWrite, FaultHooks, FaultPoint, Json } from "../store";
+import type { LogFields } from "../log";
 
 const isEmulator = (): boolean => process.env["FUNCTIONS_EMULATOR"] === "true";
 
@@ -30,6 +31,9 @@ interface CreateRequest { op: "createGame"; hostId: string; hostName: string; se
 interface FindRequest { op: "findByRoomCode"; code: string }
 interface RebuildRequest { op: "rebuildViews"; gameId: string; now: number }
 interface WaitingRequest { op: "listWaitingOn"; now: number; limit?: number; after?: { dueAt: number; gameId: string } }
+interface DeletionFaultRequest { stage: DeletionStage; point: "work" | "commit" }
+interface DeletionRequest { op: "runDeletion"; gameId: string; now?: number; faults?: { afterStage?: DeletionFaultRequest }; captureLog?: boolean }
+interface PurgeCall { gameId: string; uids: string[]; requested: number; deleted: number }
 
 export const HTTPS_CODE = { CONTENTION: "aborted", UNAVAILABLE: "unavailable", INVARIANT: "internal", AGGREGATE_TOO_LARGE: "resource-exhausted", TOO_MANY_WRITES: "resource-exhausted", ROOM_CODES_EXHAUSTED: "resource-exhausted" } as const;
 
@@ -123,10 +127,56 @@ async function createOp(r: CreateRequest): Promise<{ ok: true; outcome: unknown;
   }
 }
 
+/** The fault a `runDeletion` request raises: not a StoreError, so it reaches the caller as the "crash". */
+class InjectedDeletionFault extends Error {
+  constructor(readonly stage: DeletionStage, readonly point: "work" | "commit") {
+    super(`injected deletion fault after ${point} of ${stage}`);
+  }
+}
+
+/**
+ * runDeletion (#36): the cascade runner with a recording fake identity port. Nothing is written to Firestore by the port;
+ * the purge calls come back as `purged`. `captureLog` returns the lines the runner emitted instead of only sending them
+ * to the real logger. `faults.afterStage` throws at the named boundary of the named stage.
+ */
+async function deletionOp(r: DeletionRequest): Promise<{ ok: true; result: unknown; purged: PurgeCall[]; logs: LogFields[] }> {
+  if (typeof r.gameId !== "string" || r.gameId.length === 0) bad("runDeletion needs gameId");
+  const f = r.faults?.afterStage;
+  if (f !== undefined && (!(DELETION_STAGES as readonly string[]).includes(f.stage) || (f.point !== "work" && f.point !== "commit"))) bad("runDeletion needs a known stage and point");
+  const purged: PurgeCall[] = [];
+  const logs: LogFields[] = [];
+  const deps: DeletionDeps = {
+    clock: () => r.now ?? Date.now(),
+    identity: {
+      async purgeSeats({ gameId, uids }) {
+        purged.push({ gameId, uids: [...uids], requested: uids.length, deleted: uids.length });
+        return { requested: uids.length, deleted: uids.length };
+      },
+    },
+    ...(r.captureLog === true ? { log: (fields: LogFields) => void logs.push(fields) } : {}),
+    ...(f === undefined
+      ? {}
+      : {
+          faults: {
+            afterStage(stage: DeletionStage, point: "work" | "commit") {
+              if (stage === f.stage && point === f.point) throw new InjectedDeletionFault(stage, point);
+            },
+          },
+        }),
+  };
+  try {
+    return { ok: true, result: await runDeletion(db(), deps, r.gameId), purged, logs };
+  } catch (e) {
+    if (e instanceof InjectedDeletionFault) throw new HttpsError("internal", "injected fault", { kind: "FAULT", stage: e.stage, point: e.point });
+    if (e instanceof StoreError) throw new HttpsError(HTTPS_CODE[e.kind], e.kind, { kind: e.kind });
+    throw e;
+  }
+}
+
 /** The handler, exported for the H2 unit test. Refuses outside the emulator even if reached. */
 export async function handleStoreHarness(data: unknown): Promise<{ ok: true; [k: string]: unknown }> {
   if (!isEmulator()) throw new HttpsError("failed-precondition", "storeHarness runs only in the Functions emulator");
-  const req = data as RunRequest | LoadRequest | CreateRequest | FindRequest | RebuildRequest | WaitingRequest | null;
+  const req = data as RunRequest | LoadRequest | CreateRequest | FindRequest | RebuildRequest | WaitingRequest | DeletionRequest | null;
   if (req === null || typeof req !== "object") bad("no request");
   if (req.op === "load") {
     if (typeof req.gameId !== "string") bad("load needs gameId");
@@ -146,6 +196,7 @@ export async function handleStoreHarness(data: unknown): Promise<{ ok: true; [k:
     if (typeof req.now !== "number") bad("listWaitingOn needs now");
     return { ok: true, page: await listWaitingOn(db(), { now: req.now, ...(req.limit === undefined ? {} : { limit: req.limit }), ...(req.after === undefined ? {} : { after: req.after }) }) };
   }
+  if (req.op === "runDeletion") return deletionOp(req);
   return bad("unknown op");
 }
 
