@@ -42,3 +42,9 @@ test("U7 the mapped message names the kind and the cause's code, not the cause's
   expect(e.message).not.toContain("SENTINEL");
   expect(e.message).toContain("INVARIANT");
 });
+
+test("U7 the SDK-transient codes CANCELLED, UNKNOWN, RESOURCE_EXHAUSTED and INTERNAL give UNAVAILABLE (the commit may have happened); UNAUTHENTICATED stays INVARIANT (review 4714480066)", () => {
+  for (const code of [1, 2, 8, 13]) expect(mapStoreError(coded(code), 8).kind).toBe("UNAVAILABLE");
+  expect(mapStoreError(coded(16), 8).kind).toBe("INVARIANT");
+  expect(mapStoreError(coded(6), 1).message).toContain("ALREADY_EXISTS");
+});

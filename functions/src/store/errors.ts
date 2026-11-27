@@ -11,7 +11,9 @@ export class StoreError extends Error {
   }
 }
 
-const GRPC = { DEADLINE_EXCEEDED: 4, ALREADY_EXISTS: 6, ABORTED: 10, UNAVAILABLE: 14 } as const;
+const GRPC = { CANCELLED: 1, UNKNOWN: 2, DEADLINE_EXCEEDED: 4, ALREADY_EXISTS: 6, RESOURCE_EXHAUSTED: 8, ABORTED: 10, INTERNAL: 13, UNAVAILABLE: 14 } as const;
+/** Codes after which a commit may have landed: the SDK treats them as transient (`isRetryableTransactionError`), so they are not "nothing committed" (review #33). UNAUTHENTICATED (16) stays INVARIANT. */
+const MAY_HAVE_COMMITTED: ReadonlySet<unknown> = new Set([GRPC.UNAVAILABLE, GRPC.DEADLINE_EXCEEDED, GRPC.CANCELLED, GRPC.UNKNOWN, GRPC.RESOURCE_EXHAUSTED, GRPC.INTERNAL]);
 
 /** Maps whatever escaped the transaction. The message carries the cause's name and code only, never its message (it may hold payload). */
 export function mapStoreError(e: unknown, attempts: number): StoreError {
@@ -21,7 +23,8 @@ export function mapStoreError(e: unknown, attempts: number): StoreError {
   const what = `${name}${code === undefined ? "" : ` code ${String(code)}`}`;
   const cause = { cause: e };
   if (code === GRPC.ABORTED || code === 409) return new StoreError("CONTENTION", `aborted after ${attempts} attempt(s) (${what})`, cause);
-  if (code === GRPC.UNAVAILABLE || code === GRPC.DEADLINE_EXCEEDED) return new StoreError("UNAVAILABLE", `the commit may have happened (${what})`, cause);
+  if (MAY_HAVE_COMMITTED.has(code)) return new StoreError("UNAVAILABLE", `the commit may have happened (${what})`, cause);
+  if (code === GRPC.ALREADY_EXISTS) return new StoreError("INVARIANT", `ALREADY_EXISTS on a create (${what})`, cause);
   if (e instanceof EngineInvariantError) return new StoreError("INVARIANT", "engine invariant", cause);
   return new StoreError("INVARIANT", what, cause);
 }
