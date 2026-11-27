@@ -66,7 +66,7 @@ The self-grant of `iam.serviceAccountTokenCreator` is what lets `admin.auth().cr
 | V12 | `apps/web/.env.<mode>`, `functions/.env.<projectId>` and `.firebaserc` have the required keys | [x] | [ ] |
 | V13 | No secret value committed (betterleaks, config `.betterleaks.toml`; git history, plus the source tree via `scripts/scan-secrets.ts`, never build output) | [x] | [ ] |
 | V14 | Default Hosting site exists | [x] | [ ] |
-| V15 | Public web API key restricted to the six client services (`identitytoolkit`, `securetoken`, `firestore`, `firebaseappcheck`, `firebaseinstallations`, `fcmregistrations`), with no HTTP-referrer restriction (`smoke.ts` exchanges the App Check debug token server-side, with no `Referer`) | [ ] | [ ] |
+| V15 | Public web API key restricted to the six client services (`identitytoolkit`, `securetoken`, `firestore`, `firebaseappcheck`, `firebaseinstallations`, `fcmregistrations`), with no HTTP-referrer restriction (`smoke.ts` exchanges the App Check debug token server-side, with no `Referer`) | [x] | [ ] |
 
 Not proven by the checklist: V8 shows the self-grant is present, not that `createCustomToken` signs at runtime — that was the `diag` probe, which passed on staging in #15 (a real custom token minted on the deployed runtime and signed in as `seat:probe:probe`; `diag` is now removed). The checklist also cannot see whether Firestore accepted the indexes file; that is `wait-indexes.ts` plus the mutation check in #15, both now green, so the six TTL policies deploy from `firestore.indexes.json` and nothing falls back to `gcloud`.
 

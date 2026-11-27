@@ -379,7 +379,7 @@ v15() {
   want="$(printf '%s\n' $WEB_KEY_SERVICES | jq -R -s -c 'split("\n") | map(select(length > 0)) | sort')"
   jq -e --argjson want "$want" '(.restrictions.apiTargets // [] | map(.service) | sort) == $want' <<<"$describe" >/dev/null 2>&1 \
     || bad "web API key is not restricted to exactly the client services ($WEB_KEY_SERVICES); run scripts/provision-staging.sh apikey"
-  jq -e '(.restrictions.browserKeyRestrictions // null) == null' <<<"$describe" >/dev/null 2>&1 \
+  jq -e '((.restrictions.browserKeyRestrictions // {}) | (.allowedReferrers // []) | length) == 0' <<<"$describe" >/dev/null 2>&1 \
     || bad "web API key has HTTP-referrer restrictions; scripts/smoke.ts exchanges the App Check debug token with no Referer, so remove them or change the smoke first"
 }
 
