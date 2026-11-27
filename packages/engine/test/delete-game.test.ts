@@ -92,7 +92,7 @@ describe("D5 the enumerator and the registry agree (G1, E1, E15)", () => {
 
   test("the registry holds the row and only deleteGame is accepted in ENDED", () => {
     expect(Object.hasOwn(REGISTRY, "deleteGame")).toBe(true);
-    expect(REGISTRY.deleteGame?.phases).toEqual(PHASES);
+    expect(REGISTRY.deleteGame).toMatchObject({ type: "deleteGame", phases: PHASES });
     for (const { cmd: c } of legalCommands(game("ENDED"), {})) {
       const r = run(game("ENDED"), c);
       if (c.type === "deleteGame") expect(r.ok).toBe(true);

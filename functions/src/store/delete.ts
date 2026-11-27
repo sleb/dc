@@ -4,7 +4,8 @@
 // identity port and the hourly redrive are #42/M6; here the emulator-only harness op is the caller.
 import type { Firestore, Query } from "firebase-admin/firestore";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
-import type { Game, GameId, Uid } from "@dc/engine";
+import type { GameId, Uid } from "@dc/contracts";
+import type { Game } from "@dc/engine";
 import { log } from "../log";
 import type { LogFields } from "../log";
 import { deletionPath, gamePath } from "./refs";
