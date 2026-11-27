@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read-only verification of the staging Firebase project (issue #9, checks V1 to V14).
+# Read-only verification of the staging Firebase project (issue #9, checks V1 to V15).
 # Never prints a secret value; it only reads metadata and IAM.
 #
 #   scripts/verify-staging.sh            # exits 0 only if every check passes
@@ -41,6 +41,9 @@ COMPUTE_BUILD_ROLES="roles/storage.objectViewer roles/artifactregistry.writer ro
 WIF_POOL="github"
 WIF_PROVIDER="github"
 SECRETS="RATE_LIMIT_HASH_SALT LOG_HASH_SALT SEAT_DERIVATION_KEY"
+# V15: the public web key may call only these services (provision-staging.sh mirrors this list).
+WEB_KEY_SERVICES="identitytoolkit.googleapis.com securetoken.googleapis.com firestore.googleapis.com
+firebaseappcheck.googleapis.com firebaseinstallations.googleapis.com fcmregistrations.googleapis.com"
 WEB_ENV_KEYS="VITE_FIREBASE_API_KEY VITE_FIREBASE_AUTH_DOMAIN VITE_FIREBASE_PROJECT_ID
 VITE_FIREBASE_STORAGE_BUCKET VITE_FIREBASE_MESSAGING_SENDER_ID VITE_FIREBASE_APP_ID
 VITE_RECAPTCHA_SITE_KEY VITE_FUNCTIONS_REGION VITE_APP_ENV"
@@ -356,6 +359,30 @@ v14() {
   echo "$sites" | grep -qx "projects/$PROJECT/sites/$PROJECT" || bad "default Hosting site $PROJECT does not exist"
 }
 
+v15() {
+  need_project || return 0
+  local file key uid candidate describe want
+  file="$ROOT/apps/web/.env.$ENV_NAME"
+  [ -f "$file" ] || { bad "apps/web/.env.$ENV_NAME does not exist"; return 0; }
+  key="$(awk '/^VITE_FIREBASE_API_KEY=/{sub(/^VITE_FIREBASE_API_KEY=/, ""); print; exit}' "$file")"
+  [ -n "$key" ] || { bad "apps/web/.env.$ENV_NAME has no VITE_FIREBASE_API_KEY"; return 0; }
+  uid=""
+  for candidate in $(gcloud services api-keys list --project "$PROJECT" --format=json 2>/dev/null | jqr '.[].uid'); do
+    if [ "$(gcloud services api-keys get-key-string "$candidate" --project "$PROJECT" --format=json 2>/dev/null | jqr '.keyString // empty')" = "$key" ]; then
+      uid="$candidate"
+      break
+    fi
+  done
+  [ -n "$uid" ] || { bad "no API key matches VITE_FIREBASE_API_KEY in apps/web/.env.$ENV_NAME"; return 0; }
+  describe="$(gcloud services api-keys describe "$uid" --project "$PROJECT" --format=json 2>/dev/null)"
+  [ -n "$describe" ] || { bad "cannot describe API key $uid"; return 0; }
+  want="$(printf '%s\n' $WEB_KEY_SERVICES | jq -R -s -c 'split("\n") | map(select(length > 0)) | sort')"
+  jq -e --argjson want "$want" '(.restrictions.apiTargets // [] | map(.service) | sort) == $want' <<<"$describe" >/dev/null 2>&1 \
+    || bad "web API key is not restricted to exactly the client services ($WEB_KEY_SERVICES); run scripts/provision-staging.sh apikey"
+  jq -e '(.restrictions.browserKeyRestrictions // null) == null' <<<"$describe" >/dev/null 2>&1 \
+    || bad "web API key has HTTP-referrer restrictions; scripts/smoke.ts exchanges the App Check debug token with no Referer, so remove them or change the smoke first"
+}
+
 # Prime the caches in this shell (the helpers are called inside $(...) and cannot fill them).
 TOKEN="$(gcloud auth print-access-token 2>/dev/null || true)"
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)' 2>/dev/null || true)"
@@ -382,6 +409,7 @@ check V11 "Secrets exist, fn-runtime is the only secret-level reader; APPCHECK_D
 check V12 "Committed config files have the required keys" v12
 check V13 "No secret value committed (betterleaks)" v13
 check V14 "Default Hosting site exists" v14
+check V15 "Public web API key restricted to the client services" v15
 
 echo
 echo "$PASS passed, $FAILED failed"

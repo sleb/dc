@@ -21,6 +21,10 @@ case "$*" in
   "monitoring policies list"*) kind=policies-list ;;
   "monitoring policies create"*) kind=policies-create ;;
   "monitoring policies update"*) kind=policies-update ;;
+  "services api-keys list"*) kind=apikeys-list ;;
+  "services api-keys get-key-string"*) kind=apikeys-get-string ;;
+  "services api-keys describe"*) kind=apikeys-describe ;;
+  "services api-keys update"*) kind=apikeys-update ;;
   *)
     echo "fake gcloud: unexpected arguments: $*" >&2
     exit 64
