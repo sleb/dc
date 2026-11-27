@@ -8,6 +8,7 @@ import type { App } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import type { Command } from "@dc/contracts";
 import type { Actor, Game } from "@dc/engine";
+import type { CreateOutcome, RoomCodeDoc } from "../../../src/store";
 
 const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const fakeToken = `${b64({ alg: "none", typ: "JWT" })}.${b64({ app_id: "demo-app", sub: "demo-app", iss: "demo", aud: ["demo"], exp: 4_102_444_800 })}.x`;
@@ -46,6 +47,39 @@ export async function run(req: RunRequest): Promise<RunResult> {
 export async function load(gameId: string): Promise<{ game: Game; store: Record<string, unknown> } | null> {
   const res = await call({ op: "load", gameId });
   return (res.data as { loaded: { game: Game; store: Record<string, unknown> } | null }).loaded;
+}
+
+/** createGame (#34): `seeds` are the k-th `newSeed()` call; production draws the code seed then the decide seed per attempt. */
+export interface CreateRequest {
+  hostId: string;
+  hostName: string;
+  idemKey: string;
+  settings?: unknown;
+  now?: number;
+  seeds?: string[];
+}
+export interface CreateResult { outcome: CreateOutcome; attempts: number; seeds: string[] }
+
+/** Interleave code seeds with a decide seed each, the order the createGame attempt loop draws them (LLD 3 section 6.1). */
+export const createSeeds = (codes: string[]): string[] => codes.flatMap((code, i) => [code, `decide-seed-${i}`]);
+
+export async function create(req: CreateRequest): Promise<CreateResult> {
+  const res = await call({ op: "createGame", ...req });
+  return res.data as CreateResult;
+}
+
+export async function createError(req: CreateRequest): Promise<{ code: string; kind: string | null }> {
+  try {
+    await create(req);
+  } catch (e) {
+    return errorOf(e);
+  }
+  throw new Error("expected the harness call to fail");
+}
+
+export async function findRoomCode(code: string): Promise<RoomCodeDoc | null> {
+  const res = await call({ op: "findByRoomCode", code });
+  return (res.data as { code: RoomCodeDoc | null }).code;
 }
 
 /** The harness error a failed call carries: the HttpsError code and, for a StoreError, its kind. */
