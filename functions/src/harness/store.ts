@@ -11,7 +11,7 @@ import { HttpsError } from "firebase-functions/v2/https";
 import { RT, defineCallable } from "../api/callable";
 import { newCardId } from "../deps";
 import { db } from "../firebase";
-import { StoreError, execute, executeCreate, findByRoomCode, load } from "../store";
+import { StoreError, execute, executeCreate, findByRoomCode, listWaitingOn, load, rebuildViews } from "../store";
 import type { CommandInput, CreateInput, Deps, DocWrite, FaultHooks, FaultPoint, Json } from "../store";
 
 const isEmulator = (): boolean => process.env["FUNCTIONS_EMULATOR"] === "true";
@@ -28,6 +28,8 @@ interface RunRequest { op: "run"; gameId: string; cmd: CommandInput["cmd"]; acto
 interface LoadRequest { op: "load"; gameId: string }
 interface CreateRequest { op: "createGame"; hostId: string; hostName: string; settings?: Partial<Settings>; idemKey: string; now?: number; seeds?: string[] }
 interface FindRequest { op: "findByRoomCode"; code: string }
+interface RebuildRequest { op: "rebuildViews"; gameId: string; now: number }
+interface WaitingRequest { op: "listWaitingOn"; now: number; limit?: number; after?: { dueAt: number; gameId: string } }
 
 export const HTTPS_CODE = { CONTENTION: "aborted", UNAVAILABLE: "unavailable", INVARIANT: "internal", AGGREGATE_TOO_LARGE: "resource-exhausted", TOO_MANY_WRITES: "resource-exhausted", ROOM_CODES_EXHAUSTED: "resource-exhausted" } as const;
 
@@ -124,7 +126,7 @@ async function createOp(r: CreateRequest): Promise<{ ok: true; outcome: unknown;
 /** The handler, exported for the H2 unit test. Refuses outside the emulator even if reached. */
 export async function handleStoreHarness(data: unknown): Promise<{ ok: true; [k: string]: unknown }> {
   if (!isEmulator()) throw new HttpsError("failed-precondition", "storeHarness runs only in the Functions emulator");
-  const req = data as RunRequest | LoadRequest | CreateRequest | FindRequest | null;
+  const req = data as RunRequest | LoadRequest | CreateRequest | FindRequest | RebuildRequest | WaitingRequest | null;
   if (req === null || typeof req !== "object") bad("no request");
   if (req.op === "load") {
     if (typeof req.gameId !== "string") bad("load needs gameId");
@@ -135,6 +137,14 @@ export async function handleStoreHarness(data: unknown): Promise<{ ok: true; [k:
   if (req.op === "findByRoomCode") {
     if (typeof req.code !== "string") bad("findByRoomCode needs code");
     return { ok: true, code: await findByRoomCode(db(), req.code) };
+  }
+  if (req.op === "rebuildViews") {
+    if (typeof req.gameId !== "string" || typeof req.now !== "number") bad("rebuildViews needs gameId and now");
+    return { ok: true, result: await rebuildViews(db(), req.gameId, { now: req.now }) };
+  }
+  if (req.op === "listWaitingOn") {
+    if (typeof req.now !== "number") bad("listWaitingOn needs now");
+    return { ok: true, page: await listWaitingOn(db(), { now: req.now, ...(req.limit === undefined ? {} : { limit: req.limit }), ...(req.after === undefined ? {} : { after: req.after }) }) };
   }
   return bad("unknown op");
 }
