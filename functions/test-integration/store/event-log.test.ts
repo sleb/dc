@@ -8,6 +8,7 @@ beforeAll(clear);
 
 test("I11 the raw finishWriting event doc has neither seed nor actorPlayerId; the startGame (shuffle) doc has both", async () => {
   const t = await Table.lobby(3);
+  const hostPlayerId = (await t.state()).players.find((p) => p.uid === t.hostId)?.id; // createGame derives the host's p_ id (#34)
   const s = await t.host({ type: "startGame" } as Command);
   await t.as(1, { type: "saveDraft", ...(await t.fullDraft(1)) } as Command);
   const f = await t.as(1, { type: "finishWriting" } as Command);
@@ -15,7 +16,7 @@ test("I11 the raw finishWriting event doc has neither seed nor actorPlayerId; th
   const start = await ev(s);
   expect(start["commandType"]).toBe("startGame");
   expect(typeof start["seed"]).toBe("string");
-  expect(start["actorPlayerId"]).toBe("p_aaaaaaaa");
+  expect(start["actorPlayerId"]).toBe(hostPlayerId);
   const finish = await ev(f);
   expect(finish["commandType"]).toBe("finishWriting");
   expect(Object.keys(finish).sort()).toEqual(["at", "commandType", "events", "version"]);

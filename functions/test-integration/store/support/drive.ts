@@ -3,9 +3,9 @@
 import type { Command } from "@dc/contracts";
 import type { Actor, Game } from "@dc/engine";
 import { cardText, playerName } from "../../../src/store/test-support";
-import { db, run } from "./harness";
+import { create, db, run } from "./harness";
 import type { RunRequest, RunResult } from "./harness";
-import { createdGame, newKey, pid, seatUid, seedGame } from "./seed";
+import { HOST_NAME, createdGame, newKey, pid, seatUid, seedGame } from "./seed";
 import type { SeedOptions } from "./seed";
 
 export class Table {
@@ -17,9 +17,12 @@ export class Table {
     return new Table(game.id, game.hostId);
   }
 
-  /** A seeded LOBBY game with the host seated, and n - 1 players joined through the harness. */
+  /** A fresh LOBBY game from the production createGame (#34), and n - 1 players joined through the harness. */
   static async lobby(n: number, o: { settings?: Record<string, unknown> } = {}): Promise<Table> {
-    const t = await Table.seed(createdGame(o));
+    const hostId = `host-${crypto.randomUUID()}`;
+    const created = await create({ hostId, hostName: HOST_NAME, idemKey: newKey(), ...(o.settings === undefined ? {} : { settings: o.settings }) });
+    if (created.outcome.kind !== "accepted") throw new Error(`createGame rejected: ${JSON.stringify(created.outcome)}`);
+    const t = new Table(created.outcome.gameId, hostId);
     for (let k = 1; k < n; k++) await t.join(k);
     return t;
   }
@@ -65,19 +68,26 @@ export class Table {
     return this.as(k, { type: "join", playerId: pid(k), name: playerName(k) } as Command, extra);
   }
 
-  /** The full draft for a player's target (sentinel texts), with an optional tag. */
-  async fullDraft(k: number, tag = ""): Promise<{ red: string[]; green: string[] }> {
-    const p = (await this.state()).players.find((x) => x.id === pid(k));
-    const t = p?.writeTarget ?? { red: 0, green: 0 };
-    return { red: Array.from({ length: t.red }, (_, i) => cardText(pid(k), "red", i) + tag), green: Array.from({ length: t.green }, (_, i) => cardText(pid(k), "green", i) + tag) };
+  /** The full draft for one player's target (sentinel texts), with an optional tag. */
+  async draftFor(p: { id: string; writeTarget: { red: number; green: number } | null }, tag = ""): Promise<{ red: string[]; green: string[] }> {
+    const t = p.writeTarget ?? { red: 0, green: 0 };
+    return {
+      red: Array.from({ length: t.red }, (_, i) => cardText(p.id, "red", i) + tag),
+      green: Array.from({ length: t.green }, (_, i) => cardText(p.id, "green", i) + tag),
+    };
   }
 
-  /** Every writer saves a full draft and finishes. */
+  /** The full draft for the k-th joined seat (the host's seat has a createGame-derived id, so use `draftFor` for it). */
+  async fullDraft(k: number, tag = ""): Promise<{ red: string[]; green: string[] }> {
+    const p = (await this.state()).players.find((x) => x.id === pid(k));
+    return this.draftFor(p ?? { id: pid(k), writeTarget: null }, tag);
+  }
+
+  /** Every writer saves a full draft and finishes; addressed by uid, so the host's derived player id works too. */
   async writeAll(): Promise<void> {
     for (const p of (await this.state()).players.filter((x) => x.status === "writing" && x.writeTarget !== null)) {
-      const k = this.indexOf(p.id);
-      await this.as(k, { type: "saveDraft", ...(await this.fullDraft(k)) } as Command);
-      await this.as(k, { type: "finishWriting" } as Command);
+      await this.ok({ kind: "user", uid: p.uid }, { type: "saveDraft", ...(await this.draftFor(p)) } as Command);
+      await this.ok({ kind: "user", uid: p.uid }, { type: "finishWriting" } as Command);
     }
   }
 
