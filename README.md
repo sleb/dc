@@ -21,7 +21,7 @@ bun run test:lint               # just the policy tests (they prove each lint an
 bun run test:web                # web tests under happy-dom, in a separate process
 bun run fixtures:views          # re-export the 43 committed view fixtures (LLD 7 section 11.1); CI runs it before git diff --exit-code
 bun run test:rules              # Firestore emulator; the LLD 3 section 3.3 rules matrix against firestore.rules
-bun run test:integration        # rebuild the bundle, run the Auth, Firestore and Functions emulators against it (ping, Admin write/read)
+bun run test:integration        # rebuild the bundle, run the Auth, Firestore and Functions emulators against it (ping, Admin write/read, and #33's 16 LLD 3 section 10.3 store suites in functions/test-integration/store through the emulator-only storeHarness; the slowest gate, 300 s per-test timeouts)
 bun run test:hosting            # build apps/web in emulator mode, serve it on the Hosting emulator, assert headers, cache and the SPA rewrite
 bun run test:integration:logs   # test:integration plus the P19 log-sentinel harness (what CI runs)
 bun scripts/scan-secrets.ts     # P13 secret scan over the source tree (betterleaks 1.10.1; scripts/install-betterleaks.sh installs it)
