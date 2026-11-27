@@ -58,7 +58,7 @@ test("I9 startGame, a round, a pass, pause and unpause, a reminder and a removal
   const removed = byType("PlayerRemoved")[0];
   if (removed === undefined) throw new Error("no PlayerRemoved row");
   await removed.ref.update({ processedAt: Date.now() });
-  const selected = (await registryQuery(db, "identityCleanup", { at: (removed.get("at") as number) + 1 }).get()).docs.map((d) => d.ref.path);
+  const selected = (await registryQuery(db, "identityCleanup", { values: { at: (removed.get("at") as number) + 1 } }).get()).docs.map((d) => d.ref.path);
   expect(selected).toContain(removed.ref.path);
 
   expect(sentinelHits(await snapshot(t.gameId), (p) => p.includes("/outbox/") || p.includes("/events/") || p.includes("/idem/"))).toEqual([]);

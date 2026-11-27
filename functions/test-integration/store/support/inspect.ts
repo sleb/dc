@@ -3,9 +3,6 @@
 // built from the 3.1 registry (functions/src/store/queries.ts), never redeclared.
 import { makeProjector, viewersOf } from "@dc/engine";
 import type { Game } from "@dc/engine";
-import type { Firestore, Query } from "firebase-admin/firestore";
-import { FieldPath } from "firebase-admin/firestore";
-import { DOCUMENT_ID, QUERIES } from "../../../src/store/queries";
 import { db } from "./harness";
 
 export interface Snap { updateTime: string; data: Record<string, unknown> }
@@ -76,15 +73,8 @@ export function sentinelHits(s: Snapshot, include: (path: string) => boolean): s
   return [...s.entries()].filter(([p, d]) => include(p) && /SENTINEL/.test(JSON.stringify(d.data))).map(([p]) => p);
 }
 
-/** A registry query (3.1's QUERIES) with the given values in place of the probes. */
-export function registryQuery(fs: Firestore, id: string, values: Record<string, unknown>): Query {
-  const q = QUERIES.find((x) => x.id === id);
-  if (q === undefined) throw new Error(`no registry query ${id}`);
-  let query: Query = q.scope === "COLLECTION_GROUP" ? fs.collectionGroup(q.collectionGroup) : fs.collection(q.collectionGroup);
-  for (const w of q.where) query = query.where(w.field === DOCUMENT_ID ? FieldPath.documentId() : w.field, w.op, Object.hasOwn(values, w.field) ? values[w.field] : w.value);
-  for (const o of q.orderBy) query = query.orderBy(o.field === DOCUMENT_ID ? FieldPath.documentId() : o.field, o.direction === "ASCENDING" ? "asc" : "desc");
-  return query;
-}
+/** A registry query (3.1's QUERIES), parent honoured: functions/src/store/registry-query.ts. */
+export { registryQuery } from "../../../src/store/registry-query";
 
 /** Event doc versions of the game, ascending. */
 export async function eventVersions(gameId: string): Promise<number[]> {

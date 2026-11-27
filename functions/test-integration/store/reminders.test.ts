@@ -4,7 +4,7 @@ import { REMINDER_INTERVAL_MS } from "@dc/engine";
 import { Table } from "./support/drive";
 import { clear, db, run } from "./support/harness";
 import type { RunResult } from "./support/harness";
-import { diff, snapshot } from "./support/inspect";
+import { diff, registryQuery, snapshot } from "./support/inspect";
 import { pid } from "./support/seed";
 
 // I12 Reminders, the markReminded half (LLD 3 sections 7 and 8). listWaitingOn and its paging are #35.
@@ -30,7 +30,7 @@ async function expectReminded(t: Table, kind: "WRITING" | "SUBMITTING" | "JUDGIN
   expect((row?.["roster"] as unknown[]).length).toBe(after.players.filter((p) => p.status === "writing" || p.status === "ready" || p.status === "active").length);
   if (kind === "WRITING") expect(row?.["round"]).toBeUndefined();
   else expect(row?.["round"]).toEqual({ number: after.round?.number, phase: kind });
-  expect((await db.collection(`games/${t.gameId}/outbox`).where("version", "==", v).get()).size).toBe(1);
+  expect((await registryQuery(db, "outboxSiblings", { gameId: t.gameId, values: { version: v } }).get()).size).toBe(1); // the registry's sibling-rows query (LLD 6 3.3)
 }
 
 test("I12 markReminded in WRITING, SUBMITTING and JUDGING: one events doc, one Reminder row with episodeGen and context, reminderDueAt advanced; a same-key rerun replays", async () => {
