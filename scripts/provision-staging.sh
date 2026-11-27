@@ -39,6 +39,13 @@ COMPUTE_BUILD_ROLES="roles/storage.objectViewer roles/artifactregistry.writer ro
 WIF_POOL="github"
 WIF_PROVIDER="github"
 SECRETS="RATE_LIMIT_HASH_SALT LOG_HASH_SALT SEAT_DERIVATION_KEY"
+# The public web API key may call only these services (V15). It is public by design (it ships in the bundle), so the
+# restriction is defence in depth. securetoken refreshes sessions, identitytoolkit signs in, firestore carries the
+# client listeners, firebaseappcheck exchanges App Check tokens (smoke.ts does it server-side), and
+# firebaseinstallations plus fcmregistrations arrive with web push in M6. Do not add an HTTP-referrer restriction:
+# scripts/smoke.ts exchanges the App Check debug token with no Referer.
+WEB_KEY_SERVICES="identitytoolkit.googleapis.com securetoken.googleapis.com firestore.googleapis.com
+firebaseappcheck.googleapis.com firebaseinstallations.googleapis.com fcmregistrations.googleapis.com"
 
 FN_SA="fn-runtime@${PROJECT}.iam.gserviceaccount.com"
 CI_SA="ci-deployer@${PROJECT}.iam.gserviceaccount.com"
@@ -319,6 +326,52 @@ list_channels() {
   done
 }
 
+web_key_file() { printf '%s/apps/web/.env.%s' "$ROOT" "$ENV_NAME"; }
+
+web_api_key() { # the public key from the committed env file; never printed
+  local file key
+  file="$(web_key_file)"
+  [ -f "$file" ] || { echo "$file does not exist; run the config step first" >&2; return 1; }
+  key="$(awk '/^VITE_FIREBASE_API_KEY=/{sub(/^VITE_FIREBASE_API_KEY=/, ""); print; exit}' "$file")"
+  [ -n "$key" ] || { echo "$file has no VITE_FIREBASE_API_KEY; run the config step first" >&2; return 1; }
+  printf '%s' "$key"
+}
+
+api_key_uid() { # api_key_uid <key> -> the uid of the API key whose key string is <key>
+  local want="$1" list uid key
+  list="$(gcloud services api-keys list --project "$PROJECT" --format=json)" \
+    || { echo "cannot list API keys in $PROJECT" >&2; return 1; }
+  for uid in $(jq -r '.[].uid' <<<"$list"); do
+    key="$(gcloud services api-keys get-key-string "$uid" --project "$PROJECT" --format=json | jq -r '.keyString // empty')" \
+      || { echo "cannot read API key $uid" >&2; return 1; }
+    if [ "$key" = "$want" ]; then printf '%s' "$uid"; return 0; fi
+  done
+  return 1
+}
+
+step_apikey() { # V15. Restrict the public Firebase web key to the services the client calls.
+  local key uid current want target
+  key="$(web_api_key)"
+  uid="$(api_key_uid "$key")" \
+    || { echo "no API key in $PROJECT matches VITE_FIREBASE_API_KEY in $(web_key_file)" >&2; return 1; }
+  current="$(gcloud services api-keys describe "$uid" --project "$PROJECT" --format=json | jq -c '[.restrictions.apiTargets[]?.service] | sort')"
+  want="$(printf '%s\n' $WEB_KEY_SERVICES | jq -R -s -c 'split("\n") | map(select(length > 0)) | sort')"
+  if [ "$current" = "$want" ]; then
+    log "web API key $uid is already restricted to the client services"
+    return 0
+  fi
+  log "restricting web API key $uid to the client services"
+  local args=()
+  for target in $WEB_KEY_SERVICES; do args+=("--api-target=service=$target"); done
+  # The update is refused when the key has traffic in the last 7 days for a service the new allowlist removes. A
+  # public key collects failed probes from the internet; inspect them (Cloud Monitoring, expect 4xx), then set
+  # APIKEY_SKIP_USAGE_CHECK=1 deliberately.
+  if [ "${APIKEY_SKIP_USAGE_CHECK:-}" = 1 ]; then
+    args+=("--no-check-existing-usage")
+  fi
+  gcloud services api-keys update "$uid" --project "$PROJECT" "${args[@]}" >/dev/null
+}
+
 step_channel() { # LLD 0 section 9: the notification channel every alert policy in ops/alerts/ names.
   local url="https://monitoring.googleapis.com/v3/projects/$PROJECT/notificationChannels"
   local existing
@@ -341,9 +394,9 @@ step_channel() { # LLD 0 section 9: the notification channel every alert policy 
 }
 
 # ---------------------------------------------------------------------------
-[ $# -gt 0 ] || { echo "usage: $0 <step...|all>   steps: project firebase apis firestore iam wif secrets webapp auth appcheck config channel" >&2; exit 2; }
+[ $# -gt 0 ] || { echo "usage: $0 <step...|all>   steps: project firebase apis firestore iam wif secrets webapp auth appcheck config apikey channel" >&2; exit 2; }
 steps=("$@")
-[ "$1" = all ] && steps=(project firebase apis firestore iam wif secrets webapp auth appcheck config channel)
+[ "$1" = all ] && steps=(project firebase apis firestore iam wif secrets webapp auth appcheck config apikey channel)
 for s in "${steps[@]}"; do
   declare -F "step_$s" >/dev/null || { echo "unknown step: $s" >&2; exit 2; }
   # `all` stays runnable on a fresh project without ALERT_EMAIL: the channel needs the owner's address, which is
