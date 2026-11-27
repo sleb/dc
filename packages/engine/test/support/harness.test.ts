@@ -119,9 +119,10 @@ describe("harness: checkUnchangedWhenNotAggregate", () => {
 });
 
 describe("harness: legalCommands, junkCommands, coverage", () => {
-  test("the real enumerator table: a LOBBY game has legal commands, a FINISHED one only endGame", () => {
+  test("the real enumerator table: a LOBBY game has legal commands, a FINISHED one only endGame and deleteGame", () => {
     expect(legalCommands(makeGame(), {}).length).toBeGreaterThan(0);
-    expect(legalCommands(makeGame({ phase: "FINISHED" }), {}).map((e) => e.cmd.type)).toEqual(["endGame"]); // #23: the host may end a finished game
+    expect(legalCommands(makeGame({ phase: "FINISHED" }), {}).map((e) => e.cmd.type)).toEqual(["endGame", "deleteGame"]); // #23 and #36: the host may end or delete a finished game
+    expect(legalCommands(makeGame({ phase: "ENDED" }), {}).map((e) => e.cmd.type)).toEqual(["deleteGame"]);
   });
 
   test("missingEnumerators lists registered types with neither an enumerator nor an exemption", () => {

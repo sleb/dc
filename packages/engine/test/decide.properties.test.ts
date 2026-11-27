@@ -126,7 +126,7 @@ describe("X1 decide is total", () => {
 
   // The expected code per junk entry is written out from the guard ladder (5.3) and 7.1, not read off the handlers. Acceptances are not assumed away:
   // the host's updateSettings with an empty patch is legal in LOBBY, WRITING and PLAYING, and a seated player may leave in LOBBY.
-  const LOBBY_REAL = new Set(["createGame", "updateSettings", "join", "leave", "removePlayer", "startGame", "saveDraft", "finishWriting", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame", "markReminded", "removeCard"]); // independent of REGISTRY on purpose
+  const LOBBY_REAL = new Set(["createGame", "updateSettings", "join", "leave", "removePlayer", "startGame", "saveDraft", "finishWriting", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame", "deleteGame", "markReminded", "removeCard"]); // independent of REGISTRY on purpose
   /** The round commands, from the guard ladder (5.3) and 7.1: 2 actor, 3 stale, 4 phase, 5 pause, 6 role, 9 preconditions 7 expectedVersion required as an integer (the junk bases carry none, so they stop here once past 6). */
   const expectedRound = (g: Game, actor: Actor, c: Command): Rejection | "accepted" => {
     const user = actor.kind === "user" ? actor.uid : null;
@@ -180,6 +180,7 @@ describe("X1 decide is total", () => {
     const midGame = g.phase === "LOBBY" || g.phase === "WRITING" || g.phase === "PLAYING"; // #23 widened leave and removePlayer from LOBBY-only
     if (c.type === "leave") return !seated ? { code: "NOT_AUTHORIZED" } : midGame ? "accepted" : { code: "WRONG_PHASE" };
     if (c.type === "endGame") return !isHost ? { code: "NOT_AUTHORIZED" } : g.phase === "ENDED" ? { code: "WRONG_PHASE" } : "accepted";
+    if (c.type === "deleteGame") return !isHost ? { code: "NOT_AUTHORIZED" } : "accepted"; // host only, every phase (#36)
     if (c.type === "markReminded") {
       // system only; WRITING and PLAYING; the junk base names episode "writing" at generation 0, which no junk game holds (their waiting fields are unsettled), so it is a no-op
       if (actor.kind !== "system") return { code: "NOT_AUTHORIZED" };

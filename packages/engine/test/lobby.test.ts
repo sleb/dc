@@ -40,8 +40,8 @@ const patch = (p: unknown) => ({ type: "updateSettings", patch: p });
 const VARIANTS = { pitch: true, writeIn: true, redraw: false, peoplesChoice: true };
 
 describe("the real registry holds the lobby, writing and round commands", () => {
-  test("keys are the five lobby types, the three writing types (#21), the three round types (#22), passJudging and endGame (#23), markReminded (#24) and removeCard (#25)", () => {
-    expect(Object.keys(REGISTRY).sort()).toEqual([...LOBBY_TYPES, "finishWriting", "saveDraft", "startGame", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame", "markReminded", "removeCard"].sort());
+  test("keys are the five lobby types, the three writing types (#21), the three round types (#22), passJudging and endGame (#23), markReminded (#24), removeCard (#25) and deleteGame (#36)", () => {
+    expect(Object.keys(REGISTRY).sort()).toEqual([...LOBBY_TYPES, "finishWriting", "saveDraft", "startGame", "confirmSubmission", "closeSubmissions", "pickWinner", "passJudging", "endGame", "markReminded", "removeCard", "deleteGame"].sort());
   });
 });
 
@@ -77,8 +77,9 @@ describe("L1 command x phase (5.3 guard 4, 7.1)", () => {
     }
   });
 
-  test("ENDED accepts only deleteGame, which is not a lobby command: an empty patch is WRONG_PHASE there too", () => {
+  test("ENDED accepts only deleteGame: an empty patch is WRONG_PHASE there too", () => {
     expect(rejected(inPhase("ENDED"), patch({}))).toStrictEqual({ code: "WRONG_PHASE" });
+    expect(run(inPhase("ENDED"), { type: "deleteGame" }).ok).toBe(true);
   });
 
   test("createGame on any existing state is WRONG_PHASE with no detail", () => {
