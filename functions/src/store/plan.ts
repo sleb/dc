@@ -12,7 +12,8 @@ import { eventDoc, publicCommandType } from "./events";
 import { idemId } from "./idem";
 import { buildOutbox } from "./outbox";
 import { redact, roundsContaining } from "./redact";
-import { draftPath, eventPath, gamePath, idemPath, outboxPath, roomCodePath, roundPath, viewPath } from "./refs";
+import { deletionPath, draftPath, eventPath, gamePath, idemPath, outboxPath, roomCodePath, roundPath, viewPath } from "./refs";
+import { newDeletionJob } from "./delete";
 import { guardSize } from "./size";
 import type { CommandInput, CommandOutcome, GameDoc, IdemDoc, Json } from "./types";
 import { MAX_WRITES, WriteSet, increment } from "./writeset";
@@ -66,11 +67,13 @@ const joinable = (g: Game) => g.phase === "LOBBY" || g.phase === "WRITING" || g.
 
 /**
  * Step 1's second `getAll` (LLD 3 section 5.3): the actor's draft (saveDraft, finishWriting) or the round docs holding a removed card (removeCard).
- * Nothing when the command stops at the first read (missing, deleting, ledger hit). `deleteGame`'s room-code read arrives with #36.
+ * Nothing when the command stops at the first read (missing, deleting, ledger hit). `deleteGame` also reads `roomCodes/{prev.roomCode}`,
+ * because a FINISHED or ENDED game may already have released the code to a newer game (ST8, #36).
  */
 export function extraReadPaths(r: Reads, i: CommandInput): string[] {
   if (r.game === null || r.game.store.deleting !== null || r.idem !== null) return [];
   const { prev } = splitStore(r.game);
+  if (i.cmd.type === "deleteGame") return [roomCodePath(prev.roomCode)];
   const me = actorPlayerId(prev, i.actor);
   if (me !== null && readsDraft(i)) return [draftPath(i.gameId, me)];
   if (i.cmd.type === "removeCard") return roundsContaining(prev, i.cmd.cardId).map((n) => roundPath(i.gameId, n));
@@ -109,9 +112,18 @@ export function planCommand(r: Reads, extra: ReadonlyMap<string, Data | null>, i
   const res = (d.decide ?? decide)(prev, i.cmd, { now, rng: makeRng(seed), mintId: d.mintId, actor: i.actor, drafts });
   if (!res.ok) return { outcome: { kind: "rejected", rejection: res.error, version: prev.version }, writes: [], sizeWarn: false };
   const a = res.value;
-  if (a.deleteGame === true) throw new StoreError("INVARIANT", "deleteGame phase 0 is not built (#36)");
 
   // ---------- 3. WRITES ----------
+  if (a.deleteGame === true) {
+    // Phase 0 of S5 (6.4): the aggregate is not rewritten, so the version, the views and the size guard are untouched.
+    // The job carries what the cascade needs after the aggregate is gone, and where the code may now belong to a newer game.
+    const w = new WriteSet({ max: MAX_WRITES });
+    w.update(gamePath(i.gameId), { "store.deleting": { at: now, by: prev.hostId }, "store.updatedAt": now });
+    const code = extra.get(roomCodePath(prev.roomCode)) ?? null;
+    if (code !== null && code["gameId"] === i.gameId) w.delete(roomCodePath(prev.roomCode));
+    w.create(deletionPath(i.gameId), data(newDeletionJob(prev, now)));
+    return { outcome: { kind: "deleting" }, writes: w.writes(), sizeWarn: false };
+  }
   const w = new WriteSet({ max: MAX_WRITES });
   const writeViews = (from: Game | null, to: Game): void => {
     for (const x of planViews(i.gameId, from, to, { now, storedRev: store.viewsRev })) w.apply(x);

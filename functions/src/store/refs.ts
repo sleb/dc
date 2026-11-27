@@ -11,3 +11,5 @@ export const viewPath = (g: GameId, docId: string): string => `games/${g}/views/
 export const eventPath = (g: GameId, v: number): string => `games/${g}/events/${v}`;
 export const outboxPath = (g: GameId, rowId: string): string => `games/${g}/outbox/${rowId}`;
 export const roomCodePath = (code: string): string => `roomCodes/${code}`;
+/** The cascade job outlives the aggregate (LLD 3 section 6.4). */
+export const deletionPath = (g: GameId): string => `deletions/${g}`;

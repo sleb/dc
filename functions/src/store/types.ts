@@ -2,6 +2,7 @@
 import type { Command, GameId, GameView, PlayerId, Uid } from "@dc/contracts";
 import type { Actor, DomainEvent, Game, PlayerStatus, Rejection } from "@dc/engine";
 import type { Timestamp } from "firebase-admin/firestore";
+import type { LogFields } from "../log";
 import type { DocWrite } from "./writeset";
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
@@ -70,3 +71,44 @@ export type CommandOutcome =
   | { kind: "accepted"; version: number; view: GameView | null; draftSeq?: number; replay: boolean; meta?: Json }
   | { kind: "rejected"; rejection: Rejection; version: number }
   | { kind: "deleting" };
+
+/** The ordered cascade stages (LLD 3 section 6.4). The aggregate is last: it is the resume marker. */
+export const DELETION_STAGES = ["views", "drafts", "identity", "push", "joinIdem", "history", "aggregate"] as const;
+export type DeletionStage = (typeof DELETION_STAGES)[number];
+
+/** `deletions/{gameId}` (LLD 3 section 2.3): the job survives the aggregate so an interrupted delete can resume. */
+export interface DeletionJob {
+  gameId: GameId;
+  hostId: Uid;
+  requestedAt: number;
+  status: "running" | "done";
+  stagesDone: DeletionStage[];
+  seatUids: Uid[];
+  heartbeatAt: number;
+  attempts: number;
+  expiresAt?: Timestamp;
+}
+
+/** The Identity half of the cascade (LLD 4 section 6.3). #42 supplies the real Auth implementation. */
+export interface IdentityPort {
+  purgeSeats(i: { gameId: GameId; uids: Uid[] }): Promise<{ requested: number; deleted: number }>;
+}
+
+export interface DeletionFaults {
+  afterStage(stage: DeletionStage, point: "work" | "commit"): void;
+}
+
+/** What `runDeletion` needs: a clock, an identity port, the logger seam and the emulator-only fault seam. */
+export interface DeletionDeps {
+  clock(): number;
+  identity: IdentityPort;
+  log?(fields: LogFields): void;
+  faults?: DeletionFaults;
+}
+
+export interface DeletionResult {
+  kind: "done" | "noop";
+  reason?: "missing" | "done";
+  stagesRun: DeletionStage[];
+  stuck: boolean;
+}

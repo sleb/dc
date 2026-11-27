@@ -1,5 +1,7 @@
 // The Store's public surface (LLD 3, #33). createGame (#34), rebuildViews and listWaitingOn (#35) and the deletion cascade (#36) build on these.
 export { createGame, CREATE_ATTEMPTS, CodeTaken, executeCreate, planCreate } from "./create";
+export { DELETION_STAGES, DELETION_TTL_MS, STUCK_AFTER_MS, identityUids, isStuck, newDeletionJob, runDeletion, stuckLine } from "./delete";
+export type { DeletionDeps, DeletionFaults, DeletionJob, DeletionResult, DeletionStage, IdentityPort } from "./types";
 export type { CreateAttempt, CreateExecution, CreateInput, CreateOutcome, CreatePlan, CreatePlanDeps, CreateReads } from "./create";
 export { ROOM_CODE_ALPHABET, playerIdFromSeed, roomCodeFromSeed } from "./codes";
 export type { ByteSource } from "./codes";
