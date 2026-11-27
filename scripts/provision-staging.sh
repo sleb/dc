@@ -363,6 +363,12 @@ step_apikey() { # V15. Restrict the public Firebase web key to the services the 
   log "restricting web API key $uid to the client services"
   local args=()
   for target in $WEB_KEY_SERVICES; do args+=("--api-target=service=$target"); done
+  # The update is refused when the key has traffic in the last 7 days for a service the new allowlist removes. A
+  # public key collects failed probes from the internet; inspect them (Cloud Monitoring, expect 4xx), then set
+  # APIKEY_SKIP_USAGE_CHECK=1 deliberately.
+  if [ "${APIKEY_SKIP_USAGE_CHECK:-}" = 1 ]; then
+    args+=("--no-check-existing-usage")
+  fi
   gcloud services api-keys update "$uid" --project "$PROJECT" "${args[@]}" >/dev/null
 }
 

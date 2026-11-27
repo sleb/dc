@@ -93,6 +93,25 @@ test("V15 a key already restricted to exactly the client services is a no-op", a
   expect(await lines(f.state, "apikeys-update.argv")).toHaveLength(0);
 });
 
+test("V15 the usage guard is skipped only when APIKEY_SKIP_USAGE_CHECK=1", async () => {
+  const guarded = await fixture({
+    list: [{ uid: "uid-browser", displayName: "Browser key" }],
+    strings: [KEY],
+    describe: { restrictions: {} },
+  });
+  expect(run(guarded).code).toBe(0);
+  expect((await lines(guarded.state, "apikeys-update.argv"))[0]).not.toContain("--no-check-existing-usage");
+
+  const skipped = await fixture({
+    list: [{ uid: "uid-browser", displayName: "Browser key" }],
+    strings: [KEY],
+    describe: { restrictions: {} },
+  });
+  skipped.env["APIKEY_SKIP_USAGE_CHECK"] = "1";
+  expect(run(skipped).code).toBe(0);
+  expect((await lines(skipped.state, "apikeys-update.argv"))[0]).toContain("--no-check-existing-usage");
+});
+
 test("V15 a key restricted to a different set is updated", async () => {
   const f = await fixture({
     list: [{ uid: "uid-browser", displayName: "Browser key" }],
