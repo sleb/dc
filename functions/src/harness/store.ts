@@ -12,7 +12,7 @@ import { RT, defineCallable } from "../api/callable";
 import { newCardId } from "../deps";
 import { db } from "../firebase";
 import { DELETION_STAGES, StoreError, execute, executeCreate, findByRoomCode, listWaitingOn, load, rebuildViews, runDeletion } from "../store";
-import type { CommandInput, CreateInput, DeletionDeps, DeletionStage, Deps, DocWrite, FaultHooks, FaultPoint, Json } from "../store";
+import type { CommandInput, CreateInput, DeletionDeps, DeletionResult, DeletionStage, Deps, DocWrite, FaultHooks, FaultPoint, Json } from "../store";
 import type { LogFields } from "../log";
 
 const isEmulator = (): boolean => process.env["FUNCTIONS_EMULATOR"] === "true";
@@ -139,7 +139,7 @@ class InjectedDeletionFault extends Error {
  * the purge calls come back as `purged`. `captureLog` returns the lines the runner emitted instead of only sending them
  * to the real logger. `faults.afterStage` throws at the named boundary of the named stage.
  */
-async function deletionOp(r: DeletionRequest): Promise<{ ok: true; result: unknown; purged: PurgeCall[]; logs: LogFields[] }> {
+async function deletionOp(r: DeletionRequest): Promise<{ ok: true; result: DeletionResult; purged: PurgeCall[]; logs: LogFields[] }> {
   if (typeof r.gameId !== "string" || r.gameId.length === 0) bad("runDeletion needs gameId");
   const f = r.faults?.afterStage;
   if (f !== undefined && (!(DELETION_STAGES as readonly string[]).includes(f.stage) || (f.point !== "work" && f.point !== "commit"))) bad("runDeletion needs a known stage and point");

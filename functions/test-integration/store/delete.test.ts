@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { Command } from "@dc/contracts";
-import { Timestamp } from "firebase-admin/firestore";
+import type { Timestamp } from "firebase-admin/firestore";
 import { buildCascade, seedCascade } from "./support/cascade";
 import type { Cascade } from "./support/cascade";
 import { Table } from "./support/drive";

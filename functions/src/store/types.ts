@@ -1,4 +1,4 @@
-// Store types (LLD 3 sections 2.2, 2.3 and 5.1). Type-only.
+// Store types (LLD 3 sections 2.2, 2.3 and 5.1), plus the ordered deletion stage list (a runtime value).
 import type { Command, GameId, GameView, PlayerId, Uid } from "@dc/contracts";
 import type { Actor, DomainEvent, Game, PlayerStatus, Rejection } from "@dc/engine";
 import type { Timestamp } from "firebase-admin/firestore";
