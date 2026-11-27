@@ -3,7 +3,7 @@
 // thin shell: transaction reads, this, then the WriteSet's writes buffered on the transaction. Being pure, it is where the write budget and the size
 // guard are tested on large in-memory games (plan.test.ts).
 import { RoundDocSchema, ViewDocSchema } from "@dc/contracts";
-import type { GameView, RoundDoc } from "@dc/contracts";
+import type { GameId, GameView, RoundDoc } from "@dc/contracts";
 import { DRAFT_REGION_FIELDS, PROJECTOR_REV, VIEW_REGION_FIELDS, actorRole, decide, draftRegion, fanOut, makeProjector, makeRng, toRoundDoc, viewerFor } from "@dc/engine";
 import type { Actor, Draft, Game, GameDrafts } from "@dc/engine";
 import { Timestamp } from "firebase-admin/firestore";
@@ -34,6 +34,25 @@ const data = (x: object): Data => x as Data;
 export function splitStore(doc: GameDoc): { prev: Game; store: GameDoc["store"] } {
   const { store, ...prev } = doc;
   return { prev, store };
+}
+
+/** A new aggregate document: the Engine state plus a fresh Store map (LLD 3 section 2.2). Shared by the planner and createGame. */
+export function withStore(state: Game, now: number): GameDoc {
+  return { ...state, store: { schema: 1, viewsRev: PROJECTOR_REV, updatedAt: now, deleting: null } };
+}
+
+/**
+ * One step's view fan-out as `DocWrite`s: the strict parse at the Store boundary (5.2) and the two merge regions (LLD 2 8.4). `storedRev` is the
+ * Store's stored `viewsRev` (0 when nothing is written yet). Shared by the planner and createGame; #35's rebuildViews reuses it.
+ */
+export function planViews(gameId: GameId, from: Game | null, to: Game, o: { now: number; storedRev: number }): DocWrite[] {
+  const w = new WriteSet({ max: MAX_WRITES });
+  for (const vw of fanOut(from, to, o)) {
+    const vd = ViewDocSchema.parse(vw.doc); // redundant with fanOut's own strict parse; kept at the Store boundary (5.2)
+    w.merge(viewPath(gameId, vw.docId), data(vd), VIEW_REGION_FIELDS);
+    if (vw.clearDraft === true) w.merge(viewPath(gameId, vw.docId), { draft: null, draftSeq: increment(1) }, DRAFT_REGION_FIELDS);
+  }
+  return w.writes();
 }
 
 /** The caller's own view, computed in memory (LLD 2 8.5); null for the system actor. */
@@ -95,11 +114,7 @@ export function planCommand(r: Reads, extra: ReadonlyMap<string, Data | null>, i
   // ---------- 3. WRITES ----------
   const w = new WriteSet({ max: MAX_WRITES });
   const writeViews = (from: Game | null, to: Game): void => {
-    for (const vw of fanOut(from, to, { now, storedRev: store.viewsRev })) {
-      const vd = ViewDocSchema.parse(vw.doc); // redundant with fanOut's own strict parse; kept at the Store boundary (5.2)
-      w.merge(viewPath(i.gameId, vw.docId), data(vd), VIEW_REGION_FIELDS);
-      if (vw.clearDraft === true) w.merge(viewPath(i.gameId, vw.docId), { draft: null, draftSeq: increment(1) }, DRAFT_REGION_FIELDS);
-    }
+    for (const x of planViews(i.gameId, from, to, { now, storedRev: store.viewsRev })) w.apply(x);
   };
 
   let sizeWarn = false;
@@ -107,7 +122,7 @@ export function planCommand(r: Reads, extra: ReadonlyMap<string, Data | null>, i
   if (a.aggregateChanged) {
     const next = a.state;
     if (next.version !== prev.version + 1) throw new StoreError("INVARIANT", `version contiguity: ${prev.version} to ${next.version} (ST4)`);
-    const doc: GameDoc = { ...next, store: { schema: 1, viewsRev: PROJECTOR_REV, updatedAt: now, deleting: null } };
+    const doc: GameDoc = withStore(next, now);
     sizeWarn = guardSize(doc, r.game, { escape: i.cmd.type === "endGame" }).warn; // ST6; endGame is always allowed (5.9)
     w.set(gamePath(i.gameId), data(doc)); // full replace: removed keys vanish
     w.create(eventPath(i.gameId, next.version), data(eventDoc(next.version, now, a, i.cmd, seed, me ?? actorPlayerId(next, i.actor))));

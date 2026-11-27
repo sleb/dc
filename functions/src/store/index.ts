@@ -10,7 +10,7 @@ export { eventDoc } from "./events";
 export { idemId } from "./idem";
 export { load } from "./load";
 export { IDENTITY_EVENTS, NOTIFY_EVENTS, buildOutbox } from "./outbox";
-export { IDEM_TTL_MS, extraReadPaths, planCommand, splitStore, viewFor } from "./plan";
+export { IDEM_TTL_MS, extraReadPaths, planCommand, planViews, splitStore, viewFor, withStore } from "./plan";
 export type { Plan, PlanDeps, Reads } from "./plan";
 export { redact, roundsContaining } from "./redact";
 export * as paths from "./refs";
