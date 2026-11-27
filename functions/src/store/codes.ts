@@ -27,7 +27,7 @@ function hashedBlocks(label: string, seed: string): ByteSource {
 /** `roomCodeFromSeed(seed)`: 4 letters from ROOM_CODE_ALPHABET, uniform by rejection sampling, always `RoomCodeSchema`-valid. */
 export function roomCodeFromSeed(seed: string, bytes: ByteSource = hashedBlocks("roomcode", seed)): string {
   let out = "";
-  let buf = new Uint8Array(0);
+  let buf: Uint8Array = new Uint8Array(0);
   let i = 0;
   while (out.length < ROOM_CODE_LENGTH) {
     if (i >= buf.length) {
