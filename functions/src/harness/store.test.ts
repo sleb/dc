@@ -31,3 +31,24 @@ for (const request of [
     expect((err as HttpsError).code).toBe("failed-precondition");
   });
 }
+
+// H2 (#35): the two new ops are behind the same gate, and with it on they are dispatched and validated before any Firestore read.
+for (const request of [
+  { op: "rebuildViews", gameId: "gaaaaaaaaaaaaaaaaaaa", now: 1_000 },
+  { op: "listWaitingOn", now: 1_000 },
+]) {
+  test(`H2 ${request.op} is refused with failed-precondition when the gate is off`, async () => {
+    delete process.env["FUNCTIONS_EMULATOR"];
+    const err = await handleStoreHarness(request).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpsError);
+    expect((err as HttpsError).code).toBe("failed-precondition");
+  });
+
+  test(`H2 ${request.op} is dispatched (not "unknown op") and validated when the gate is on`, async () => {
+    process.env["FUNCTIONS_EMULATOR"] = "true";
+    const err = await handleStoreHarness({ op: request.op }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpsError);
+    expect((err as HttpsError).code).toBe("invalid-argument");
+    expect((err as HttpsError).message).toContain(request.op);
+  });
+}
