@@ -9,13 +9,9 @@ import { newGameId, newKey } from "./support/seed";
 
 // I1 Contention (LLD 3 section 10.3, S1, ST4, ST5). A 10-player game built in Bun and seeded at round 1 SUBMITTING, then driven only through the harness.
 beforeAll(clear);
-const attemptsSeen: number[] = [];
 
 function check(results: RunResult[]): number {
-  for (const r of results) {
-    expect(["accepted", "rejected"]).toContain(r.outcome.kind);
-    attemptsSeen.push(r.attempts);
-  }
+  for (const r of results) expect(["accepted", "rejected"]).toContain(r.outcome.kind);
   return results.filter((r) => r.outcome.kind === "accepted" && !r.outcome.replay).length;
 }
 
@@ -40,6 +36,8 @@ test("I1 9 parallel confirmSubmissions on a 10-player game: all accepted or type
   expect(accepted).toBe(9);
   await invariants(t, g.version, accepted);
   expect((await t.state()).round?.phase).toBe("JUDGING"); // the ninth closed it allIn
+  // Natural contention: the emulator aborts contending transactions, so at least one of the nine retried (txn.retry). The forced ABORTED of I4 proves the retry path separately.
+  expect(Math.max(...results.map((x) => x.attempts))).toBeGreaterThan(1);
 }, 300_000);
 
 test("I1 20 parallel mixed commands from 10 actors keep every invariant", async () => {
@@ -58,16 +56,17 @@ test("I1 20 parallel mixed commands from 10 actors keep every invariant", async 
     ...Array.from({ length: 3 }, () => ({ actor: host, cmd: { type: "passJudging", expectedVersion: r.changedAtVersion } as Command })),
   ];
   expect(reqs).toHaveLength(20);
-  // Two waves of 10 in flight: on a 2-CPU host the emulator's lock queue with 20 in flight ran past the harness timeout (each wave still contends fully).
+  // Two waves of 10 in flight, not 20. The Functions emulator starts a worker per concurrent call: with 20 in flight on the 3.8 GiB, 2-CPU dev host
+  // they reached about 3 GB (21 Node processes, 21 MB free, measured) and the run also passed the 300 s harness timeout. Each wave still has 10
+  // transactions contending on the one aggregate lock, and every invariant is checked on the final state. What no longer races: wave 2's
+  // closeSubmissions and passJudging (and its last four confirms) against wave 1's first five confirms and its five updateSettings.
   const results: RunResult[] = [];
-  for (const wave of [reqs.slice(0, 10), reqs.slice(10)]) results.push(...(await Promise.all(wave.map((q) => run({ gameId: g.id, actor: q.actor, cmd: q.cmd, idemKey: newKey() })))));
+  for (const wave of [reqs.slice(0, 10), reqs.slice(10)]) {
+    const got = await Promise.all(wave.map((q) => run({ gameId: g.id, actor: q.actor, cmd: q.cmd, idemKey: newKey() })));
+    expect(Math.max(...got.map((x) => x.attempts))).toBeGreaterThan(1); // each wave contends on its own
+    results.push(...got);
+  }
   const accepted = check(results);
   expect(accepted).toBeGreaterThan(5);
   await invariants(t, g.version, accepted);
 }, 300_000);
-
-test("I1 the retry path ran under natural contention (attempts > 1 at least once; txn.retry)", () => {
-  // Phase 0 found the Firestore emulator aborts contending transactions, so this is natural contention, not fault injection (I4 forces ABORTED separately).
-  expect(attemptsSeen.length).toBe(29);
-  expect(Math.max(...attemptsSeen)).toBeGreaterThan(1);
-});
