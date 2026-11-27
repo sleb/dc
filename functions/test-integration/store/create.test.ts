@@ -23,11 +23,23 @@ const accepted = (o: CreateOutcome): Extract<CreateOutcome, { kind: "accepted" }
   return o;
 };
 const count = async (path: string): Promise<number> => (await db.collection(path).get()).size;
+/** Every top-level collection a createGame could plausibly touch, counted independently of any plan (the oracle's "nothing else" half). */
+const topLevelCounts = async () => ({
+  games: await count("games"),
+  roomCodes: await count("roomCodes"),
+  hosts: await count("hosts"),
+  outbox: await count("outbox"),
+  joinIdem: await count("joinIdem"),
+  deletions: await count("deletions"),
+  pushSubs: await count("pushSubs"),
+  rateLimits: await count("rateLimits"),
+});
 
 test("I17 createGame commits exactly six documents and the aggregate, views, code and ledger agree", async () => {
   const hostId = newHost();
   const idemKey = newKey();
   const now = 1_700_000_000_000;
+  const collectionsBefore = await topLevelCounts();
   const result = await create({ hostId, hostName: HOST_NAME, idemKey, now });
   const out = accepted(result.outcome);
   expect(out.replay).toBe(false);
@@ -50,6 +62,16 @@ test("I17 createGame commits exactly six documents and the aggregate, views, cod
     ].sort(),
   );
   expect(diff(new Map(), snap).created).toHaveLength(6);
+  // One transaction: all six documents carry the same updateTime (join.test.ts precedent), not just the same six paths.
+  expect(new Set([...snap.keys()].map((p) => snap.get(p)?.updateTime)).size).toBe(1);
+
+  // The independent oracle's "nothing else": the six documents are the whole write, so no excluded neighbour gained a row (LLD 3 section 10.3).
+  const collectionsAfter = await topLevelCounts();
+  expect((await db.doc(`hosts/${hostId}`).get()).exists).toBe(false); // the parent stays Identity's (LLD 3 section 6.1)
+  expect(collectionsAfter.games).toBe(collectionsBefore.games + 1);
+  expect(collectionsAfter.roomCodes).toBe(collectionsBefore.roomCodes + 1);
+  expect(collectionsAfter.hosts).toBe(collectionsBefore.hosts);
+  for (const c of ["outbox", "joinIdem", "deletions", "pushSubs", "rateLimits"] as const) expect(collectionsAfter[c]).toBe(collectionsBefore[c]);
 
   // The aggregate: LOBBY v1, the host seated with the derived p_ id, the code, the fresh store map.
   const doc = snap.get(`games/${gameId}`)?.data as unknown as Game & { store: Record<string, unknown> };
@@ -159,15 +181,19 @@ test("I19 replay and ledger expiry: same key returns the same ids with no docume
   const afterRetake = accepted((await create({ hostId, hostName: HOST_NAME, idemKey, now: now + 11_000 })).outcome);
   expect(afterRetake).toEqual({ kind: "accepted", gameId: first.gameId, roomCode: code, replay: true });
 
-  // A rejected host name and an invalid settings patch write nothing at all.
+  // A rejected host name and an invalid settings patch write nothing at all, including no ledger row under the host (ST1's "not even a ledger row").
   const gamesBefore = await count("games");
   const codesBefore = await count("roomCodes");
-  const nameRejected = await create({ hostId: newHost(), hostName: "   ", idemKey: newKey() });
+  const nameHost = newHost();
+  const settingsHost = newHost();
+  const nameRejected = await create({ hostId: nameHost, hostName: "   ", idemKey: newKey() });
   expect(nameRejected.outcome).toMatchObject({ kind: "rejected", rejection: { code: "CONTENT_REJECTED" } });
-  const settingsRejected = await create({ hostId: newHost(), hostName: HOST_NAME, idemKey: newKey(), settings: { spectators: { enabled: "yes" } } });
+  const settingsRejected = await create({ hostId: settingsHost, hostName: HOST_NAME, idemKey: newKey(), settings: { spectators: { enabled: "yes" } } });
   expect(settingsRejected.outcome).toMatchObject({ kind: "rejected", rejection: { code: "INVALID_ARGUMENT" } });
   expect(await count("games")).toBe(gamesBefore);
   expect(await count("roomCodes")).toBe(codesBefore);
+  expect(await count(`hosts/${nameHost}/idem`)).toBe(0);
+  expect(await count(`hosts/${settingsHost}/idem`)).toBe(0);
 });
 
 test("I20a two parallel calls with one key: one game, one ledger row, both callers get the same ids", async () => {
@@ -198,7 +224,8 @@ test("I20b two parallel calls with different keys on one code: two games, distin
   expect(left.roomCode).not.toBe(right.roomCode);
   expect(left.gameId).not.toBe(right.gameId);
   expect(left.roomCode === code || right.roomCode === code).toBe(true);
-  expect(a.attempts > 1 || b.attempts > 1 || left.roomCode !== code || right.roomCode !== code).toBe(true);
+  // Both calls start from the same scripted code seed, so the winner commits on attempt 1 and the loser must be on attempt 2 (I20).
+  expect([a.attempts, b.attempts].sort()).toEqual([1, 2]);
   for (const out of [left, right]) {
     expect((await db.doc(`roomCodes/${out.roomCode}`).get()).get("gameId")).toBe(out.gameId);
     expect((await db.doc(`games/${out.gameId}`).get()).exists).toBe(true);

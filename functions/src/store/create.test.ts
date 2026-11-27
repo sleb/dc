@@ -10,6 +10,7 @@ import { roomCodeFromSeed } from "./codes";
 import { StoreError, mapStoreError } from "./errors";
 import { idemId } from "./idem";
 import { eventPath, gamePath, hostIdemPath, roomCodePath, viewPath } from "./refs";
+import { MAX_ATTEMPTS } from "./run";
 import type { CreateLedgerDoc, Deps } from "./types";
 
 // U4-U6, U8 (LLD 3 sections 2.3, 5.4, 5.8 and 6.1, ST8): the pure createGame planner and the 8-attempt loop over a fake Firestore.
@@ -134,6 +135,7 @@ interface FakeWrite { op: "create" | "set" | "update" | "delete"; path: string; 
 class FakeDb {
   readonly store = new Map<string, Record<string, unknown>>();
   failNext: unknown = null;
+  lastOptions: { maxAttempts?: number } | undefined;
   private seq = 0;
 
   constructor(initial: Record<string, Record<string, unknown>> = {}) {
@@ -145,7 +147,8 @@ class FakeDb {
   collection() {
     return { doc: () => ({ id: `gFake${String(++this.seq).padStart(15, "0")}` }) };
   }
-  async runTransaction<T>(fn: (tx: unknown) => Promise<T>): Promise<T> {
+  async runTransaction<T>(fn: (tx: unknown) => Promise<T>, options?: { maxAttempts?: number }): Promise<T> {
+    this.lastOptions = options;
     if (this.failNext !== null) {
       const e = this.failNext;
       this.failNext = null;
@@ -215,6 +218,12 @@ async function withLogs<T>(fn: () => Promise<T>): Promise<{ value?: T; error?: u
 const collisions = (logs: Record<string, unknown>[]) => logs.filter((l) => l["event"] === "roomcode.collision");
 
 describe("U6 the attempt loop", () => {
+  test("every attempt's transaction carries runCommand's maxAttempts, so SDK retries absorb contention inside an attempt", async () => {
+    const db = new FakeDb();
+    await withLogs(() => executeCreate(db as never, fakeDeps(), INPUT));
+    expect(db.lastOptions).toEqual({ maxAttempts: MAX_ATTEMPTS });
+  });
+
   test("7 occupied scripted codes then success on the 8th, with one collision line per lost attempt", async () => {
     const codes = codesFor(8);
     expect(new Set(codes).size).toBe(8);
@@ -285,13 +294,15 @@ describe("U6 the attempt loop", () => {
   });
 });
 
-describe("U8 error mapping", () => {
+// These prove the table entry and the pass-through only; the harness mapping a thrown StoreError to an HttpsError with details.kind is proved
+// end-to-end by I18 (test-integration/store/create.test.ts).
+describe("U8 the HTTPS code table and the StoreError pass-through", () => {
   test("mapStoreError passes ROOM_CODES_EXHAUSTED through unchanged", () => {
     const e = new StoreError("ROOM_CODES_EXHAUSTED", "x");
     expect(mapStoreError(e, 8)).toBe(e);
   });
 
-  test("the harness maps ROOM_CODES_EXHAUSTED to resource-exhausted with details.kind", () => {
+  test("HTTPS_CODE lists ROOM_CODES_EXHAUSTED as resource-exhausted (the end-to-end mapping is I18)", () => {
     expect(HTTPS_CODE.ROOM_CODES_EXHAUSTED).toBe("resource-exhausted");
   });
 

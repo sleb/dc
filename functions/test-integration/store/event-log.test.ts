@@ -9,6 +9,7 @@ beforeAll(clear);
 test("I11 the raw finishWriting event doc has neither seed nor actorPlayerId; the startGame (shuffle) doc has both", async () => {
   const t = await Table.lobby(3);
   const hostPlayerId = (await t.state()).players.find((p) => p.uid === t.hostId)?.id; // createGame derives the host's p_ id (#34)
+  expect(hostPlayerId).toMatch(/^p_[a-z2-7]{8}$/); // a missing seat must fail here, not make both sides of the equality undefined
   const s = await t.host({ type: "startGame" } as Command);
   await t.as(1, { type: "saveDraft", ...(await t.fullDraft(1)) } as Command);
   const f = await t.as(1, { type: "finishWriting" } as Command);

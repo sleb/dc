@@ -12,6 +12,7 @@ import { eventDoc } from "./events";
 import { idemId } from "./idem";
 import { IDEM_TTL_MS, planViews, withStore } from "./plan";
 import { eventPath, gamePath, hostIdemPath, roomCodePath } from "./refs";
+import { MAX_ATTEMPTS } from "./run";
 import type { CreateLedgerDoc, Deps, RoomCodeDoc } from "./types";
 import { MAX_WRITES, WriteSet, applyWrites } from "./writeset";
 import type { DocWrite } from "./writeset";
@@ -155,7 +156,7 @@ export async function executeCreate(db: Firestore, d: Deps, i: CreateInput): Pro
         if (plan.kind === "taken") throw new CodeTaken();
         applyWrites(tx, db, plan.writes);
         return plan.outcome;
-      });
+      }, { maxAttempts: MAX_ATTEMPTS });
       return { outcome, attempts };
     } catch (e) {
       if (e instanceof CodeTaken) {

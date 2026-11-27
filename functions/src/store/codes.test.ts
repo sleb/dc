@@ -34,10 +34,10 @@ describe("U1 roomCodeFromSeed", () => {
 });
 
 describe("U2 no modulo bias", () => {
-  test("over 20,000 seeds every letter appears at every position within ±15% of 1,000", () => {
+  test("over 100,000 seeds every letter appears at every position within ±15% of 5,000 and the chi-square stays under the 0.1% bound", () => {
     const counts = [new Map<string, number>(), new Map<string, number>(), new Map<string, number>(), new Map<string, number>()];
     const codes = new Set<string>();
-    for (let i = 0; i < 20_000; i++) {
+    for (let i = 0; i < 100_000; i++) {
       const code = roomCodeFromSeed(`u2-${i}`);
       codes.add(code);
       for (let pos = 0; pos < 4; pos++) {
@@ -45,21 +45,23 @@ describe("U2 no modulo bias", () => {
         counts[pos]?.set(c, (counts[pos]?.get(c) ?? 0) + 1);
       }
     }
-    const expected = 20_000 / CODE_ALPHABET.length;
+    const expected = 100_000 / CODE_ALPHABET.length;
     for (const position of counts) {
       expect(position.size).toBe(CODE_ALPHABET.length);
       for (const letter of CODE_ALPHABET) {
         const n = position.get(letter) ?? 0;
-        expect(n).toBeGreaterThanOrEqual(850);
-        expect(n).toBeLessThanOrEqual(1_150);
+        expect(n).toBeGreaterThanOrEqual(4_250);
+        expect(n).toBeLessThanOrEqual(5_750);
       }
-      // The ±15% band cannot see a 20-value modulo bias: it moves 16 letters from 4.69% to 5.08% (8.3% relative), still inside the band. A
-      // chi-square over the same counts does: unbiased counts land near 19 (19 df), the bias near 61, so the 0.1% bound at 43.8 separates them.
+      // The ±15% band cannot see a 20-value modulo bias: at 5,000 expected it moves 16 letters from 4.69% to 5.08% (8.3% relative), still inside the
+      // band. A chi-square over the same counts does: unbiased counts have mean 19 (19 df), and the 0.1% bound is 43.8. At 20,000 seeds the `% 20`
+      // mutation measured 27.7–55.9 per position, so two of four positions slipped under the bound and the test could pass on a lucky seed. At
+      // 100,000 seeds the unbiased statistic measured 19.0–25.1 and the same mutation 94.1–169.7, far above the bound, so it is decisive here.
       const chiSquare = CODE_ALPHABET.split("").reduce((sum, letter) => sum + ((position.get(letter) ?? 0) - expected) ** 2 / expected, 0);
       expect(chiSquare).toBeLessThan(43.8);
     }
-    // Expected collisions at 20,000 draws over 160,000 codes are about 1,200; well under 1,600 means no shrunken space.
-    expect(20_000 - codes.size).toBeLessThan(1_600);
+    // Expected collisions at 100,000 draws over 160,000 codes are about 25,600; well under 26,500 means no shrunken space.
+    expect(100_000 - codes.size).toBeLessThan(26_500);
   });
 });
 
