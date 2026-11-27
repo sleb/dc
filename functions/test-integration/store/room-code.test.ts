@@ -6,7 +6,7 @@ import { Table } from "./support/drive";
 import { clear, create, db, findRoomCode, load, run } from "./support/harness";
 import { HOST_NAME, newGameId, newKey, newRoomCode } from "./support/seed";
 
-// I14 Room-code release at FINISHED and ENDED (ST8, part). I21 findByRoomCode (#34); the newer-game check on deleteGame is #36.
+// I14 Room-code release at FINISHED and ENDED (ST8, part). I21 findByRoomCode (#34). I30 the deleteGame ownership check (#36).
 beforeAll(clear);
 
 /** A 3-player game built in Bun one pick before it finishes (the same deterministic run, stopped one round early). */
@@ -92,4 +92,35 @@ test("I21 a released code re-taken by a newer createGame resolves to the newer g
   const stored = await db.doc(`roomCodes/${code}`).get();
   expect(stored.get("gameId")).toBe(newer.outcome.gameId);
   expect(await findRoomCode(code)).toEqual({ gameId: newer.outcome.gameId, createdAt: stored.get("createdAt") as number });
+}, 120_000);
+
+test("I30 deleting a finished game leaves a newer game's re-taken roomCodes/{code} untouched", async () => {
+  const codeSeed = "i30-reuse";
+  const code = roomCodeFromSeed(codeSeed);
+  const hostA = `host-${crypto.randomUUID()}`;
+  const first = await create({ hostId: hostA, hostName: HOST_NAME, idemKey: newKey(), seeds: [codeSeed] });
+  if (first.outcome.kind !== "accepted") throw new Error(`create rejected: ${JSON.stringify(first.outcome)}`);
+  expect(first.outcome.roomCode).toBe(code);
+  const ended = await run({ gameId: first.outcome.gameId, actor: { kind: "user", uid: hostA }, cmd: { type: "endGame" } as Command, idemKey: newKey() });
+  expect(ended.outcome.kind).toBe("accepted");
+  expect((await db.doc(`roomCodes/${code}`).get()).exists).toBe(false);
+
+  const newer = await create({ hostId: `host-${crypto.randomUUID()}`, hostName: HOST_NAME, idemKey: newKey(), seeds: [codeSeed] });
+  if (newer.outcome.kind !== "accepted") throw new Error(`create rejected: ${JSON.stringify(newer.outcome)}`);
+  expect(newer.outcome.roomCode).toBe(code);
+
+  const del = await run({ gameId: first.outcome.gameId, actor: { kind: "user", uid: hostA }, cmd: { type: "deleteGame" } as Command, idemKey: newKey() });
+  expect(del.outcome).toEqual({ kind: "deleting" });
+  expect(del.writes).toBe(2); // the aggregate update and the job; the code doc now names the newer game (ST8)
+  expect((await db.doc(`roomCodes/${code}`).get()).get("gameId")).toBe(newer.outcome.gameId);
+}, 120_000);
+
+test("I30 deleting a LOBBY game removes its code and findByRoomCode returns null", async () => {
+  const t = await Table.lobby(3);
+  const g = await t.state();
+  const del = await t.run({ kind: "user", uid: t.hostId }, { type: "deleteGame" } as Command, { idemKey: newKey() });
+  expect(del.outcome).toEqual({ kind: "deleting" });
+  expect(del.writes).toBe(3);
+  expect((await db.doc(`roomCodes/${g.roomCode}`).get()).exists).toBe(false);
+  expect(await findRoomCode(g.roomCode)).toBeNull();
 }, 120_000);

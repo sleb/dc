@@ -17,6 +17,11 @@ export class Table {
     return new Table(game.id, game.hostId);
   }
 
+  /** Attach to a game seeded elsewhere (the cascade fixture writes its own aggregate and side rows). */
+  static attach(gameId: string, hostId: string): Table {
+    return new Table(gameId, hostId);
+  }
+
   /** A fresh LOBBY game from the production createGame (#34), and n - 1 players joined through the harness. */
   static async lobby(n: number, o: { settings?: Record<string, unknown> } = {}): Promise<Table> {
     const hostId = `host-${crypto.randomUUID()}`;

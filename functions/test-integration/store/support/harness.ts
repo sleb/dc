@@ -88,6 +88,32 @@ export async function rebuildViews(gameId: string, now: number): Promise<Rebuild
   return (res.data as { result: RebuildResult }).result;
 }
 
+/** runDeletion (#36): the emulator-only cascade runner with a recording fake identity port. */
+export type DeletionStage = "views" | "drafts" | "identity" | "push" | "joinIdem" | "history" | "aggregate";
+export interface DeletionResultLike { kind: "done" | "noop"; reason?: "missing" | "done"; stagesRun: DeletionStage[]; stuck: boolean }
+export interface PurgeCall { gameId: string; uids: string[]; requested: number; deleted: number }
+export interface DeletionRun {
+  result: DeletionResultLike;
+  purged: PurgeCall[];
+  logs: { event: string; gameId?: string }[];
+}
+export interface DeletionRequest { gameId: string; now?: number; faultAt?: { stage: DeletionStage; point: "work" | "commit" }; captureLog?: boolean }
+
+export async function runDeletion(gameId: string, o: Omit<DeletionRequest, "gameId"> = {}): Promise<DeletionRun> {
+  const res = await call({ op: "runDeletion", gameId, ...(o.now === undefined ? {} : { now: o.now }), ...(o.faultAt === undefined ? {} : { faults: { afterStage: o.faultAt } }), ...(o.captureLog === true ? { captureLog: true } : {}) });
+  return res.data as DeletionRun;
+}
+
+export async function runDeletionError(gameId: string, o: Omit<DeletionRequest, "gameId"> = {}): Promise<{ code: string; kind: string | null; stage: string | null; point: string | null }> {
+  try {
+    await runDeletion(gameId, o);
+  } catch (e) {
+    const err = e as { code?: string; details?: { kind?: string; stage?: string; point?: string } };
+    return { code: err.code ?? "unknown", kind: err.details?.kind ?? null, stage: err.details?.stage ?? null, point: err.details?.point ?? null };
+  }
+  throw new Error("expected the harness call to fail");
+}
+
 export interface WaitingPageRequest {
   now: number;
   limit?: number;

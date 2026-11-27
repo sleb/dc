@@ -36,6 +36,7 @@ for (const request of [
 for (const request of [
   { op: "rebuildViews", gameId: "gaaaaaaaaaaaaaaaaaaa", now: 1_000 },
   { op: "listWaitingOn", now: 1_000 },
+  { op: "runDeletion", gameId: "gaaaaaaaaaaaaaaaaaaa", now: 1_000 },
 ]) {
   test(`H2 ${request.op} is refused with failed-precondition when the gate is off`, async () => {
     delete process.env["FUNCTIONS_EMULATOR"];
