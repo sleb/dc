@@ -5,7 +5,7 @@ import type { Game } from "@dc/engine";
 import { estimateBytes } from "../../src/store/size";
 import { MemGame } from "../../src/store/test-support";
 import { Table } from "./support/drive";
-import { clear, runError } from "./support/harness";
+import { clear, db, runError } from "./support/harness";
 import { diff, snapshot, touched } from "./support/inspect";
 import { createdGame, newGameId, newKey } from "./support/seed";
 
@@ -32,7 +32,8 @@ test("I7 on 10 seated and 40 departed, the harness write count equals an indepen
   const d2 = diff(b2, await snapshot(t.gameId, extra));
   expect(touched(d2)).toBe(r2.writes);
   expect(r2.writes).toBeLessThanOrEqual(75);
-  expect(estimateBytes(m.game)).toBeLessThan(600 * 1024);
+  // The stored aggregate after both commands (store map included), read back from the emulator, not the Bun-built fixture.
+  expect(estimateBytes((await db.doc(`games/${t.gameId}`).get()).data())).toBeLessThan(600 * 1024);
 }, 120_000);
 
 /** A LOBBY game padded with registry cards (imported-deck shape) to just over the 900 KiB estimate, under Firestore's 1 MiB. */
