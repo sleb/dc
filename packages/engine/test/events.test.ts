@@ -189,10 +189,14 @@ describe("EV2 the catalog equals LLD 1 section 11; deferred tags have no emitter
     for (const t of Object.keys(CATALOG).filter((k) => !DEFERRED.includes(k))) expect(code).toContain(`t: "${t}"`);
   });
 
+  // GameDeleted is emitted by the real deleteGame row and asserted exactly in D1 (`delete-game.test.ts`); the scenario
+  // drivers pick only named types, so they never issue it. It is not seeded into `seen`: that would make this loop
+  // unable to fail for it.
+  const DIRECT = new Set(["GameDeleted"]);
   test("over seeded games every non-deferred tag is emitted at least once and no deferred tag ever is", () => {
-    const seen = new Set<string>(["GameCreated", "SettingsUpdated", "GameDeleted"]); // the driven games start from a lobby that createGame and updateSettings built; deleteGame is its own row in EV1
+    const seen = new Set<string>(["GameCreated", "SettingsUpdated"]); // the driven games start from a lobby that createGame and updateSettings built
     for (let seed = 1; seed <= 60; seed++) for (const a of accepts(play(3 + (seed % 5), seed, true))) for (const e of a.events) seen.add(e.t);
-    for (const t of Object.keys(CATALOG).filter((k) => !DEFERRED.includes(k))) expect(seen.has(t) ? t : `missing ${t}`).toBe(t);
+    for (const t of Object.keys(CATALOG).filter((k) => !DEFERRED.includes(k) && !DIRECT.has(k))) expect(seen.has(t) ? t : `missing ${t}`).toBe(t);
     for (const t of DEFERRED) expect(seen.has(t)).toBe(false);
   }, 600_000);
 });

@@ -1,6 +1,6 @@
 // The round commands (LLD 1 sections 7.1, 7.2, 8.2, 8.3): confirmSubmission, closeSubmissions, pickWinner.
 // Guard 8 (#25): the pitch is moderated as `pitch` (length by code points, structure, profanity) and stored cleaned; a blank pitch is no pitch and skips the check. Guard 7 keeps the shape only (a string).
-// `writeIn`, `redraw`, `castVote`, `importDeck` and `deleteGame` have no owner in M1 and stay unregistered (guard 0, INVALID_ARGUMENT); `passJudging` and `endGame` are in stalls.ts (#23).
+// `writeIn`, `redraw`, `castVote` and `importDeck` have no owner in M1 and stay unregistered (guard 0, INVALID_ARGUMENT); `passJudging` and `endGame` are in stalls.ts (#23), and `deleteGame` is in delete.ts (#36).
 import type { Command } from "@dc/contracts";
 import { reject } from "../errors";
 import type { CommandSpec, Input } from "../registry";

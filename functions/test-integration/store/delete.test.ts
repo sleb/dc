@@ -84,7 +84,7 @@ describe("I28 phase 0 through the harness", () => {
 });
 
 describe("I29 commands during and after deletion", () => {
-  test("updateSettings and endGame are NOT_FOUND with zero writes; the same key and a new key both replay as NOT_FOUND; after the cascade too", async () => {
+  test("updateSettings and endGame are NOT_FOUND with zero writes; the same key and a new key both return the exact rejected NOT_FOUND shape; after the cascade too", async () => {
     const c = buildCascade({ hostId: "host-i29" });
     const t = await setup(c);
     const key = newKey();
@@ -99,7 +99,6 @@ describe("I29 commands during and after deletion", () => {
     expect(sameKey.outcome).toEqual({ kind: "rejected", rejection: { code: "NOT_FOUND" }, version: 0 });
     const newKeyAgain = await t.run(actor(c), { type: "deleteGame" } as Command, { now: NOW, idemKey: newKey() });
     expect(newKeyAgain.outcome).toEqual({ kind: "rejected", rejection: { code: "NOT_FOUND" }, version: 0 });
-    expect(sameKey.outcome.kind === "rejected" && "replay" in sameKey.outcome).toBe(false);
 
     expect((await runDeletion(c.game.id, { now: NOW })).result.kind).toBe("done");
     const after = await t.run(actor(c), { type: "deleteGame" } as Command, { now: NOW, idemKey: newKey() });
@@ -180,6 +179,19 @@ describe("I31 after done the game is gone, the job keeps its 7 days, hosts decks
     expect((await db.doc("pushSubs/other-push").get()).exists).toBe(true);
     expect((await db.doc("joinIdem/other-join").get()).exists).toBe(true);
     expect((await db.doc("roomCodes/ZZZZ").get()).get("gameId")).toBe("another-game");
+  }, 120_000);
+
+  test("deleteWhere pages past 400 pushSubs rows, not just the first page", async () => {
+    const c = buildCascade({ hostId: "host-i31-pages" });
+    const t = await setup(c);
+    const batch = db.batch();
+    for (let i = 0; i < 451; i++) batch.set(db.doc(`pushSubs/page-${c.game.id}-${i}`), { gameId: c.game.id, uid: "page-uid", token: "PUSH-SENTINEL-page" });
+    await batch.commit();
+    expect((await db.collection("pushSubs").where("gameId", "==", c.game.id).get()).size).toBe(452); // 451 + the fixture's one
+    expect((await phase0(t, c)).outcome).toEqual({ kind: "deleting" });
+    expect((await runDeletion(c.game.id, { now: NOW })).result.kind).toBe("done");
+    expect((await db.collection("pushSubs").where("gameId", "==", c.game.id).get()).empty).toBe(true);
+    expect((await db.doc("pushSubs/other-push").get()).exists).toBe(true);
   }, 120_000);
 });
 

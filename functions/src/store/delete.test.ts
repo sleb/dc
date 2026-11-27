@@ -13,9 +13,10 @@ describe("U5 newDeletionJob", () => {
       ...m.game,
       players: m.game.players.map((p) => (p.id === pid(1) ? { ...p, status: "left" as const } : p.id === pid(2) ? { ...p, status: "removed" as const } : p)),
     };
-    const job = newDeletionJob(game, NOW);
+    const callerId = "gCallerGame000000001";
+    const job = newDeletionJob(callerId, game, NOW);
     expect(job).toEqual({
-      gameId: game.id,
+      gameId: callerId,
       hostId: game.hostId,
       requestedAt: NOW,
       status: "running",
@@ -26,6 +27,7 @@ describe("U5 newDeletionJob", () => {
     });
     expect(job.seatUids).toContain(m.uidOf(1));
     expect(job.seatUids).not.toContain(game.hostId);
+    expect(job.gameId).not.toBe(game.id); // the caller id, not the stored aggregate id
   });
 });
 

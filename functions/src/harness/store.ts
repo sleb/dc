@@ -141,6 +141,8 @@ class InjectedDeletionFault extends Error {
  */
 async function deletionOp(r: DeletionRequest): Promise<{ ok: true; result: DeletionResult; purged: PurgeCall[]; logs: LogFields[] }> {
   if (typeof r.gameId !== "string" || r.gameId.length === 0) bad("runDeletion needs gameId");
+  if (r.now !== undefined && typeof r.now !== "number") bad("runDeletion needs a numeric now");
+  if (r.captureLog !== undefined && typeof r.captureLog !== "boolean") bad("runDeletion needs a boolean captureLog");
   const f = r.faults?.afterStage;
   if (f !== undefined && (!(DELETION_STAGES as readonly string[]).includes(f.stage) || (f.point !== "work" && f.point !== "commit"))) bad("runDeletion needs a known stage and point");
   const purged: PurgeCall[] = [];

@@ -17,21 +17,28 @@ test("L1a a clean log has no hits", () => {
 });
 
 test("L1b each sentinel family is found, with its line number and without echoing the line", () => {
-  const log = ["ok", "name NAME-SENTINEL-a1 here", "ok", "card CARD-SENTINEL-b2", "mail sentinel@example.test"].join("\n");
+  const log = ["ok", "name NAME-SENTINEL-a1 here", "ok", "card CARD-SENTINEL-b2", "mail sentinel@example.test", "seat SEAT-SENTINEL-c3", "push PUSH-SENTINEL-d4", "notif NOTIF-SENTINEL-e5", "deck DECK-SENTINEL-f6"].join("\n");
   const hits = findSentinels(log, "emulator.log");
   expect(hits.map((h) => [h.line, h.kind])).toEqual([
     [2, "NAME-SENTINEL"],
     [4, "CARD-SENTINEL"],
     [5, "sentinel@example.test"],
+    [6, "SEAT-SENTINEL"],
+    [7, "PUSH-SENTINEL"],
+    [8, "NOTIF-SENTINEL"],
+    [9, "DECK-SENTINEL"],
   ]);
   expect(JSON.stringify(hits)).not.toContain("a1");
   expect(hits[0]?.file).toBe("emulator.log");
 });
 
-test("L1c the sentinels the integration test sends are all detected", () => {
-  const source = readFileSync(join(import.meta.dir, "../functions/test-integration/sentinels.test.ts"), "utf8");
-  const sent = [...source.matchAll(/(?:NAME-SENTINEL-\w+|CARD-SENTINEL-\w+|sentinel@example\.test)/g)].map((m) => m[0]);
-  expect(sent.length).toBeGreaterThanOrEqual(3);
+test("L1c the sentinels the integration tests send are all detected", () => {
+  const source = [
+    readFileSync(join(import.meta.dir, "../functions/test-integration/sentinels.test.ts"), "utf8"),
+    readFileSync(join(import.meta.dir, "../functions/test-integration/store/support/cascade.ts"), "utf8"),
+  ].join("\n");
+  const sent = [...source.matchAll(/(?:(?:NAME|CARD|SEAT|DECK)-SENTINEL-\w+|(?:PUSH|NOTIF)-SENTINEL\w*|sentinel@example\.test)/g)].map((m) => m[0]);
+  expect(sent.length).toBeGreaterThanOrEqual(8);
   for (const s of sent) expect([s, findSentinels(`x ${s} y`).length]).toEqual([s, 1]);
 });
 

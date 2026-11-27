@@ -17,10 +17,11 @@ export { DELETION_STAGES };
 export const DELETION_TTL_MS = 7 * 86_400_000;
 export const STUCK_AFTER_MS = 3_600_000;
 
-/** `deletions/{gameId}` from the aggregate phase 0 is about to hide (LLD 3 section 6.4). */
-export function newDeletionJob(game: Game, now: number): DeletionJob {
+/** `deletions/{gameId}` from the aggregate phase 0 is about to hide (LLD 3 section 6.4). The caller passes the id the
+ *  document path and `runDeletion` use, not the stored aggregate `id` (the #35 caller-id lesson). */
+export function newDeletionJob(gameId: GameId, game: Game, now: number): DeletionJob {
   return {
-    gameId: game.id,
+    gameId,
     hostId: game.hostId,
     requestedAt: now,
     status: "running",

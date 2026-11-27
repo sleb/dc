@@ -121,7 +121,7 @@ export function planCommand(r: Reads, extra: ReadonlyMap<string, Data | null>, i
     w.update(gamePath(i.gameId), { "store.deleting": { at: now, by: prev.hostId }, "store.updatedAt": now });
     const code = extra.get(roomCodePath(prev.roomCode)) ?? null;
     if (code !== null && code["gameId"] === i.gameId) w.delete(roomCodePath(prev.roomCode));
-    w.create(deletionPath(i.gameId), data(newDeletionJob(prev, now)));
+    w.create(deletionPath(i.gameId), data(newDeletionJob(i.gameId, prev, now)));
     return { outcome: { kind: "deleting" }, writes: w.writes(), sizeWarn: false };
   }
   const w = new WriteSet({ max: MAX_WRITES });

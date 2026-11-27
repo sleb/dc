@@ -8,16 +8,9 @@ import { StoreError } from "./errors";
 import { idemId } from "./idem";
 import { extraReadPaths, planCommand } from "./plan";
 import type { Plan, PlanDeps, Reads } from "./plan";
-import { draftPath, eventPath, gamePath, idemPath, outboxPath, roomCodePath, roundPath, viewPath } from "./refs";
+import { deletionPath, draftPath, eventPath, gamePath, idemPath, outboxPath, roomCodePath, roundPath, viewPath } from "./refs";
 import { MemGame, pid, withRepeatedHistory } from "./test-support";
-import type { CommandInput, GameDoc, IdemDoc } from "./types";
-
-// The document path is part of the contract; spelled out here until the helper lands with the green commit.
-const deletionPath = (id: string): string => `deletions/${id}`;
-interface DeletionJobLike {
-  gameId: string; hostId: string; requestedAt: number; status: "running" | "done"; stagesDone: string[];
-  seatUids: string[]; heartbeatAt: number; attempts: number; expiresAt?: Timestamp;
-}
+import type { CommandInput, DeletionJob, GameDoc, IdemDoc } from "./types";
 import { MAX_WRITES, increment } from "./writeset";
 import type { DocWrite } from "./writeset";
 
@@ -402,7 +395,7 @@ describe("P6 phase 0: the deleting marker, the owned code delete and the job", (
     const job = w.get(deletionPath(m.game.id));
     expect(job?.op).toBe("create");
     if (job?.op === "create") {
-      const expected: Record<string, unknown> & DeletionJobLike = {
+      const expected: DeletionJob = {
         gameId: m.game.id,
         hostId: m.game.hostId,
         requestedAt: NOW,
@@ -412,7 +405,7 @@ describe("P6 phase 0: the deleting marker, the owned code delete and the job", (
         heartbeatAt: NOW,
         attempts: 0,
       };
-      expect(job.data).toEqual(expected);
+      expect(job.data).toEqual({ ...expected } as Record<string, unknown>);
     }
     expect(p.writes.some((x) => x.path.includes("/events/") || x.path.includes("/idem/"))).toBe(false);
     expect(JSON.stringify(p.writes)).not.toContain(`"version":${m.game.version + 1}`);

@@ -53,3 +53,17 @@ for (const request of [
     expect((err as HttpsError).message).toContain(request.op);
   });
 }
+
+// H2 (#36 review): runDeletion's own arguments are checked before any Firestore read, like rebuildViews and listWaitingOn.
+for (const request of [
+  { op: "runDeletion", gameId: "gaaaaaaaaaaaaaaaaaaa", now: "soon" },
+  { op: "runDeletion", gameId: "gaaaaaaaaaaaaaaaaaaa", now: 1_000, captureLog: "yes" },
+]) {
+  test(`H2 runDeletion rejects ${JSON.stringify(request)} with invalid-argument`, async () => {
+    process.env["FUNCTIONS_EMULATOR"] = "true";
+    const err = await handleStoreHarness(request).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpsError);
+    expect((err as HttpsError).code).toBe("invalid-argument");
+    expect((err as HttpsError).message).toContain("runDeletion");
+  });
+}

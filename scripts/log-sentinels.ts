@@ -4,11 +4,15 @@ import { readFile } from "node:fs/promises";
 // requests; if one reaches a log line, the run fails. This is the detector. It reports where a sentinel is, never the
 // line itself (the line is the thing that leaked).
 
-/** The sentinel families (P19): display names, card text, an email. Keep in step with functions/test-integration/sentinels.test.ts (checked by log-sentinels.test.ts). */
+/** The sentinel families (P19): display names, card text, an email, and the seat/push/notif/deck shapes the cascade fixture seeds. Keep in step with functions/test-integration/sentinels.test.ts and support/cascade.ts (checked by log-sentinels.test.ts). */
 export const SENTINELS: { kind: string; pattern: RegExp }[] = [
   { kind: "NAME-SENTINEL", pattern: /NAME-SENTINEL-\w+/ },
   { kind: "CARD-SENTINEL", pattern: /CARD-SENTINEL-\w+/ },
   { kind: "sentinel@example.test", pattern: /sentinel@example\.test/ },
+  { kind: "SEAT-SENTINEL", pattern: /SEAT-SENTINEL-\w+/ },
+  { kind: "PUSH-SENTINEL", pattern: /PUSH-SENTINEL\w*/ },
+  { kind: "NOTIF-SENTINEL", pattern: /NOTIF-SENTINEL\w*/ },
+  { kind: "DECK-SENTINEL", pattern: /DECK-SENTINEL-\w+/ },
 ];
 
 export interface Hit {
