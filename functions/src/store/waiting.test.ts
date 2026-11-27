@@ -42,9 +42,19 @@ const item = (id: string, dueAt: number) => ({
   dueAt,
   version: 7,
 });
+/** The stored shape pageOf reads: the aggregate's field names. */
+const raw = (id: string, dueAt: number, extra: Record<string, unknown> = {}) => ({
+  reminderDueAt: dueAt,
+  episode: `e-${id}`,
+  episodeGen: 2,
+  waitingOn: [`p-${id}`],
+  waitingSince: 5,
+  version: 7,
+  ...extra,
+});
 
 test("U10 pageOf: a short page is all items and next null; a full page points at the last pair", () => {
-  const docs = [doc("g3", item("g3", 30)), doc("g1", item("g1", 10)), doc("g2", item("g2", 20))];
+  const docs = [doc("g3", raw("g3", 30)), doc("g1", raw("g1", 10)), doc("g2", raw("g2", 20))];
   const short = pageOf(docs, 4);
   expect(short.items).toEqual([item("g3", 30), item("g1", 10), item("g2", 20)]);
   expect(short.next).toBeNull();
@@ -59,7 +69,7 @@ test("U10 pageOf: an empty page is [] and null", () => {
 });
 
 test("U10 pageOf: items are exactly the seven fields, since is waitingSince, and nothing else leaks", () => {
-  const items = pageOf([doc("g1", { ...item("g1", 10), ignored: "leak", waitingSince: 11 })], 1).items;
+  const items = pageOf([doc("g1", raw("g1", 10, { ignored: "leak", waitingSince: 11 }))], 1).items;
   expect(items).toHaveLength(1);
   const it = items[0]!;
   expect(it).toEqual({ gameId: "g1", episode: "e-g1", episodeGen: 2, waitingOn: ["p-g1"], since: 11, dueAt: 10, version: 7 });
