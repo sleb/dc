@@ -674,3 +674,28 @@ test("OB10 the real argv shapes, through the CLI against a fake gcloud on PATH",
     await server.stop(true);
   }
 });
+
+// OB11 (#36): the alert tree and the typed logger cannot drift. Every `jsonPayload.event="X"` in ops/alerts must name
+// an event in functions/src/log.ts's LogEvent union; the stuck-deletion policy names `deletion.stuck`, the line
+// runDeletion writes (LLD 0 section 9, LLD 3 section 6.4).
+describe("OB11 alert filters name events the logger allows", () => {
+  test("every event filter is in LogEvent, and stuck-deletion names deletion.stuck", async () => {
+    const source = await readFile(join(ROOT, "functions/src/log.ts"), "utf8");
+    const start = source.indexOf("export type LogEvent =");
+    const end = source.indexOf("export interface LogFields");
+    expect([start >= 0, end > start]).toEqual([true, true]);
+    const allowed = new Set([...source.slice(start, end).matchAll(/"([a-z][a-z0-9._]*)"/g)].map((m) => m[1] ?? ""));
+    expect(allowed.has("deletion.stuck")).toBe(true);
+
+    const found = new Map<string, string[]>();
+    for (const name of await filesIn("alerts", ".json")) {
+      const text = await readOPS(`alerts/${name}`);
+      for (const m of text.matchAll(/jsonPayload\.event\s*=\s*\\?"([^"\\]+)\\?"/g)) {
+        const event = m[1] ?? "";
+        found.set(event, [...(found.get(event) ?? []), name]);
+      }
+    }
+    for (const [event, files] of found) expect([event, allowed.has(event) ? true : `not a LogEvent (${files.join(", ")})`]).toEqual([event, true]);
+    expect(found.get("deletion.stuck")).toEqual(["stuck-deletion.json"]);
+  });
+});
