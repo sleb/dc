@@ -3,11 +3,11 @@ import { join } from "node:path";
 import type { Command } from "@dc/contracts";
 import type { Game } from "@dc/engine";
 import { viewersOf } from "@dc/engine";
-import { DELETION_STAGES } from "../../src/store";
+import { DELETION_STAGES, idemId } from "../../src/store";
 import { estimateBytes } from "../../src/store/size";
 import { Table } from "./support/drive";
 import { clear, db, runDeletion } from "./support/harness";
-import { FIXTURE_IDS, fixtureHostId } from "./support/fixtures";
+import { FIXTURE_IDS, fixtureCreateKey, fixtureHostId } from "./support/fixtures";
 import { diff, snapshot, touched, viewProblems } from "./support/inspect";
 
 // V5, V6 (LLD 3 sections 2.5, 5.7, 6.4 and 10.3): the size fixture. Built through the real commands inside test:integration,
@@ -50,8 +50,7 @@ test("midsize10 is 10 players and 91 real rounds with 500 votes, and the stored 
   const bytes = estimateBytes(aggregate);
   const line = /commands=(\d+) writes=(\d+)/.exec(buildOut);
   console.log(`midsize10: buildMs=${buildMs} estimateBytes=${bytes} votes=${g.votes.length} rounds=${g.history.length} commands=${line?.[1]} harnessWrites=${line?.[2]}`);
-  expect(bytes).toBeLessThan(600 * 1024);
-  expect(bytes).toBeLessThan(900 * 1024);
+  expect(bytes).toBeLessThan(600 * 1024); // the ST6 warn budget; the hard 900 KiB guard is proved by the oversize case in budget.test.ts
   expect(buildMs).toBeLessThan(BUILD_BOUND_MS);
   expect(Number(line?.[1])).toBeGreaterThan(900); // ~10 commands per round
   expect(viewersOf(g)).toHaveLength(11);
@@ -78,7 +77,7 @@ test("deleteGame on midsize10 is within section 5.7 and the in-process cascade l
   const g = await t.state();
   const code = g.roomCode;
   const version = g.version;
-  const ledger = `hosts/${g.hostId}/idem/${(await db.collection(`hosts/${g.hostId}/idem`).get()).docs[0]?.id ?? ""}`;
+  const ledger = `hosts/${g.hostId}/idem/${idemId({ kind: "user", uid: g.hostId }, fixtureCreateKey(NAME))}`;
   const before = await snapshot(ID, [`deletions/${ID}`]);
   const del = await t.run({ kind: "user", uid: t.hostId }, { type: "deleteGame" } as Command);
   expect(del.outcome).toEqual({ kind: "deleting" });
@@ -98,7 +97,10 @@ test("deleteGame on midsize10 is within section 5.7 and the in-process cascade l
   expect(run.purged[0]).toEqual({ gameId: ID, uids: g.players.map((p) => p.uid).filter((u) => u !== g.hostId), requested: 9, deleted: 9 });
 
   expect((await db.doc(`games/${ID}`).get()).exists).toBe(false);
-  for (const c of ["views", "drafts", "events", "history", "seats"]) expect([c, (await db.collection(`games/${ID}/${c}`).get()).empty]).toEqual([c, true]);
+  // Every subcollection the cascade removes: views, drafts, rounds ('history'), events, outbox, idem, notifLog, seats. A deleted
+  // document with no subcollections left lists none; `delete.test.ts` uses the same oracle on the small fixture.
+  expect(await db.doc(`games/${ID}`).listCollections()).toEqual([]);
+  expect((await db.collection(`hosts/${g.hostId}/idem`).get()).empty).toBe(true);
   expect((await db.doc(`roomCodes/${code}`).get()).exists).toBe(false);
   expect((await db.doc(ledger).get()).exists).toBe(false);
   const job = (await db.doc(`deletions/${ID}`).get()).data();

@@ -269,4 +269,7 @@ test("I22b a harness-supplied fixed gameId names every document; a create withou
   expect(auto.gameId).toMatch(/^[A-Za-z0-9]{20}$/);
   expect(auto.gameId).not.toBe(fixed);
   expect((await db.doc(`games/${auto.gameId}`).get()).exists).toBe(true);
+
+  // The harness's fixed-id guard: a 19-character id never reaches executeCreate.
+  expect(await createError({ gameId: "gFixCreate000000000", hostId: newHost(), hostName: HOST_NAME, idemKey: newKey() })).toEqual({ code: "functions/invalid-argument", kind: null });
 }, 120_000);
