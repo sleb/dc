@@ -95,8 +95,8 @@ test("every catalogue fixture has its documented shape, built from real commands
   // The per-fixture states the catalogue exists for.
   const writing = await aggregate("writing4");
   expect(writing.players.map((p) => p.status)).toEqual(["writing", "ready", "writing", "writing"]);
-  expect((await db.doc(`games/${writing.id}/drafts/${writing.players[0]?.id}`).get()).exists).toBe(false);
-  expect((await db.doc(`games/${writing.id}/drafts/${writing.players[1]?.id}`).get()).exists).toBe(true);
+  expect((await db.doc(`games/${writing.id}/drafts/${writing.players[1]?.id}`).get()).exists).toBe(false); // pid(1) finished
+  expect((await db.doc(`games/${writing.id}/drafts/${writing.players[2]?.id}`).get()).exists).toBe(true); // pid(2) mid-draft
 
   const submitting = await aggregate("submitting5");
   expect(submitting.round?.submissions).toHaveLength(2);
@@ -109,7 +109,9 @@ test("every catalogue fixture has its documented shape, built from real commands
 
   const departed = await aggregate("departed40");
   expect(departed.totalJoins).toBe(50);
-  expect(departed.players.filter((p) => p.status === "left")).toHaveLength(40);
+  // 40 joins that left, plus the host's own seat (unseated, tombstoned).
+  expect(departed.players.filter((p) => p.status === "left")).toHaveLength(41);
+  expect(departed.players.find((p) => p.uid === departed.hostId)?.status).toBe("left");
   expect(departed.players.filter((p) => p.status === "writing" || p.status === "ready" || p.status === "active")).toHaveLength(10);
 
   const stale = await (async () => {

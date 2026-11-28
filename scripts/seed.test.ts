@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { checkSeedEnv, parseSeedArgs, SeedUsageError } from "../seed";
+import { checkSeedEnv, parseSeedArgs, SeedUsageError } from "./seed";
 
 // V2, V10 (LLD 0 P1, LLD 3 section 10.1): the seed CLI's pure checks. The emulator half (exit codes, a replaying second --all)
 // is functions/test-integration/store/fixtures.test.ts, which has the emulators to talk to.

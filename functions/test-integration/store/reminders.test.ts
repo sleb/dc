@@ -2,6 +2,7 @@ import { beforeAll, expect, test } from "bun:test";
 import type { Command } from "@dc/contracts";
 import { REMINDER_INTERVAL_MS } from "@dc/engine";
 import { Table } from "./support/drive";
+import { seedPaging } from "./support/fixtures";
 import { clear, db, listWaitingOn, run } from "./support/harness";
 import type { RunResult } from "./support/harness";
 import type { WaitingPage } from "../../src/store";
@@ -95,14 +96,7 @@ test("I27 listWaitingOn pages the waitingOn query over 250 due, 50 future and 50
   const now = 10_000_000;
 
   // 249 lean Admin-written due docs plus the real game make 250 due; ties on dueAt are deliberate.
-  const lean = Array.from({ length: 249 }, (_, i) => ({ gameId: `g${String(i).padStart(19, "0")}`, dueAt: 1000 + Math.floor(i / 10) }));
-  const future = Array.from({ length: 50 }, (_, i) => ({ gameId: `f${String(i).padStart(19, "0")}`, dueAt: now + 1 + i }));
-  const nulls = Array.from({ length: 50 }, (_, i) => ({ gameId: `n${String(i).padStart(19, "0")}` }));
-  const batch = db.batch();
-  for (const d of lean) batch.set(db.doc(`games/${d.gameId}`), { reminderDueAt: d.dueAt, episode: `e-${d.gameId}`, episodeGen: 1, waitingOn: ["p_lean"], waitingSince: 5, version: 1 });
-  for (const d of future) batch.set(db.doc(`games/${d.gameId}`), { reminderDueAt: d.dueAt, episode: `e-${d.gameId}`, episodeGen: 1, waitingOn: ["p_future"], waitingSince: 5, version: 1 });
-  for (const d of nulls) batch.set(db.doc(`games/${d.gameId}`), { reminderDueAt: null, episode: null, episodeGen: 0, waitingOn: [], waitingSince: 0, version: 1 });
-  await batch.commit();
+  const { lean, future, nulls } = await seedPaging(now);
 
   const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
   const want = [{ gameId: t.gameId, dueAt: REAL_DUE }, ...lean]

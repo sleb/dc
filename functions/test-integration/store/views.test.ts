@@ -14,10 +14,10 @@ beforeAll(async () => {
   await seedFixture("viewsStale");
 });
 
-/** The stale fixture, re-lowered: an earlier test in this file has already rebuilt its views. */
+/** The stale fixture: the build leaves it stale; an earlier test in the file may have rebuilt it since. */
 async function stale(): Promise<Table> {
   const t = Table.attach(FIXTURE_IDS.viewsStale, fixtureHostId("viewsStale"));
-  expect(await lowerViewsRev(t.gameId)).toBe(true);
+  await lowerViewsRev(t.gameId);
   return t;
 }
 const viewPaths = (s: Map<string, unknown>) => [...s.keys()].filter((p) => p.includes("/views/")).sort();

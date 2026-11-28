@@ -55,6 +55,8 @@ export interface CreateRequest {
   hostName: string;
   idemKey: string;
   settings?: unknown;
+  /** Emulator fixtures only (LLD 3 section 10.1, #37): the aggregate id a replay names. */
+  gameId?: string;
   now?: number;
   seeds?: string[];
 }
