@@ -174,3 +174,33 @@ test("the catalogue is built by the real path, not the crafted-state helper", ()
     expect([f, /support\/crafted|\.\/crafted/.test(src)]).toEqual([f, false]);
   }
 });
+
+/** The parts of a fixture that a rebuild from empty must reproduce; card ids and hands are minted, so they are counted, not compared. */
+const summary = async (name: FixtureName) => {
+  const g = await aggregate(name);
+  return {
+    name,
+    id: g.id,
+    phase: g.phase,
+    paused: g.paused,
+    players: g.players.length,
+    statuses: g.players.map((p) => p.status).sort(),
+    views: viewersOf(g).length,
+    history: g.history.length,
+    round: g.round?.phase ?? null,
+    submissions: g.round?.submissions.length ?? 0,
+    votes: g.votes.length,
+    cards: Object.keys(g.cards).length,
+  };
+};
+
+test("after clear() a rebuild from empty reproduces the catalogue's shape", async () => {
+  const before = [];
+  for (const name of CATALOGUE) before.push(await summary(name));
+  await clear();
+  const rebuilt = runSeed(["--all"]);
+  expect(rebuilt.code).toBe(0);
+  const after = [];
+  for (const name of CATALOGUE) after.push(await summary(name));
+  expect(after).toEqual(before);
+}, 900_000);
