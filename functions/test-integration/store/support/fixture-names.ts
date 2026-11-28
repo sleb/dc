@@ -38,3 +38,16 @@ export const FIXTURE_IDS: Record<FixtureName, GameId> = Object.fromEntries(FIXTU
 export const fixtureHostId = (name: FixtureName): Uid => `host-fixture-${name}`;
 /** The host's createGame ledger key: a second build replays instead of creating another game. */
 export const fixtureCreateKey = (name: FixtureName): string => `fx:${name}:create`;
+
+/** The project every fixture client uses when the operator names none (the `emulators:exec --project` default). */
+export const DEFAULT_EMULATOR_PROJECT = "demo-deepcuts";
+
+/**
+ * The one project the seed guard and every fixture client agree on (LLD 0 P1, LLD 3 section 10.1, #37): the CLI's
+ * `GCLOUD_PROJECT` when it has the `demo-` prefix the guard accepts, else the suite default. A non-`demo-` value is never
+ * honoured here, so a fixture can only ever write to an emulator project.
+ */
+export function harnessProject(env: Record<string, string | undefined> = process.env): string {
+  const project = env["GCLOUD_PROJECT"];
+  return project !== undefined && project.startsWith("demo-") ? project : DEFAULT_EMULATOR_PROJECT;
+}

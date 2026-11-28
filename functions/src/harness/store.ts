@@ -100,7 +100,7 @@ async function runOp(r: RunRequest): Promise<{ ok: true; outcome: unknown; attem
 
 async function createOp(r: CreateRequest): Promise<{ ok: true; outcome: unknown; attempts: number; seeds: string[] }> {
   if (typeof r.hostId !== "string" || typeof r.hostName !== "string" || typeof r.idemKey !== "string") bad("createGame needs hostId, hostName and idemKey");
-  if (r.gameId !== undefined && !/^[A-Za-z0-9]{20}$/.test(r.gameId)) bad("createGame needs a 20-character gameId when one is supplied");
+  if (r.gameId !== undefined && (typeof r.gameId !== "string" || !/^[A-Za-z0-9]{20}$/.test(r.gameId))) bad("createGame needs a 20-character gameId when one is supplied");
   const seeds: string[] = [];
   const at = r.now ?? Date.now();
   const input: CreateInput = {

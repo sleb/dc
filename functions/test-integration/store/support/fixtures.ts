@@ -9,6 +9,7 @@ import type { Actor, Game, Vote } from "@dc/engine";
 import { playerName } from "../../../src/store/test-support";
 import type { RunResult } from "./harness";
 import { create, db, rebuildViews } from "./harness";
+import { viewProblems } from "./inspect";
 import { Table } from "./drive";
 import { CATALOGUE, FIXTURE_IDS, FIXTURES, fixtureCreateKey, fixtureHostId } from "./fixture-names";
 import type { FixtureName } from "./fixture-names";
@@ -36,6 +37,11 @@ export interface SeededFixture {
   /** Distinct documents the harness reported written: 6 for the create, 0 for every replay. */
   writes: number;
   replay: boolean;
+  /**
+   * The fixture performed a fixture-only Admin rebuild (the vote patch, or healing a rebuild that failed after the vote
+   * write on an earlier run). A completed replay is false and zero-write.
+   */
+  rebuilt: boolean;
 }
 
 /** One fixture's driver: deterministic idempotency keys and clock, and the running command/write counts. */
@@ -43,6 +49,7 @@ class Build {
   step = 0;
   commands = 0;
   writes = 0;
+  rebuilt = false;
   constructor(readonly name: FixtureName, readonly t: Table, readonly replay: boolean) {
     this.writes = replay ? 0 : 6;
   }
@@ -173,9 +180,16 @@ function voteList(g: Game, count: number): Vote[] {
 async function patchVotes(b: Build, count: number): Promise<boolean> {
   const g = await b.state();
   const votes = voteList(g, count);
-  if (JSON.stringify(g.votes) === JSON.stringify(votes)) return false;
+  if (JSON.stringify(g.votes) === JSON.stringify(votes)) {
+    // A rebuild that failed after the vote write leaves the views stale; a rerun heals them. Current views stay zero-write.
+    if ((await viewProblems(g.id)).length === 0) return false;
+    await rebuildViews(g.id, NOW + 100_000);
+    b.rebuilt = true;
+    return true;
+  }
   await db.doc(`games/${g.id}`).update({ votes });
   await rebuildViews(g.id, NOW + 100_000);
+  b.rebuilt = true;
   return true;
 }
 
@@ -306,7 +320,7 @@ export async function seedFixture(name: FixtureName): Promise<SeededFixture> {
   const b = await created(name);
   await script(b);
   const g = await b.state();
-  return { name, gameId: g.id, hostId: g.hostId, roomCode: g.roomCode, commands: b.commands, writes: b.writes, replay: b.replay };
+  return { name, gameId: g.id, hostId: g.hostId, roomCode: g.roomCode, commands: b.commands, writes: b.writes, replay: b.replay, rebuilt: b.rebuilt };
 }
 
 /** The CI catalogue, in order. Each fixture's commands are idempotent, so a second call replays and writes nothing. */
