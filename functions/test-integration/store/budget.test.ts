@@ -7,7 +7,8 @@ import { Table } from "./support/drive";
 import { FIXTURE_IDS, fixtureHostId, lowerViewsRev, seedFixture } from "./support/fixtures";
 import { clear, db, runError } from "./support/harness";
 import { diff, snapshot, touched } from "./support/inspect";
-import { createdGame, newKey } from "./support/seed";
+import { craftedGame } from "./support/crafted";
+import { newKey } from "./support/ids";
 
 // I7 Write budget and size (LLD 3 sections 2.5 and 5.7, ST6). `departed40` is a built fixture (#37); the oversize aggregate is a
 // crafted state the production path cannot produce.
@@ -43,7 +44,7 @@ test("I7 on 10 seated and 40 departed, the harness write count equals an indepen
 
 /** A LOBBY game padded with registry cards (imported-deck shape) to just over the 900 KiB estimate, under Firestore's 1 MiB. */
 function oversized(): Game {
-  const g = createdGame();
+  const g = craftedGame();
   const cards: Game["cards"] = {};
   const redDeck: string[] = [];
   for (let k = 0; estimateBytes({ ...g, cards, pools: { ...g.pools, redDeck } }) < 905 * 1024; k++) {

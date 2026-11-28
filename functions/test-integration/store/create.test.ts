@@ -8,7 +8,7 @@ import { roomCodeFromSeed, type CreateOutcome } from "../../src/store";
 import { Table } from "./support/drive";
 import { clear, create, createError, createSeeds, db, load, run } from "./support/harness";
 import { diff, snapshot, viewProblems } from "./support/inspect";
-import { HOST_NAME, newKey, pid, seatUid } from "./support/seed";
+import { HOST_NAME, newKey, pid, seatUid } from "./support/ids";
 import { playerName } from "../../src/store/test-support";
 
 // I17-I20, I22 (LLD 3 sections 2.2, 2.3, 5.4, 5.8, 6.1, 10.1, ST1, ST3, ST4, ST5, ST8): createGame through the Node bundle.

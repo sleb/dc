@@ -7,7 +7,7 @@ import { clear, db, listWaitingOn, run } from "./support/harness";
 import type { RunResult } from "./support/harness";
 import type { WaitingPage } from "../../src/store";
 import { diff, registryQuery, snapshot } from "./support/inspect";
-import { pid } from "./support/seed";
+import { pid } from "./support/ids";
 
 // I12 Reminders, the markReminded half (LLD 3 sections 7 and 8). listWaitingOn and its paging are #35.
 beforeAll(clear);

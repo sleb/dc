@@ -4,7 +4,7 @@ import { roomCodeFromSeed } from "../../src/store";
 import { MemGame } from "../../src/store/test-support";
 import { Table } from "./support/drive";
 import { clear, create, db, findRoomCode, load, run } from "./support/harness";
-import { HOST_NAME, newGameId, newKey, newRoomCode } from "./support/seed";
+import { HOST_NAME, newGameId, newKey, newRoomCode } from "./support/ids";
 
 // I14 Room-code release at FINISHED and ENDED (ST8, part). I21 findByRoomCode (#34). I30 the deleteGame ownership check (#36).
 beforeAll(clear);

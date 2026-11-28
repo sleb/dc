@@ -1,14 +1,15 @@
 import { beforeAll, expect, test } from "bun:test";
 import { clear, create, db, load } from "./support/harness";
-import { HOST_NAME, createdGame, seedGame } from "./support/seed";
+import { craftedGame, seedCraftedGame } from "./support/crafted";
+import { HOST_NAME } from "./support/ids";
 
 // The emulator-only harness (#33, ruling 1) is reachable in the Functions emulator and answers `load` for a seeded game.
 // #37 adds the fixed-id create seam the fixture script needs.
 beforeAll(clear);
 
 test("H3 the storeHarness callable loads a seeded game through the Node bundle", async () => {
-  const game = createdGame();
-  await seedGame(db, game);
+  const game = craftedGame();
+  await seedCraftedGame(db, game);
   const loaded = await load(game.id);
   expect(loaded?.game.id).toBe(game.id);
   expect(loaded?.game.version).toBe(game.version);

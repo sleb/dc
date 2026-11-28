@@ -5,7 +5,7 @@ import { idemId } from "../../src/store/idem";
 import { Table } from "./support/drive";
 import { clear, db, run } from "./support/harness";
 import { diff, snapshot } from "./support/inspect";
-import { HOST_NAME, newKey, pid } from "./support/seed";
+import { HOST_NAME, newKey, pid } from "./support/ids";
 
 // I13 join through runCommand with the harness's test recipe for extraWrites (the Store half of LLD 3 section 6.2). Identity's real seats and
 // joinIdem writes, keyHash and the raw-key sentinel are #42.

@@ -6,7 +6,7 @@ import type { Cascade } from "./support/cascade";
 import { Table } from "./support/drive";
 import { clear, create, db, runDeletion, runDeletionError } from "./support/harness";
 import { diff, snapshot } from "./support/inspect";
-import { newKey } from "./support/seed";
+import { newKey } from "./support/ids";
 
 // I28-I38 (LLD 3 sections 6.4 and 10.3, S5, ST8, ST9, ST16): phase 0, the ordered resumable cascade, the identity
 // union, replay/commands during deletion, room-code ownership, the stuck-job line and the host-ledger keyset scan. The

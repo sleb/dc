@@ -12,7 +12,7 @@ import { create, db, rebuildViews } from "./harness";
 import { Table } from "./drive";
 import { CATALOGUE, FIXTURE_IDS, FIXTURES, fixtureCreateKey, fixtureHostId } from "./fixture-names";
 import type { FixtureName } from "./fixture-names";
-import { HOST_NAME, pid } from "./seed";
+import { HOST_NAME, pid } from "./ids";
 
 export { CATALOGUE, FIXTURE_IDS, FIXTURES, fixtureCreateKey, fixtureHostId };
 export type { FixtureName };

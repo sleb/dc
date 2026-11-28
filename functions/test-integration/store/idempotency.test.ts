@@ -5,7 +5,7 @@ import { idemId } from "../../src/store/idem";
 import { Table } from "./support/drive";
 import { clear, db, run } from "./support/harness";
 import { diff, snapshot, touched } from "./support/inspect";
-import { newKey } from "./support/seed";
+import { newKey } from "./support/ids";
 
 // I2 same-key race (ST3) and I3 idempotent replay (LLD 3 section 5.4).
 beforeAll(clear);

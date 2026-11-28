@@ -3,7 +3,7 @@ import type { Command } from "@dc/contracts";
 import { Table } from "./support/drive";
 import { clear, db, run } from "./support/harness";
 import { registryQuery, sentinelHits, snapshot } from "./support/inspect";
-import { pid } from "./support/seed";
+import { pid } from "./support/ids";
 
 // I9 Outbox (LLD 3 section 8, ST10).
 beforeAll(clear);

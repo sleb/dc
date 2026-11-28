@@ -5,7 +5,7 @@ import { Table } from "./support/drive";
 import { FIXTURE_IDS, fixtureHostId, lowerViewsRev, seedFixture } from "./support/fixtures";
 import { clear, db, rebuildViews, run } from "./support/harness";
 import { canonical, diff, eventVersions, snapshot, viewProblems } from "./support/inspect";
-import { newKey, pid } from "./support/seed";
+import { newKey, pid } from "./support/ids";
 
 // I6, I25 Skip-unchanged and viewsRev (K-F, LLD 3 sections 5.6 and 10.1). The stale state is the built `viewsStale` fixture (#37);
 // castVote is M7.
