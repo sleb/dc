@@ -54,7 +54,9 @@ class Build {
   }
   async run(actor: Actor, cmd: Command, key: string): Promise<RunResult> {
     this.step += 1;
-    const r = await this.t.run(actor, cmd, { idemKey: `fx:${this.name}:${key}`, now: NOW + this.step * 1_000 });
+    // A fixed per-command seed too: the judge draw and every shuffle are then reproducible, so a rebuild from empty has the
+    // same shape (only card ids, which mintId draws with a CSPRNG, differ).
+    const r = await this.t.run(actor, cmd, { idemKey: `fx:${this.name}:${key}`, now: NOW + this.step * 1_000, seeds: [`fx:${this.name}:run:${this.step}`] });
     this.commands += 1;
     this.writes += r.writes;
     if (r.outcome.kind !== "accepted") throw new Error(`fixture ${this.name}: ${cmd.type} ${JSON.stringify(r.outcome)}`);
