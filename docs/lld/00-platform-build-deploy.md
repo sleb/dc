@@ -111,7 +111,7 @@ dc/
     exports.emulator.json      # emulator-only function names (#33: storeHarness), `undefined` outside the Functions emulator, never deployed
     src/harness/store.ts       # the emulator-only Store harness callable (#33; LLD 3 section 10.1)
     scripts/build.ts  scripts/check-bundle.ts  # exported functions plus a thin `import.meta.main` CLI; tests in scripts/*.test.ts (fixtures, a fake `npm` on PATH)
-    test-integration/          # emulator suites, bun:test, run against dist (P9)
+    test-integration/          # emulator suites, bun:test, run against dist (P9); store/support/fixture-names.ts names the built catalogue, fixtures.ts builds it, crafted.ts holds only states production cannot produce, ids.ts the shared helpers (#37)
     .env.deepcuts-staging  .env.deepcuts-prod   # non-secret function params, committed; copied into dist by build.ts
     dist/                      # generated, gitignored: index.cjs, package.json, package-lock.json, node_modules, .env.* copies
   packages/
@@ -121,7 +121,7 @@ dc/
   hosting-test/                # bun tests against the Hosting emulator (`bun run test:hosting`); own tsconfig.json
   e2e/                         # Playwright
   ops/                         # the observability declaration (section 9): metrics/*.yaml, alerts/*.json, dashboards/main.json; applied by scripts/ops-apply.ts, which reads the tree
-  scripts/                     # repo-level scripts (smoke.ts, ops-apply.ts, wait-indexes.ts, gcloud.ts (the one `gcloud` runner they share), check-web-size.ts, scan-secrets.ts, install-betterleaks.sh, check-bundle-no-bun.sh, log-sentinels.ts, run-integration-sentinels.ts) and the workflow policy test ci-policy.test.ts; not shipped
+  scripts/                     # repo-level scripts (smoke.ts, ops-apply.ts, wait-indexes.ts, gcloud.ts (the one `gcloud` runner they share), check-web-size.ts, scan-secrets.ts, install-betterleaks.sh, check-bundle-no-bun.sh, log-sentinels.ts, run-integration-sentinels.ts, seed.ts (#37, the emulator fixture CLI)) and the workflow policy test ci-policy.test.ts; not shipped
   docs/
 ```
 
@@ -348,7 +348,7 @@ export default [
 | Lint and compiler policy | `bun test lint-test` (in `bun run test`; `test:lint` alone) | Bun | every PR |
 | Web unit (happy-dom, Testing Library) | `bun run test:web` | Bun, separate process so `happy-dom` globals never reach engine or functions tests | every PR |
 | Rules | `bun run test:rules` | Firestore emulator (needs Java; developed on a newer JDK, CI pins temurin 21). `rules-test/store.rules.test.ts` runs the LLD 3 section 3.3 matrix (`rules-test/matrix.ts`, 1595 cases and a case-count guard) against `firestore.rules` read from disk (#32) | every PR |
-| Function integration | `bun run test:integration`; CI runs `bun run test:integration:logs`, which wraps it in the P19 log-sentinel harness | Auth + Firestore + Functions emulators, **Node bundle** (Firestore added in #13; needs Java; one Admin SDK write and read; the real-collection suites are #33's `functions/test-integration/store/`, which drive the Store through the emulator-only `storeHarness`, against the rules and indexes of #32) | every PR |
+| Function integration | `bun run test:integration`; CI runs `bun run test:integration:logs`, which wraps it in the P19 log-sentinel harness | Auth + Firestore + Functions emulators, **Node bundle** (Firestore added in #13; needs Java; one Admin SDK write and read; the real-collection suites are #33's `functions/test-integration/store/`, which drive the Store through the emulator-only `storeHarness`, against the rules and indexes of #32). Since #37 the store fixtures are seeded inside this suite by `scripts/seed.ts` (the workflow is unchanged) | every PR |
 | Hosting config (headers, cache, SPA rewrite, `/__/`) | `bun run test:hosting` | Hosting emulator serving an `--mode emulator` build of `apps/web/dist` (overwrites that directory, so it runs in the `emulator` job, never after a `build:web` in the same job) | every PR (`emulator`, #16) |
 | Web build and size (`vite build` per mode, App Check token guard, `check-web-size`) | `bun test scripts` (in `bun run test`) | Bun, runs `vite build` into temp dirs | every PR |
 | End to end (Playwright, chromium) | `bun run test:e2e` (a placeholder that exits 0 and prints "NO SUITE" until Playwright arrives in 5.1, #45) | Same emulators, `vite preview` built with `--mode emulator` (`apps/web/.env.emulator`) | **not in CI until #45** (#16 leaves it out: a no-op that prints NO SUITE proves nothing) |
