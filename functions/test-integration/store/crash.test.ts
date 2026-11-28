@@ -3,7 +3,7 @@ import type { Command } from "@dc/contracts";
 import { Table } from "./support/drive";
 import { clear, db, run, runError } from "./support/harness";
 import { diff, eventVersions, snapshot, touched } from "./support/inspect";
-import { newKey } from "./support/seed";
+import { newKey } from "./support/ids";
 
 // I4 Crash between steps (ST1, ST2, LLD 3 sections 5.5 and 5.8), with the harness's emulator-only fault hooks.
 beforeAll(clear);

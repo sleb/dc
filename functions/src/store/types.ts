@@ -52,6 +52,11 @@ export interface Deps {
   newSeed(): string;
   /** CSPRNG, non-replayable; card ids (ctx.mintId, C-EV). */
   mintId(): string;
+  /**
+   * The aggregate id, when the caller supplies one. Production leaves it undefined, so createGame draws a Firestore auto-id
+   * (LLD 3 section 2.4); the emulator harness supplies a fixture id (LLD 3 section 10.1, #37).
+   */
+  newGameId?(): GameId;
   faults?: FaultHooks;
 }
 

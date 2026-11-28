@@ -2,16 +2,23 @@ import { beforeAll, expect, test } from "bun:test";
 import type { Command } from "@dc/contracts";
 import { PROJECTOR_REV, viewersOf } from "@dc/engine";
 import { Table } from "./support/drive";
+import { FIXTURE_IDS, fixtureHostId, lowerViewsRev, seedFixture } from "./support/fixtures";
 import { clear, db, rebuildViews, run } from "./support/harness";
 import { canonical, diff, eventVersions, snapshot, viewProblems } from "./support/inspect";
-import { newKey } from "./support/seed";
+import { newKey, pid } from "./support/ids";
 
-// I6 Skip-unchanged and viewsRev (K-F, LLD 3 section 5.6). The stale viewsRev is a test-local patch (the viewsStale fixture is #37); castVote is M7.
-beforeAll(clear);
+// I6, I25 Skip-unchanged and viewsRev (K-F, LLD 3 sections 5.6 and 10.1). The stale state is the built `viewsStale` fixture (#37);
+// castVote is M7.
+beforeAll(async () => {
+  await clear();
+  await seedFixture("viewsStale");
+});
 
-async function patchStale(t: Table): Promise<void> {
-  await db.doc(`games/${t.gameId}`).update({ "store.viewsRev": PROJECTOR_REV - 1 });
-  for (const d of (await db.collection(`games/${t.gameId}/views`).get()).docs) await d.ref.update({ viewsRev: PROJECTOR_REV - 1 });
+/** The stale fixture: the build leaves it stale; an earlier test in the file may have rebuilt it since. */
+async function stale(): Promise<Table> {
+  const t = Table.attach(FIXTURE_IDS.viewsStale, fixtureHostId("viewsStale"));
+  await lowerViewsRev(t.gameId);
+  return t;
 }
 const viewPaths = (s: Map<string, unknown>) => [...s.keys()].filter((p) => p.includes("/views/")).sort();
 
@@ -30,11 +37,10 @@ test("I6 markReminded writes only the aggregate, the events doc (events: []), th
 }, 60_000);
 
 test("I6 a stale viewsRev with an aggregate change rewrites every view once, then skip-unchanged resumes", async () => {
-  const t = await Table.lobby(4);
-  await t.host({ type: "startGame" } as Command);
-  await patchStale(t);
+  const t = await stale();
   const b1 = await snapshot(t.gameId);
-  await t.as(1, { type: "saveDraft", ...(await t.fullDraft(1)) } as Command); // a count change: cardsLeft is public
+  const full = await t.fullDraft(1);
+  await t.as(1, { type: "saveDraft", red: full.red.slice(1), green: full.green } as Command); // a count change: cardsLeft is public
   const a1 = await snapshot(t.gameId);
   expect(diff(b1, a1).changed.filter((p) => p.includes("/views/"))).toEqual(viewPaths(a1));
   for (const p of viewPaths(a1)) expect(a1.get(p)?.data["viewsRev"]).toBe(PROJECTOR_REV);
@@ -46,14 +52,19 @@ test("I6 a stale viewsRev with an aggregate change rewrites every view once, the
   expect(diff(a1, await snapshot(t.gameId)).changed.filter((p) => p.includes("/views/"))).toEqual([]);
 }, 90_000);
 
+/** The same count the stored draft holds, with new text: a text-only save (5.6). */
+async function textOnly(t: Table, tag: string): Promise<{ red: string[]; green: string[] }> {
+  const g = await t.state();
+  const progress = g.players.find((p) => p.id === pid(1))?.writeProgress ?? { red: 0, green: 0 };
+  const full = await t.fullDraft(1);
+  return { red: full.red.slice(0, progress.red).map((s) => `${s}${tag}`), green: full.green.slice(0, progress.green).map((s) => `${s}${tag}`) };
+}
+
 test("I6 a stale viewsRev with a text-only saveDraft rebuilds every view at the unchanged version and records the running viewsRev", async () => {
-  const t = await Table.lobby(3);
-  await t.host({ type: "startGame" } as Command);
-  await t.as(1, { type: "saveDraft", ...(await t.fullDraft(1)) } as Command);
-  await patchStale(t);
+  const t = await stale();
   const v = (await t.state()).version;
   const before = await snapshot(t.gameId);
-  const r = await run({ gameId: t.gameId, actor: { kind: "user", uid: t.uidOf(1) }, cmd: { type: "saveDraft", ...(await t.fullDraft(1, " edit")) } as Command, idemKey: newKey() });
+  const r = await run({ gameId: t.gameId, actor: { kind: "user", uid: t.uidOf(1) }, cmd: { type: "saveDraft", ...(await textOnly(t, " edit")) } as Command, idemKey: newKey() });
   expect(r.outcome).toMatchObject({ kind: "accepted", version: v });
   const after = await snapshot(t.gameId);
   expect((await t.state()).version).toBe(v);
@@ -153,15 +164,12 @@ test("I24 a second rebuild at the current rev rewrites identically with generate
 }, 180_000);
 
 test("I25 the upgrade path: a text-only saveDraft and then rebuildViews both rebuild every view at the unchanged version", async () => {
-  const t = await Table.lobby(3);
-  await t.host({ type: "startGame" } as Command);
-  await t.as(1, { type: "saveDraft", ...(await t.fullDraft(1)) } as Command);
-  await patchStale(t);
+  const t = await stale();
   const v = (await t.state()).version;
 
   // First half: the next user command (K-F) rebuilds at the unchanged version.
   const before = await snapshot(t.gameId);
-  const r = await run({ gameId: t.gameId, actor: { kind: "user", uid: t.uidOf(1) }, cmd: { type: "saveDraft", ...(await t.fullDraft(1, " edit")) } as Command, idemKey: newKey() });
+  const r = await run({ gameId: t.gameId, actor: { kind: "user", uid: t.uidOf(1) }, cmd: { type: "saveDraft", ...(await textOnly(t, " edit")) } as Command, idemKey: newKey() });
   expect(r.outcome).toMatchObject({ kind: "accepted", version: v });
   const afterCommand = await snapshot(t.gameId);
   expect((await t.state()).version).toBe(v);
@@ -175,7 +183,7 @@ test("I25 the upgrade path: a text-only saveDraft and then rebuildViews both reb
   expect(diff(before, afterCommand).created.filter((p) => p.includes("/events/"))).toEqual([]);
 
   // Second half: rebuildViews does the same from the stale state.
-  await patchStale(t);
+  expect(await lowerViewsRev(t.gameId)).toBe(true);
   const beforeRebuild = await snapshot(t.gameId);
   const res = await rebuildViews(t.gameId, 777_000);
   expect(res).toMatchObject({ kind: "rebuilt", version: v, viewsRev: PROJECTOR_REV });

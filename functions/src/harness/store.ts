@@ -27,7 +27,7 @@ class InjectedFault extends Error {
 interface Faults { throwAt?: FaultPoint; abortAttempts?: number[] }
 interface RunRequest { op: "run"; gameId: string; cmd: CommandInput["cmd"]; actor: CommandInput["actor"]; idemKey: string; meta?: Json; extraWrites?: { recipe: "testSeat"; keyHash: string }; now?: number; seeds?: string[]; faults?: Faults }
 interface LoadRequest { op: "load"; gameId: string }
-interface CreateRequest { op: "createGame"; hostId: string; hostName: string; settings?: Partial<Settings>; idemKey: string; now?: number; seeds?: string[] }
+interface CreateRequest { op: "createGame"; hostId: string; hostName: string; settings?: Partial<Settings>; idemKey: string; gameId?: string; now?: number; seeds?: string[] }
 interface FindRequest { op: "findByRoomCode"; code: string }
 interface RebuildRequest { op: "rebuildViews"; gameId: string; now: number }
 interface WaitingRequest { op: "listWaitingOn"; now: number; limit?: number; after?: { dueAt: number; gameId: string } }
@@ -100,6 +100,7 @@ async function runOp(r: RunRequest): Promise<{ ok: true; outcome: unknown; attem
 
 async function createOp(r: CreateRequest): Promise<{ ok: true; outcome: unknown; attempts: number; seeds: string[] }> {
   if (typeof r.hostId !== "string" || typeof r.hostName !== "string" || typeof r.idemKey !== "string") bad("createGame needs hostId, hostName and idemKey");
+  if (r.gameId !== undefined && (typeof r.gameId !== "string" || !/^[A-Za-z0-9]{20}$/.test(r.gameId))) bad("createGame needs a 20-character gameId when one is supplied");
   const seeds: string[] = [];
   const at = r.now ?? Date.now();
   const input: CreateInput = {
@@ -108,7 +109,8 @@ async function createOp(r: CreateRequest): Promise<{ ok: true; outcome: unknown;
     idemKey: r.idemKey,
     ...(r.settings === undefined ? {} : { settings: r.settings }),
   };
-  // The k-th `newSeed()` call is seeds[k]; production draws the code seed then the decide seed once per attempt.
+  // The k-th `newSeed()` call is seeds[k]; production draws the code seed then the decide seed once per attempt. A supplied gameId
+  // names the aggregate instead of the auto-id (LLD 3 section 10.1, #37).
   const deps: Deps = {
     clock: () => r.now ?? Date.now(),
     newSeed: () => {
@@ -117,6 +119,7 @@ async function createOp(r: CreateRequest): Promise<{ ok: true; outcome: unknown;
       return s;
     },
     mintId: newCardId,
+    ...(r.gameId === undefined ? {} : { newGameId: () => r.gameId as string }),
   };
   try {
     const x = await executeCreate(db(), deps, input);

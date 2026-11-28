@@ -5,15 +5,16 @@ import type { Actor, Game } from "@dc/engine";
 import { cardText, playerName } from "../../../src/store/test-support";
 import { create, db, run } from "./harness";
 import type { RunRequest, RunResult } from "./harness";
-import { HOST_NAME, createdGame, newKey, pid, seatUid, seedGame } from "./seed";
-import type { SeedOptions } from "./seed";
+import { seedCraftedGame } from "./crafted";
+import type { CraftedOptions } from "./crafted";
+import { HOST_NAME, newKey, pid, seatUid } from "./ids";
 
 export class Table {
   private constructor(readonly gameId: string, readonly hostId: string) {}
 
-  /** Seeds `game` (built in Bun) and drives it from there. */
-  static async seed(game: Game, o: SeedOptions = {}): Promise<Table> {
-    await seedGame(db, game, o);
+  /** Writes a crafted state (the helper in `crafted.ts`) and drives it from there. */
+  static async seed(game: Game, o: CraftedOptions = {}): Promise<Table> {
+    await seedCraftedGame(db, game, o);
     return new Table(game.id, game.hostId);
   }
 

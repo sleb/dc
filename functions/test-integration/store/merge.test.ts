@@ -3,7 +3,7 @@ import type { Command } from "@dc/contracts";
 import { Table } from "./support/drive";
 import { clear, db } from "./support/harness";
 import { diff, snapshot, touched } from "./support/inspect";
-import { pid } from "./support/seed";
+import { pid } from "./support/ids";
 
 // I10 WriteSet merge (LLD 3 section 5.2a, ST14).
 beforeAll(clear);

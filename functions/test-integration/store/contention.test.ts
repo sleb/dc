@@ -5,7 +5,7 @@ import { Table } from "./support/drive";
 import { clear, run } from "./support/harness";
 import type { RunResult } from "./support/harness";
 import { eventVersions, viewProblems } from "./support/inspect";
-import { newGameId, newKey } from "./support/seed";
+import { newGameId, newKey } from "./support/ids";
 
 // I1 Contention (LLD 3 section 10.3, S1, ST4, ST5). A 10-player game built in Bun and seeded at round 1 SUBMITTING, then driven only through the harness.
 beforeAll(clear);

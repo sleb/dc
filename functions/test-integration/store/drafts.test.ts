@@ -3,7 +3,7 @@ import type { Command } from "@dc/contracts";
 import { Table } from "./support/drive";
 import { clear, db } from "./support/harness";
 import { diff, snapshot, updateTimeOf } from "./support/inspect";
-import { pid } from "./support/seed";
+import { pid } from "./support/ids";
 
 // I5 Draft path (LLD 3 section 5.6) and PJ10's draftSeq +1 clause against the real Store (the deferred proof recorded in #54).
 beforeAll(clear);

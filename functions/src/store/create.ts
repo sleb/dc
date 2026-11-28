@@ -137,7 +137,7 @@ export async function executeCreate(db: Firestore, d: Deps, i: CreateInput): Pro
   let attempts = 0;
   for (let n = 1; n <= CREATE_ATTEMPTS; n++) {
     attempts = n;
-    const gameId = db.collection("games").doc().id;
+    const gameId = d.newGameId?.() ?? db.collection("games").doc().id;
     const codeSeed = d.newSeed();
     const decideSeed = d.newSeed();
     const roomCode = roomCodeFromSeed(codeSeed);

@@ -1,22 +1,28 @@
 import { beforeAll, expect, test } from "bun:test";
 import type { Command } from "@dc/contracts";
-import { PROJECTOR_REV, viewersOf } from "@dc/engine";
+import { viewersOf } from "@dc/engine";
 import type { Game } from "@dc/engine";
 import { estimateBytes } from "../../src/store/size";
-import { MemGame } from "../../src/store/test-support";
 import { Table } from "./support/drive";
+import { FIXTURE_IDS, fixtureHostId, lowerViewsRev, seedFixture } from "./support/fixtures";
 import { clear, db, runError } from "./support/harness";
 import { diff, snapshot, touched } from "./support/inspect";
-import { createdGame, newGameId, newKey } from "./support/seed";
+import { craftedGame } from "./support/crafted";
+import { newKey } from "./support/ids";
 
-// I7 Write budget and size (LLD 3 sections 2.5 and 5.7, ST6). A departed40-shaped game built in Bun (the midsize10 fixture and the 2.5 budgets are #37).
-beforeAll(clear);
+// I7 Write budget and size (LLD 3 sections 2.5 and 5.7, ST6). `departed40` is a built fixture (#37); the oversize aggregate is a
+// crafted state the production path cannot produce.
+beforeAll(async () => {
+  await clear();
+  await seedFixture("departed40");
+});
 
 test("I7 on 10 seated and 40 departed, the harness write count equals an independent document diff and stays within section 5.7", async () => {
-  const m = MemGame.departed40({ gameId: newGameId() });
-  expect(viewersOf(m.game)).toHaveLength(52);
-  const t = await Table.seed(m.game, { viewsRev: PROJECTOR_REV - 1 });
-  const extra = [`roomCodes/${m.game.roomCode}`];
+  const t = Table.attach(FIXTURE_IDS.departed40, fixtureHostId("departed40"));
+  const g = await t.state();
+  expect(viewersOf(g)).toHaveLength(52);
+  expect(await lowerViewsRev(t.gameId)).toBe(true); // stale: every one of the 52 views must be rewritten
+  const extra = [`roomCodes/${g.roomCode}`];
   const b1 = await snapshot(t.gameId, extra);
   const r1 = await t.host({ type: "updateSettings", patch: { profanity: "off" } } as Command);
   const d1 = diff(b1, await snapshot(t.gameId, extra));
@@ -38,7 +44,7 @@ test("I7 on 10 seated and 40 departed, the harness write count equals an indepen
 
 /** A LOBBY game padded with registry cards (imported-deck shape) to just over the 900 KiB estimate, under Firestore's 1 MiB. */
 function oversized(): Game {
-  const g = createdGame();
+  const g = craftedGame();
   const cards: Game["cards"] = {};
   const redDeck: string[] = [];
   for (let k = 0; estimateBytes({ ...g, cards, pools: { ...g.pools, redDeck } }) < 905 * 1024; k++) {

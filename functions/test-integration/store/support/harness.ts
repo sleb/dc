@@ -9,16 +9,18 @@ import { getFirestore } from "firebase-admin/firestore";
 import type { Command } from "@dc/contracts";
 import type { Actor, Game } from "@dc/engine";
 import type { CreateOutcome, RebuildResult, RoomCodeDoc, WaitingPage } from "../../../src/store";
+import { harnessProject } from "./fixture-names";
 
 const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const fakeToken = `${b64({ alg: "none", typ: "JWT" })}.${b64({ app_id: "demo-app", sub: "demo-app", iss: "demo", aud: ["demo"], exp: 4_102_444_800 })}.x`;
-const client = initializeApp({ projectId: "demo-deepcuts", apiKey: "demo", appId: "demo-app" }, "store-harness");
+const project = harnessProject(); // the guard's demo- project, so the CLI, the clients and clear() agree (#37)
+const client = initializeApp({ projectId: project, apiKey: "demo", appId: "demo-app" }, "store-harness");
 initializeAppCheck(client, { provider: new CustomProvider({ getToken: async () => ({ token: fakeToken, expireTimeMillis: 4_102_444_800_000 }) }) });
 const fns = getFunctions(client, "us-central1");
 connectFunctionsEmulator(fns, "127.0.0.1", 5001);
 const call = httpsCallable<unknown, unknown>(fns, "storeHarness", { timeout: 300_000 });
 
-const adminApp: App = getApps().find((a) => a.name === "store-tests") ?? adminInit({ projectId: "demo-deepcuts" }, "store-tests");
+const adminApp: App = getApps().find((a) => a.name === "store-tests") ?? adminInit({ projectId: project }, "store-tests");
 export const db = getFirestore(adminApp);
 
 export interface Faults { throwAt?: "afterWritesBuffered" | "afterCommit"; abortAttempts?: number[] }
@@ -55,6 +57,8 @@ export interface CreateRequest {
   hostName: string;
   idemKey: string;
   settings?: unknown;
+  /** Emulator fixtures only (LLD 3 section 10.1, #37): the aggregate id a replay names. */
+  gameId?: string;
   now?: number;
   seeds?: string[];
 }
@@ -144,6 +148,6 @@ export async function runError(req: RunRequest): Promise<{ code: string; kind: s
 /** Empties the Firestore emulator (between files; every suite also uses fresh game ids). */
 export async function clear(): Promise<void> {
   const host = process.env["FIRESTORE_EMULATOR_HOST"] ?? "127.0.0.1:8080";
-  const res = await fetch(`http://${host}/emulator/v1/projects/demo-deepcuts/databases/(default)/documents`, { method: "DELETE" });
+  const res = await fetch(`http://${host}/emulator/v1/projects/${project}/databases/(default)/documents`, { method: "DELETE" });
   if (!res.ok) throw new Error(`clear: ${res.status}`);
 }

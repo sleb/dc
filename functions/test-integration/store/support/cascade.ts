@@ -9,8 +9,8 @@ import type { Command } from "@dc/contracts";
 import type { Game, GameDrafts } from "@dc/engine";
 import { idemId } from "../../../src/store";
 import { MemGame, pid } from "../../../src/store/test-support";
-import { newGameId, newRoomCode, seatUid } from "./seed";
-import { seedGame } from "./seed";
+import { seedCraftedGame } from "./crafted";
+import { newGameId, newRoomCode, seatUid } from "./ids";
 
 export interface Cascade {
   game: Game;
@@ -91,7 +91,7 @@ export interface CascadeExtras {
 /** Writes the aggregate, views, drafts, the owned code and every documented side row. Returns the paths to inspect. */
 export async function seedCascade(db: Firestore, c: Cascade, o: { now?: number } = {}): Promise<CascadeExtras> {
   const now = o.now ?? c.game.createdAt;
-  await seedGame(db, c.game, { drafts: c.drafts });
+  await seedCraftedGame(db, c.game, { drafts: c.drafts });
   const otherCode = "ZZZZ";
   const otherPushSubId = "other-push";
   const otherJoinIdemId = "other-join";

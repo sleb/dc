@@ -8,7 +8,7 @@ import { roomCodeFromSeed, type CreateOutcome } from "../../src/store";
 import { Table } from "./support/drive";
 import { clear, create, createError, createSeeds, db, load, run } from "./support/harness";
 import { diff, snapshot, viewProblems } from "./support/inspect";
-import { HOST_NAME, newKey, pid, seatUid } from "./support/seed";
+import { HOST_NAME, newKey, pid, seatUid } from "./support/ids";
 import { playerName } from "../../src/store/test-support";
 
 // I17-I20, I22 (LLD 3 sections 2.2, 2.3, 5.4, 5.8, 6.1, 10.1, ST1, ST3, ST4, ST5, ST8): createGame through the Node bundle.
@@ -249,3 +249,29 @@ test("I22 a fresh Table.lobby game is created by the production path", async () 
   // The join drove the aggregate forward, so a created lobby is a normal game.
   expect((await load(t.gameId))?.game.players.length).toBe(2);
 });
+
+test("I22b a harness-supplied fixed gameId names every document; a create without one still draws a 20-character id", async () => {
+  const fixed = "gFixCreate0000000001";
+  const hostId = newHost();
+  const idemKey = newKey();
+  const out = accepted((await create({ gameId: fixed, hostId, hostName: HOST_NAME, idemKey, now: 1_700_000_000_000 })).outcome);
+  expect(out.gameId).toBe(fixed);
+  const codePath = `roomCodes/${out.roomCode}`;
+  const ledgerPath = ledgerOf(hostId, idemKey);
+  const snap = await snapshot(fixed, [codePath, ledgerPath]);
+  expect([...snap.keys()].sort()).toEqual(
+    [`games/${fixed}`, `games/${fixed}/events/1`, `games/${fixed}/views/${hostId}`, `games/${fixed}/views/spectator`, codePath, ledgerPath].sort(),
+  );
+  expect(await viewProblems(fixed)).toEqual([]);
+  expect((await load(fixed))?.game.id).toBe(fixed);
+
+  const auto = accepted((await create({ hostId: newHost(), hostName: HOST_NAME, idemKey: newKey() })).outcome);
+  expect(auto.gameId).toMatch(/^[A-Za-z0-9]{20}$/);
+  expect(auto.gameId).not.toBe(fixed);
+  expect((await db.doc(`games/${auto.gameId}`).get()).exists).toBe(true);
+
+  // The harness's fixed-id guard: a 19-character id never reaches executeCreate.
+  expect(await createError({ gameId: "gFixCreate000000000", hostId: newHost(), hostName: HOST_NAME, idemKey: newKey() })).toEqual({ code: "functions/invalid-argument", kind: null });
+  // A non-string id is rejected before the pattern can coerce it (an array would stringify to a valid-looking id).
+  expect(await createError({ gameId: ["gFixCreate0000000001"] as unknown as string, hostId: newHost(), hostName: HOST_NAME, idemKey: newKey() })).toEqual({ code: "functions/invalid-argument", kind: null });
+}, 120_000);
