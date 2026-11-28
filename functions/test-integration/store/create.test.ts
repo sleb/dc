@@ -249,3 +249,24 @@ test("I22 a fresh Table.lobby game is created by the production path", async () 
   // The join drove the aggregate forward, so a created lobby is a normal game.
   expect((await load(t.gameId))?.game.players.length).toBe(2);
 });
+
+test("I22b a harness-supplied fixed gameId names every document; a create without one still draws a 20-character id", async () => {
+  const fixed = "gFixCreate0000000001";
+  const hostId = newHost();
+  const idemKey = newKey();
+  const out = accepted((await create({ gameId: fixed, hostId, hostName: HOST_NAME, idemKey, now: 1_700_000_000_000 })).outcome);
+  expect(out.gameId).toBe(fixed);
+  const codePath = `roomCodes/${out.roomCode}`;
+  const ledgerPath = ledgerOf(hostId, idemKey);
+  const snap = await snapshot(fixed, [codePath, ledgerPath]);
+  expect([...snap.keys()].sort()).toEqual(
+    [`games/${fixed}`, `games/${fixed}/events/1`, `games/${fixed}/views/${hostId}`, `games/${fixed}/views/spectator`, codePath, ledgerPath].sort(),
+  );
+  expect(await viewProblems(fixed)).toEqual([]);
+  expect((await load(fixed))?.game.id).toBe(fixed);
+
+  const auto = accepted((await create({ hostId: newHost(), hostName: HOST_NAME, idemKey: newKey() })).outcome);
+  expect(auto.gameId).toMatch(/^[A-Za-z0-9]{20}$/);
+  expect(auto.gameId).not.toBe(fixed);
+  expect((await db.doc(`games/${auto.gameId}`).get()).exists).toBe(true);
+}, 120_000);

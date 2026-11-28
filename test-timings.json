@@ -99,6 +99,7 @@
     "functions/src/store/idem.test.ts": 9,
     "scripts/firestore-indexes.test.ts": 9,
     "scripts/rules-coverage.test.ts": 9,
+    "scripts/seed.test.ts": 9,
     "scripts/test-parallel.test.ts": 9,
     "functions/src/store/queries.test.ts": 6,
     "packages/engine/test/roles.test.ts": 5,
