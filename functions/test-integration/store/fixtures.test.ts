@@ -5,7 +5,7 @@ import type { Game } from "@dc/engine";
 import { PROJECTOR_REV, viewersOf } from "@dc/engine";
 import { idemId } from "../../src/store";
 import { clear, db } from "./support/harness";
-import { CATALOGUE, FIXTURE_IDS, fixtureCreateKey, fixtureHostId } from "./support/fixtures";
+import { CATALOGUE, FIXTURE_IDS, fixtureCreateKey, fixtureHostId, seedFixture } from "./support/fixtures";
 import type { FixtureName } from "./support/fixtures";
 import { diff, snapshot, viewProblems } from "./support/inspect";
 
@@ -134,6 +134,23 @@ test("every catalogue fixture has its documented shape, built from real commands
   expect((await db.doc(`roomCodes/${finished.roomCode}`).get()).exists).toBe(false);
   expect(viewersOf(finished)).toHaveLength(7);
   expect(await viewProblems(finished.id)).toEqual([]);
+}, 120_000);
+
+test("a failed vote rebuild is healed on the next fixture replay, while a completed replay is still zero-write", async () => {
+  const g = await aggregate("finished6-votes");
+  const viewer = viewersOf(g).find((v) => v.viewer.kind === "player");
+  expect(viewer).toBeDefined();
+  await db.doc(`games/${g.id}/views/${viewer?.docId}`).update({ view: null }); // a rebuild that committed the votes but no views
+  expect(await viewProblems(g.id)).not.toEqual([]);
+
+  const healed = await seedFixture("finished6-votes");
+  expect(healed.rebuilt).toBe(true);
+  expect(healed.writes).toBe(0); // every command replays; only the Admin-side rebuild writes
+  expect(await viewProblems(g.id)).toEqual([]);
+
+  const replay = await seedFixture("finished6-votes");
+  expect(replay.rebuilt).toBe(false);
+  expect(replay.writes).toBe(0);
 }, 120_000);
 
 test("a second --all replays every command and changes no updateTime", async () => {

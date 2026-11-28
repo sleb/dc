@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { harnessProject } from "../functions/test-integration/store/support/fixture-names";
 import { checkSeedEnv, parseSeedArgs, SeedUsageError } from "./seed";
 
 // V2, V10 (LLD 0 P1, LLD 3 section 10.1): the seed CLI's pure checks. The emulator half (exit codes, a replaying second --all)
@@ -28,6 +29,14 @@ describe("parseSeedArgs", () => {
       expect([argv, r.ok]).toEqual([argv, false]);
       if (!r.ok) expect(r.error).toBeInstanceOf(SeedUsageError);
     }
+  });
+});
+
+describe("harnessProject", () => {
+  test("a demo- value passes through; unset or non-demo falls back to demo-deepcuts", () => {
+    expect(harnessProject({ GCLOUD_PROJECT: "demo-review" })).toBe("demo-review");
+    expect(harnessProject({})).toBe("demo-deepcuts");
+    expect(harnessProject({ GCLOUD_PROJECT: "deepcuts-staging" })).toBe("demo-deepcuts");
   });
 });
 

@@ -272,4 +272,6 @@ test("I22b a harness-supplied fixed gameId names every document; a create withou
 
   // The harness's fixed-id guard: a 19-character id never reaches executeCreate.
   expect(await createError({ gameId: "gFixCreate000000000", hostId: newHost(), hostName: HOST_NAME, idemKey: newKey() })).toEqual({ code: "functions/invalid-argument", kind: null });
+  // A non-string id is rejected before the pattern can coerce it (an array would stringify to a valid-looking id).
+  expect(await createError({ gameId: ["gFixCreate0000000001"] as unknown as string, hostId: newHost(), hostName: HOST_NAME, idemKey: newKey() })).toEqual({ code: "functions/invalid-argument", kind: null });
 }, 120_000);
